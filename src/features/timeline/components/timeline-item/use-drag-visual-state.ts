@@ -14,6 +14,7 @@ import {
   shouldDimTimelineItemForDrag,
   type TimelineItemGestureMode,
 } from './drag-visual-mode'
+import { subscribeSelectionDragActivity } from './shared-drag-activity'
 
 type JoinDragState = { left: boolean; right: boolean }
 
@@ -163,12 +164,7 @@ export function useDragVisualState({
       }
     }
 
-    updateDragActiveRefs(!!useSelectionStore.getState().dragState?.isDragging)
-    return useSelectionStore.subscribe((state, previousState) => {
-      const isDragActive = !!state.dragState?.isDragging
-      if (isDragActive === !!previousState.dragState?.isDragging) return
-      updateDragActiveRefs(isDragActive)
-    })
+    return subscribeSelectionDragActivity(updateDragActiveRefs)
   }, [])
 
   useEffect(() => {

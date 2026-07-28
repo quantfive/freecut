@@ -793,53 +793,53 @@ export function useTimelineDrag(
         selectItems(linkedIds)
       }
 
-      // Determine which items to drag and snapshot their initial positions
-      const { baseItemsToDrag, draggedItems } = resolveDraggedItemStates(
-        allItems,
-        currentTracks,
-        currentSelectedIds,
-        isInSelection,
-        linkedIds,
-        linkedSelectionEnabled,
-      )
-      // Compare cohort *contents*, not just lengths: a same-size but
-      // differently-composed drag cohort (e.g. linked items swapped in) must
-      // still re-sync the selection.
-      const selectedIdSet = new Set(currentSelectedIds)
-      const cohortMatchesSelection =
-        baseItemsToDrag.length === selectedIdSet.size &&
-        baseItemsToDrag.every((id) => selectedIdSet.has(id))
-      if (isInSelection && !cohortMatchesSelection) {
-        selectItems(baseItemsToDrag)
-      }
-
-      // Initialize drag state
-      dragStateRef.current = {
-        itemId: item.id, // Anchor item
-        startFrame: item.from,
-        startTrackId: item.trackId,
-        startMouseX: e.clientX,
-        startMouseY: e.clientY,
-        currentMouseX: e.clientX,
-        currentMouseY: e.clientY,
-        draggedItems,
-      }
-      // Capture geometry before any selected clip receives a preview transform.
-      // Relative track deltas stay stable during vertical scrolling, so pointer
-      // moves can derive every preview offset without forcing layout again.
-      dragVisualTopByTrackIdRef.current = captureTrackVisualTops()
-
-      // Don't set cursor immediately - wait for drag threshold
+      const startMouseX = e.clientX
+      const startMouseY = e.clientY
 
       // Attach a temporary mousemove listener to detect drag threshold
       const checkDragThreshold = (e: MouseEvent) => {
-        if (!dragStateRef.current) return
-
-        const deltaX = e.clientX - dragStateRef.current.startMouseX
-        const deltaY = e.clientY - dragStateRef.current.startMouseY
+        const deltaX = e.clientX - startMouseX
+        const deltaY = e.clientY - startMouseY
 
         // Check if we've moved enough to start dragging
         if (Math.abs(deltaX) > DRAG_THRESHOLD_PIXELS || Math.abs(deltaY) > DRAG_THRESHOLD_PIXELS) {
+          // A click should only pay selection work. Resolve the drag cohort and
+          // force track layout after movement proves this is a real drag.
+          const currentItems = getItems()
+          const { baseItemsToDrag, draggedItems } = resolveDraggedItemStates(
+            currentItems,
+            currentTracks,
+            currentSelectedIds,
+            isInSelection,
+            linkedIds,
+            linkedSelectionEnabled,
+          )
+          // Compare cohort *contents*, not just lengths: a same-size but
+          // differently-composed drag cohort (e.g. linked items swapped in)
+          // must still re-sync the selection.
+          const selectedIdSet = new Set(currentSelectedIds)
+          const cohortMatchesSelection =
+            baseItemsToDrag.length === selectedIdSet.size &&
+            baseItemsToDrag.every((id) => selectedIdSet.has(id))
+          if (isInSelection && !cohortMatchesSelection) {
+            selectItems(baseItemsToDrag)
+          }
+
+          dragStateRef.current = {
+            itemId: item.id, // Anchor item
+            startFrame: item.from,
+            startTrackId: item.trackId,
+            startMouseX,
+            startMouseY,
+            currentMouseX: startMouseX,
+            currentMouseY: startMouseY,
+            draggedItems,
+          }
+          // Capture geometry before any selected clip receives a preview
+          // transform. Relative track deltas stay stable during vertical
+          // scrolling, so pointer moves avoid forcing layout again.
+          dragVisualTopByTrackIdRef.current = captureTrackVisualTops()
+
           // Start the drag - track Alt key state
           isAltDragRef.current = e.altKey
           setIsDragging(true)

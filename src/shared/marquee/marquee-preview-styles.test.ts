@@ -8,9 +8,10 @@ describe('timeline marquee preview styles', () => {
     const rule = stylesheet.match(/\.timeline-marquee-preview::after\s*\{([^}]*)\}/)?.[1]
 
     expect(rule).toBeDefined()
-    expect(rule).toContain('z-index: 30')
+    expect(rule).toContain('z-index: 60')
     expect(rule).toContain('border: 1px solid var(--primary)')
     expect(rule).toContain('background: color-mix(in oklab, var(--primary) 14%, transparent)')
+    expect(rule).toContain('inset 0 0 0 1px color-mix(in oklab, var(--primary) 35%, transparent)')
     expect(rule).not.toContain('oklch(var(--primary))')
   })
 })
