@@ -260,7 +260,7 @@ describe('ClipPanel inspector tabs', () => {
     })
   })
 
-  it('shows a newly selected item without waiting for deferred inspector work', () => {
+  it('updates a newly selected item after the deferred inspector handoff', async () => {
     const secondVideo: VideoItem = {
       ...VIDEO_ITEM,
       id: 'clip-video-2',
@@ -276,6 +276,9 @@ describe('ClipPanel inspector tabs', () => {
       flushSync(() => {
         useSelectionStore.getState().selectItems([secondVideo.id])
       })
+    })
+
+    await waitFor(() => {
       expect(clipPanelTestState.latestLayoutItemId).toBe(secondVideo.id)
     })
   })

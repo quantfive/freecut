@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useLayoutEffect, useState, useSyncExternalStore } from 'react'
 import { useTimelineViewportStore } from '../stores/timeline-viewport-store'
 import { useZoomStore } from '../stores/zoom-store'
 
@@ -17,56 +17,126 @@ export interface ClipVisibilityState {
   visibleEndRatio: number
 }
 
+interface ClipVisibilityEntry {
+  clipLeftPx: number
+  clipWidthPx: number
+  snapshot: ClipVisibilityState
+  listeners: Set<() => void>
+}
+
+const registeredEntries = new Set<ClipVisibilityEntry>()
+let unsubscribeViewport: (() => void) | null = null
+let unsubscribeZoom: (() => void) | null = null
+
+function areVisibilityStatesEqual(
+  previous: ClipVisibilityState,
+  next: ClipVisibilityState,
+): boolean {
+  return (
+    previous.isVisible === next.isVisible &&
+    Math.abs(previous.visibleStartRatio - next.visibleStartRatio) < RATIO_EPSILON &&
+    Math.abs(previous.visibleEndRatio - next.visibleEndRatio) < RATIO_EPSILON
+  )
+}
+
+function publishEntrySnapshot(entry: ClipVisibilityEntry, next: ClipVisibilityState): void {
+  if (areVisibilityStatesEqual(entry.snapshot, next)) return
+  entry.snapshot = next
+  for (const listener of entry.listeners) listener()
+}
+
+function recomputeRegisteredEntries(): void {
+  if (useZoomStore.getState().isZoomInteracting) return
+
+  const viewport = useTimelineViewportStore.getState()
+  for (const entry of registeredEntries) {
+    publishEntrySnapshot(
+      entry,
+      computeVisibility(viewport, entry.clipLeftPx, entry.clipWidthPx),
+    )
+  }
+}
+
+function connectVisibilityRegistry(): void {
+  if (unsubscribeViewport || unsubscribeZoom) return
+
+  unsubscribeViewport = useTimelineViewportStore.subscribe(recomputeRegisteredEntries)
+  unsubscribeZoom = useZoomStore.subscribe((current, previous) => {
+    if (previous.isZoomInteracting && !current.isZoomInteracting) {
+      recomputeRegisteredEntries()
+    }
+  })
+}
+
+function disconnectVisibilityRegistryIfIdle(): void {
+  if (registeredEntries.size > 0) return
+  unsubscribeViewport?.()
+  unsubscribeViewport = null
+  unsubscribeZoom?.()
+  unsubscribeZoom = null
+}
+
+function createVisibilityEntry(clipLeftPx: number, clipWidthPx: number): ClipVisibilityEntry {
+  return {
+    clipLeftPx,
+    clipWidthPx,
+    snapshot: computeVisibility(
+      useTimelineViewportStore.getState(),
+      clipLeftPx,
+      clipWidthPx,
+    ),
+    listeners: new Set(),
+  }
+}
+
 /**
  * Hook to detect when a timeline clip is visible in the shared timeline viewport.
- * Uses clip geometry in timeline-content coordinates (left/width) and avoids
- * per-clip scroll listeners/observers.
+ * Uses one shared viewport/zoom subscription for every mounted clip instead of
+ * registering two store subscriptions per clip. The registry still publishes
+ * only to clips whose derived visibility window changed.
  *
  * During zoom interaction, clip positions and the viewport temporarily use
  * different coordinate spaces. Keep the last valid bounded window until zoom
  * settles instead of expanding every clip to its full duration.
  */
 export function useClipVisibility(clipLeftPx: number, clipWidthPx: number): ClipVisibilityState {
-  const [visibility, setVisibility] = useState<ClipVisibilityState>(() =>
-    computeVisibility(useTimelineViewportStore.getState(), clipLeftPx, clipWidthPx),
+  const [entry] = useState<ClipVisibilityEntry>(() =>
+    createVisibilityEntry(clipLeftPx, clipWidthPx),
   )
 
-  useEffect(() => {
-    const apply = (viewport: TimelineViewportSnapshot) => {
-      // During zoom, clip positions and viewport scroll are in different
-      // coordinate spaces. Freeze the last valid bounded window.
-      if (useZoomStore.getState().isZoomInteracting) {
-        return
-      }
+  useLayoutEffect(() => {
+    if (entry.clipLeftPx === clipLeftPx && entry.clipWidthPx === clipWidthPx) {
+      return
+    }
+    entry.clipLeftPx = clipLeftPx
+    entry.clipWidthPx = clipWidthPx
+    if (!useZoomStore.getState().isZoomInteracting) {
+      publishEntrySnapshot(
+        entry,
+        computeVisibility(useTimelineViewportStore.getState(), clipLeftPx, clipWidthPx),
+      )
+    }
+  }, [clipLeftPx, clipWidthPx, entry])
 
-      const next = computeVisibility(viewport, clipLeftPx, clipWidthPx)
-      setVisibility((prev) => {
-        if (
-          prev.isVisible === next.isVisible &&
-          Math.abs(prev.visibleStartRatio - next.visibleStartRatio) < RATIO_EPSILON &&
-          Math.abs(prev.visibleEndRatio - next.visibleEndRatio) < RATIO_EPSILON
-        ) {
-          return prev
+  const subscribe = useCallback(
+    (listener: () => void) => {
+      entry.listeners.add(listener)
+      registeredEntries.add(entry)
+      connectVisibilityRegistry()
+
+      return () => {
+        entry.listeners.delete(listener)
+        if (entry.listeners.size === 0) {
+          registeredEntries.delete(entry)
+          disconnectVisibilityRegistryIfIdle()
         }
-        return next
-      })
-    }
-
-    apply(useTimelineViewportStore.getState())
-    const unsubViewport = useTimelineViewportStore.subscribe(apply)
-    // Recompute when zoom interaction ends so the frozen window catches up.
-    const unsubZoom = useZoomStore.subscribe((curr, prev) => {
-      if (prev.isZoomInteracting && !curr.isZoomInteracting) {
-        apply(useTimelineViewportStore.getState())
       }
-    })
-    return () => {
-      unsubViewport()
-      unsubZoom()
-    }
-  }, [clipLeftPx, clipWidthPx])
+    },
+    [entry],
+  )
+  const getSnapshot = useCallback(() => entry.snapshot, [entry])
 
-  return visibility
+  return useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
 }
 
 interface TimelineViewportSnapshot {

@@ -138,13 +138,11 @@ export const ClipPanel = memo(function ClipPanel() {
     snapshotBridge.getSnapshot,
     snapshotBridge.getSnapshot,
   )
-  const selectionKey = selectedItemIds.join('\u001f')
 
-  // A new selection must replace the inspector synchronously. Reusing the
-  // deferred boundary here can leave its controls one selection behind while
-  // playback keeps higher-priority preview work active. Remounting only when
-  // the selected IDs change preserves deferred same-item store updates.
-  return <DeferredClipPanel key={selectionKey} snapshot={snapshot} />
+  // Keep the current inspector responsive through the selection event. The
+  // deferred boundary replaces its controls immediately afterward without
+  // remounting the full Radix/control tree inside the input task.
+  return <DeferredClipPanel snapshot={snapshot} />
 })
 
 interface ClipPanelSnapshot {

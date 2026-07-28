@@ -63,6 +63,29 @@ describe('useClipVisibility', () => {
     expect(onRender).toHaveBeenCalled()
   })
 
+  it('shares one viewport and zoom subscription across mounted clips', () => {
+    const viewportSubscribe = vi.spyOn(useTimelineViewportStore, 'subscribe')
+    const zoomSubscribe = vi.spyOn(useZoomStore, 'subscribe')
+
+    render(
+      <>
+        {createElement(VisibilityProbe, {
+          clipLeftPx: 200,
+          clipWidthPx: 400,
+          onRender: vi.fn(),
+        })}
+        {createElement(VisibilityProbe, {
+          clipLeftPx: 800,
+          clipWidthPx: 400,
+          onRender: vi.fn(),
+        })}
+      </>,
+    )
+
+    expect(viewportSubscribe).toHaveBeenCalledTimes(1)
+    expect(zoomSubscribe).toHaveBeenCalledTimes(1)
+  })
+
   it('marks clip as not visible when scrolled far away', () => {
     render(
       createElement(VisibilityProbe, {
