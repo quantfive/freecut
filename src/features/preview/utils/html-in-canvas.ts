@@ -9,16 +9,23 @@ interface HtmlInCanvasProbeContext extends CanvasRenderingContext2D {
 
 interface HtmlInCanvasPlaybackEligibility {
   fastRendererEnabled: boolean
+  domTextOverlayEnabled: boolean
   comparisonEnabled: boolean
   htmlInCanvasSupported: boolean
 }
 
 export function shouldEnableHtmlInCanvasPlayback({
   fastRendererEnabled,
+  domTextOverlayEnabled,
   comparisonEnabled,
   htmlInCanvasSupported,
 }: HtmlInCanvasPlaybackEligibility): boolean {
-  return fastRendererEnabled && !comparisonEnabled && htmlInCanvasSupported
+  return (
+    fastRendererEnabled &&
+    domTextOverlayEnabled &&
+    !comparisonEnabled &&
+    htmlInCanvasSupported
+  )
 }
 
 /**

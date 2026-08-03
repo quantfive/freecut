@@ -328,10 +328,11 @@ const VideoPreviewBase = memo(function VideoPreviewBase({
     () =>
       shouldEnableHtmlInCanvasPlayback({
         fastRendererEnabled: FAST_SCRUB_RENDERER_ENABLED,
+        domTextOverlayEnabled: domTextScrubOverlayPlan.enabled,
         comparisonEnabled: colorGradeComparisonMode !== 'off',
         htmlInCanvasSupported: supportsHtmlInCanvas(),
       }),
-    [colorGradeComparisonMode],
+    [colorGradeComparisonMode, domTextScrubOverlayPlan.enabled],
   )
   const domTextScrubInputProps = useMemo(
     () =>
