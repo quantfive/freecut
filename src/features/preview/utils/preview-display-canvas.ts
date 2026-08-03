@@ -175,7 +175,7 @@ export function drawSourceToPreviewDisplayCanvas(
 
 export function copyPreviewDisplayCanvasContent(
   sourceCanvas: HTMLCanvasElement,
-  targetCtx: OffscreenCanvasRenderingContext2D,
+  targetCtx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
 ): void {
   const padX = Math.max(0, Math.round((sourceCanvas.width - targetCtx.canvas.width) / 2))
   const padY = Math.max(0, Math.round((sourceCanvas.height - targetCtx.canvas.height) / 2))

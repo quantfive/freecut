@@ -1,0 +1,540 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>FreeCut HTML-in-Canvas spike</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        font-family:
+          Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        background: #090b10;
+        color: #e8ecf4;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        min-height: 100vh;
+        margin: 0;
+        display: grid;
+        place-items: center;
+        background:
+          radial-gradient(circle at 20% 0%, #1a2440 0%, transparent 34%),
+          #090b10;
+      }
+
+      main {
+        width: min(1040px, calc(100vw - 32px));
+        padding: 28px;
+        border: 1px solid #293145;
+        border-radius: 18px;
+        background: rgb(15 18 27 / 92%);
+        box-shadow: 0 28px 80px rgb(0 0 0 / 45%);
+      }
+
+      header {
+        display: flex;
+        align-items: start;
+        justify-content: space-between;
+        gap: 24px;
+        margin-bottom: 18px;
+      }
+
+      h1 {
+        margin: 0 0 6px;
+        font-size: 20px;
+      }
+
+      p {
+        margin: 0;
+        color: #9da8bd;
+        font-size: 13px;
+        line-height: 1.5;
+      }
+
+      button {
+        flex: none;
+        padding: 8px 13px;
+        border: 1px solid #4e65a8;
+        border-radius: 8px;
+        background: #283a72;
+        color: white;
+        font: inherit;
+        cursor: pointer;
+      }
+
+      button:disabled {
+        cursor: wait;
+        opacity: 0.55;
+      }
+
+      #stage {
+        position: relative;
+        overflow: hidden;
+        width: 100%;
+        aspect-ratio: 16 / 9;
+        border: 1px solid #30394d;
+        border-radius: 12px;
+        background: #05070a;
+      }
+
+      #spike-canvas {
+        display: block;
+        width: 100%;
+        height: 100%;
+      }
+
+      #text-layer {
+        width: 560px;
+        min-height: 156px;
+        padding: 22px 26px;
+        overflow: hidden;
+        border: 1px solid rgb(255 255 255 / 28%);
+        border-radius: 18px;
+        background:
+          linear-gradient(125deg, hsl(var(--hue) 72% 47% / 92%), rgb(18 22 36 / 96%));
+        box-shadow: 0 18px 46px rgb(0 0 0 / 42%);
+        color: white;
+        font-size: 31px;
+        font-weight: 720;
+        line-height: 1.12;
+        letter-spacing: -0.025em;
+        text-wrap: balance;
+        contain: layout paint style;
+      }
+
+      #text-layer small {
+        display: block;
+        margin-top: 12px;
+        color: rgb(255 255 255 / 76%);
+        font-size: 15px;
+        font-weight: 500;
+        letter-spacing: 0;
+      }
+
+      #status {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 8px;
+        margin-top: 12px;
+      }
+
+      .metric {
+        min-height: 68px;
+        padding: 10px 12px;
+        border: 1px solid #293145;
+        border-radius: 9px;
+        background: #111620;
+      }
+
+      .metric dt {
+        color: #8994aa;
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+      }
+
+      .metric dd {
+        margin: 5px 0 0;
+        color: #f6f8fc;
+        font-size: 14px;
+        font-variant-numeric: tabular-nums;
+      }
+
+      pre {
+        max-height: 240px;
+        margin: 12px 0 0;
+        padding: 12px;
+        overflow: auto;
+        border: 1px solid #293145;
+        border-radius: 9px;
+        background: #080b11;
+        color: #aebad0;
+        font-size: 11px;
+      }
+
+      @media (max-width: 720px) {
+        header {
+          display: block;
+        }
+
+        button {
+          margin-top: 12px;
+        }
+
+        #status {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <div>
+          <h1>HTML-in-Canvas frame-sync spike</h1>
+          <p>
+            A frame-number-driven DOM text layer is painted into Canvas2D. When supported, the same
+            DOM snapshot is also copied into a WebGPU texture and read back for proof.
+          </p>
+        </div>
+        <button id="run" type="button">Run 120 frames</button>
+      </header>
+
+      <div id="stage">
+        <canvas id="spike-canvas" width="960" height="540" layoutsubtree>
+          <div id="text-layer" inert style="--hue: 220">
+            <span>FreeCut hybrid frame <strong id="frame-label">000</strong></span>
+            <small>DOM typography → canvas pixels · العربية · ไทย · 😀</small>
+          </div>
+        </canvas>
+      </div>
+
+      <dl id="status">
+        <div class="metric">
+          <dt>HTML-in-Canvas</dt>
+          <dd id="support-value">Detecting…</dd>
+        </div>
+        <div class="metric">
+          <dt>Painted frames</dt>
+          <dd id="frames-value">0 / 120</dd>
+        </div>
+        <div class="metric">
+          <dt>Paint latency p95</dt>
+          <dd id="latency-value">—</dd>
+        </div>
+        <div class="metric">
+          <dt>WebGPU texture</dt>
+          <dd id="gpu-value">Not run</dd>
+        </div>
+      </dl>
+
+      <pre id="result">Waiting to run.</pre>
+    </main>
+
+    <script type="module">
+      const FRAME_COUNT = 120
+      const canvas = document.querySelector('#spike-canvas')
+      const ctx = canvas.getContext('2d', { willReadFrequently: true })
+      const textLayer = document.querySelector('#text-layer')
+      const frameLabel = document.querySelector('#frame-label')
+      const runButton = document.querySelector('#run')
+      const resultNode = document.querySelector('#result')
+      const supportValue = document.querySelector('#support-value')
+      const framesValue = document.querySelector('#frames-value')
+      const latencyValue = document.querySelector('#latency-value')
+      const gpuValue = document.querySelector('#gpu-value')
+
+      const percentile = (sorted, value) =>
+        sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * value))] ?? 0
+
+      const checksumBytes = (bytes, bytesPerRow, width, height) => {
+        let hash = 2166136261
+        let opaqueSamples = 0
+        const sampleStride = 16
+        for (let y = 0; y < height; y += 2) {
+          const row = y * bytesPerRow
+          for (let x = 0; x < width; x += sampleStride) {
+            const offset = row + x * 4
+            hash ^= bytes[offset] ?? 0
+            hash = Math.imul(hash, 16777619)
+            hash ^= bytes[offset + 1] ?? 0
+            hash = Math.imul(hash, 16777619)
+            hash ^= bytes[offset + 2] ?? 0
+            hash = Math.imul(hash, 16777619)
+            if ((bytes[offset + 3] ?? 0) > 0) opaqueSamples += 1
+          }
+        }
+        return { checksum: hash >>> 0, opaqueSamples }
+      }
+
+      const detectSupport = () => {
+        const context = canvas.getContext('2d')
+        return {
+          secureContext: window.isSecureContext,
+          layoutSubtree: 'layoutSubtree' in canvas,
+          requestPaint: typeof canvas.requestPaint === 'function',
+          drawElementImage: typeof context?.drawElementImage === 'function',
+          captureElementImage: typeof canvas.captureElementImage === 'function',
+          webGpu: Boolean(navigator.gpu),
+        }
+      }
+
+      async function prepareWebGpuProbe() {
+        if (!navigator.gpu) return { available: false, reason: 'WebGPU unavailable' }
+
+        const adapter = await navigator.gpu.requestAdapter()
+        if (!adapter) return { available: false, reason: 'No WebGPU adapter' }
+
+        const device = await adapter.requestDevice()
+        const copyElement = device.queue.copyElementImageToTexture
+        if (typeof copyElement !== 'function') {
+          device.destroy()
+          return { available: false, reason: 'copyElementImageToTexture unavailable' }
+        }
+
+        // Chromium's reference WebGPU demo allocates a canvas-sized target.
+        // Element paint records are positioned in the layout-subtree canvas's
+        // coordinate space, so an element-sized destination can crop away all
+        // visible pixels even though the copy call itself succeeds.
+        const width = canvas.width
+        const height = canvas.height
+        const bytesPerRow = Math.ceil((width * 4) / 256) * 256
+        const texture = device.createTexture({
+          size: { width, height },
+          format: 'rgba8unorm',
+          usage:
+            GPUTextureUsage.COPY_DST |
+            GPUTextureUsage.COPY_SRC |
+            GPUTextureUsage.TEXTURE_BINDING |
+            GPUTextureUsage.RENDER_ATTACHMENT,
+        })
+        const buffer = device.createBuffer({
+          size: bytesPerRow * height,
+          usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+        })
+        let recorded = false
+        let resultPromise = null
+
+        const record = () => {
+          if (recorded) return
+          recorded = true
+          const startedAt = performance.now()
+          let signature = 'current'
+          try {
+            copyElement.call(
+              device.queue,
+              { source: textLayer },
+              { destination: { texture }, width, height },
+            )
+          } catch (currentError) {
+            signature = 'legacy'
+            try {
+              copyElement.call(device.queue, textLayer, width, height, { texture })
+            } catch (legacyError) {
+              resultPromise = Promise.resolve({
+                available: true,
+                copied: false,
+                error: `${currentError}; ${legacyError}`,
+              })
+              return
+            }
+          }
+
+          const encoder = device.createCommandEncoder()
+          encoder.copyTextureToBuffer(
+            { texture },
+            { buffer, bytesPerRow, rowsPerImage: height },
+            { width, height },
+          )
+          device.queue.submit([encoder.finish()])
+          resultPromise = (async () => {
+            await buffer.mapAsync(GPUMapMode.READ)
+            const bytes = new Uint8Array(buffer.getMappedRange())
+            const proof = checksumBytes(bytes, bytesPerRow, width, height)
+            buffer.unmap()
+            return {
+              available: true,
+              copied: proof.opaqueSamples > 0,
+              signature,
+              width,
+              height,
+              checksum: proof.checksum,
+              opaqueSamples: proof.opaqueSamples,
+              roundTripMs: Number((performance.now() - startedAt).toFixed(3)),
+            }
+          })()
+        }
+
+        const finish = async () => {
+          const result = resultPromise
+            ? await resultPromise
+            : { available: true, copied: false, error: 'No paint event reached WebGPU probe' }
+          buffer.destroy()
+          texture.destroy()
+          device.destroy()
+          return result
+        }
+
+        return { available: true, record, finish }
+      }
+
+      function drawFrame(frame) {
+        const frameStartedAt = performance.now()
+        const progress = frame / Math.max(1, FRAME_COUNT - 1)
+        const x = 80 + Math.sin(progress * Math.PI * 2) * 54
+        const y = 178 + Math.cos(progress * Math.PI * 2) * 28
+
+        ctx.reset()
+        const background = ctx.createLinearGradient(0, 0, canvas.width, canvas.height)
+        background.addColorStop(0, '#10182a')
+        background.addColorStop(1, '#05070c')
+        ctx.fillStyle = background
+        ctx.fillRect(0, 0, canvas.width, canvas.height)
+
+        ctx.save()
+        ctx.translate(canvas.width / 2, canvas.height / 2)
+        ctx.rotate(Math.sin(progress * Math.PI * 2) * 0.035)
+        ctx.translate(-canvas.width / 2, -canvas.height / 2)
+        const drawElementStartedAt = performance.now()
+        const transform = ctx.drawElementImage(textLayer, x, y)
+        const drawElementMs = performance.now() - drawElementStartedAt
+        ctx.restore()
+        textLayer.style.transform = transform.toString()
+
+        const sample = ctx.getImageData(60, 150, 680, 230)
+        return {
+          checksum: checksumBytes(sample.data, sample.width * 4, sample.width, sample.height).checksum,
+          drawElementMs,
+          frameWithReadbackMs: performance.now() - frameStartedAt,
+        }
+      }
+
+      async function runSpike() {
+        const support = detectSupport()
+        supportValue.textContent = support.drawElementImage ? 'Available' : 'Unavailable'
+        if (!support.requestPaint || !support.drawElementImage || !ctx) {
+          const result = {
+            supported: false,
+            support,
+            userAgent: navigator.userAgent,
+            requiredFlag: 'chrome://flags/#canvas-draw-element',
+          }
+          resultNode.textContent = JSON.stringify(result, null, 2)
+          window.htmlInCanvasSpike.lastResult = result
+          return result
+        }
+
+        runButton.disabled = true
+        framesValue.textContent = `0 / ${FRAME_COUNT}`
+        latencyValue.textContent = 'Running…'
+        gpuValue.textContent = 'Preparing…'
+
+        const gpuProbe = await prepareWebGpuProbe()
+        gpuValue.textContent = gpuProbe.available ? 'Ready' : gpuProbe.reason
+
+        const latencies = []
+        const drawElementTimes = []
+        const frameWithReadbackTimes = []
+        const checksums = new Set()
+        const runStartedAt = performance.now()
+        let requestedAt = 0
+        let requestedFrame = -1
+        let paintedFrames = 0
+        let settled = false
+
+        const completion = new Promise((resolve, reject) => {
+          const timeout = window.setTimeout(() => {
+            if (!settled) reject(new Error(`Timed out after ${paintedFrames} painted frames`))
+          }, 15_000)
+
+          const finish = async () => {
+            settled = true
+            window.clearTimeout(timeout)
+            canvas.onpaint = null
+            const sorted = [...latencies].sort((a, b) => a - b)
+            const sortedDrawElement = [...drawElementTimes].sort((a, b) => a - b)
+            const sortedFrameWithReadback = [...frameWithReadbackTimes].sort((a, b) => a - b)
+            const runDurationMs = performance.now() - runStartedAt
+            const gpu = gpuProbe.available ? await gpuProbe.finish() : gpuProbe
+            const result = {
+              supported: true,
+              support,
+              requestedFrames: FRAME_COUNT,
+              paintedFrames,
+              uniqueCanvasChecksums: checksums.size,
+              paintLatencyMs: {
+                median: Number(percentile(sorted, 0.5).toFixed(3)),
+                p95: Number(percentile(sorted, 0.95).toFixed(3)),
+                max: Number((sorted.at(-1) ?? 0).toFixed(3)),
+              },
+              drawElementMs: {
+                median: Number(percentile(sortedDrawElement, 0.5).toFixed(3)),
+                p95: Number(percentile(sortedDrawElement, 0.95).toFixed(3)),
+                max: Number((sortedDrawElement.at(-1) ?? 0).toFixed(3)),
+              },
+              canvasFrameWithReadbackMs: {
+                median: Number(percentile(sortedFrameWithReadback, 0.5).toFixed(3)),
+                p95: Number(percentile(sortedFrameWithReadback, 0.95).toFixed(3)),
+                max: Number((sortedFrameWithReadback.at(-1) ?? 0).toFixed(3)),
+              },
+              runDurationMs: Number(runDurationMs.toFixed(3)),
+              effectiveFps: Number(((paintedFrames * 1000) / runDurationMs).toFixed(1)),
+              webGpuTextureCopy: gpu,
+              userAgent: navigator.userAgent,
+            }
+            latencyValue.textContent = `${result.paintLatencyMs.p95} ms`
+            gpuValue.textContent = gpu.copied ? `${gpu.roundTripMs} ms · pixels proven` : gpu.reason ?? 'Failed'
+            resultNode.textContent = JSON.stringify(result, null, 2)
+            window.htmlInCanvasSpike.lastResult = result
+            resolve(result)
+          }
+
+          canvas.onpaint = () => {
+            try {
+              if (requestedFrame < 0) return
+              if (gpuProbe.available && paintedFrames === 0) gpuProbe.record()
+              latencies.push(performance.now() - requestedAt)
+              const frameResult = drawFrame(requestedFrame)
+              checksums.add(frameResult.checksum)
+              drawElementTimes.push(frameResult.drawElementMs)
+              frameWithReadbackTimes.push(frameResult.frameWithReadbackMs)
+              paintedFrames += 1
+              framesValue.textContent = `${paintedFrames} / ${FRAME_COUNT}`
+
+              if (paintedFrames >= FRAME_COUNT) {
+                void finish().catch(reject)
+                return
+              }
+
+              requestAnimationFrame(requestNextFrame)
+            } catch (error) {
+              reject(error)
+            }
+          }
+
+          const requestNextFrame = () => {
+            requestedFrame = paintedFrames
+            frameLabel.textContent = String(requestedFrame).padStart(3, '0')
+            textLayer.style.setProperty('--hue', String(205 + (requestedFrame * 3) % 120))
+            requestedAt = performance.now()
+            canvas.requestPaint()
+          }
+
+          requestAnimationFrame(requestNextFrame)
+        })
+
+        try {
+          return await completion
+        } catch (error) {
+          const result = { supported: true, support, error: String(error), paintedFrames }
+          resultNode.textContent = JSON.stringify(result, null, 2)
+          window.htmlInCanvasSpike.lastResult = result
+          return result
+        } finally {
+          runButton.disabled = false
+        }
+      }
+
+      const support = detectSupport()
+      supportValue.textContent = support.drawElementImage ? 'Available' : 'Unavailable'
+      resultNode.textContent = JSON.stringify(
+        {
+          support,
+          note: support.drawElementImage
+            ? 'Ready. Run the frame test.'
+            : 'Enable chrome://flags/#canvas-draw-element in a compatible Chrome build.',
+        },
+        null,
+        2,
+      )
+
+      window.htmlInCanvasSpike = { detectSupport, run: runSpike, lastResult: null }
+      runButton.addEventListener('click', () => void runSpike())
+    </script>
+  </body>
+</html>

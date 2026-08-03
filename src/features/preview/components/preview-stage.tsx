@@ -469,6 +469,8 @@ export const PreviewStage = memo(function PreviewStage({
                   renderSize={playerRenderSize}
                   layoutSize={playerSize}
                   inputProps={domTextScrubInputProps}
+                  backgroundCanvasRef={scrubCanvasRef}
+                  htmlInCanvasEnabled={!isSplitGradeComparison && !isSplitGradeAfterVisible}
                 />
               )}
 
