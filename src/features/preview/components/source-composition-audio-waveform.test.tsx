@@ -68,7 +68,18 @@ vi.mock('@/features/preview/deps/timeline-utils', () => ({
   }),
 }))
 
+import { getSourceMonitorFrameCacheCapacity } from '../utils/source-monitor-frame-cache'
 import { SourceComposition } from './source-composition'
+
+describe('SourceComposition video frame cache', () => {
+  it('keeps 4K paused-frame bitmaps within the byte budget', () => {
+    expect(getSourceMonitorFrameCacheCapacity(4000, 2250)).toBe(3)
+  })
+
+  it('retains the existing frame-count ceiling for small media', () => {
+    expect(getSourceMonitorFrameCacheCapacity(320, 180)).toBe(90)
+  })
+})
 
 describe('SourceComposition audio waveform', () => {
   beforeAll(() => {

@@ -21,6 +21,8 @@ import { usePlaybackStore } from '@/shared/state/playback'
 import { useSourcePlayerStore } from '@/shared/state/source-player'
 import { useMediaLibraryStore } from '@/features/preview/deps/media-library'
 import { shouldSeekPlayingMedia } from '../utils/source-media-sync'
+import { observeMediaPlaybackDiagnostics } from '../utils/media-playback-diagnostics'
+import { getSourceMonitorFrameCacheCapacity } from '../utils/source-monitor-frame-cache'
 import { SourceAudioWaveform } from './source-audio-waveform'
 import { LottieRenderer } from '@/infrastructure/lottie/lottie-frame-provider'
 
@@ -37,7 +39,6 @@ let sourceMonitorStrictDecodeInstanceCounter = 0
 let globalSourceMonitorDecoderPool: SharedVideoExtractorPool | null = null
 
 const SOURCE_MONITOR_STRICT_DECODE_FALLBACK_FAILURES = 2
-const SOURCE_MONITOR_FRAME_CACHE_MAX = 90
 const SOURCE_MONITOR_CACHE_TIME_QUANTUM = 1 / 60
 const SOURCE_MONITOR_PREWARM_MAX_TIMESTAMPS = 6
 const SOURCE_MONITOR_PREWARM_FORWARD_STEPS = 4
@@ -164,7 +165,6 @@ function VideoSource({
   const isPreviewScrubbing = forceFastScrub || sourcePlayerPreviewScrubbing
   const videoContainerRef = useRef<HTMLDivElement>(null)
   const videoRef = useRef<HTMLVideoElement | null>(null)
-  const audioRef = useRef<HTMLAudioElement | null>(null)
   const poolRef = useRef(getGlobalVideoSourcePool())
   const poolClipIdRef = useRef<string>(`source-monitor-${++sourceMonitorVideoInstanceCounter}`)
   const decoderPoolRef = useRef(getSourceMonitorDecoderPool())
@@ -183,6 +183,7 @@ function VideoSource({
   const frameCacheRef = useRef<Map<number, ImageBitmap>>(new Map())
   const frameCacheOrderRef = useRef<number[]>([])
   const prewarmInFlightRef = useRef(false)
+  const prewarmAbortControllerRef = useRef<AbortController | null>(null)
   const queuedPrewarmTimesRef = useRef<number[]>([])
   const prewarmAnchorFrameRef = useRef<number | null>(null)
   const { fps } = useVideoConfig()
@@ -202,6 +203,20 @@ function VideoSource({
 
   useEffect(() => {
     playingRef.current = playing
+    if (!playing) return
+
+    pendingTimeRef.current = null
+    queuedPrewarmTimesRef.current = []
+    prewarmAbortControllerRef.current?.abort()
+    prewarmAbortControllerRef.current = null
+    prewarmInFlightRef.current = false
+    for (const bitmap of frameCacheRef.current.values()) {
+      bitmap.close()
+    }
+    frameCacheRef.current.clear()
+    frameCacheOrderRef.current = []
+    setHasDecodedFrame(false)
+    setDecodedFrameKey(null)
   }, [playing])
 
   useEffect(() => {
@@ -235,6 +250,8 @@ function VideoSource({
     mountedRef.current = true
     return () => {
       mountedRef.current = false
+      prewarmAbortControllerRef.current?.abort()
+      prewarmAbortControllerRef.current = null
       for (const bitmap of frameCache.values()) {
         bitmap.close()
       }
@@ -247,6 +264,8 @@ function VideoSource({
   }, [])
 
   useEffect(() => {
+    prewarmAbortControllerRef.current?.abort()
+    prewarmAbortControllerRef.current = null
     setUseLegacyPausedSeek(false)
     setHasDecodedFrame(false)
     setDecodedFrameKey(null)
@@ -281,20 +300,25 @@ function VideoSource({
     queuedPrewarmTimesRef.current = []
 
     const run = async () => {
+      const controller = new AbortController()
+      prewarmAbortControllerRef.current = controller
       try {
-        await backgroundBatchPreseek(activeSrc, timestamps)
+        await backgroundBatchPreseek(activeSrc, timestamps, { signal: controller.signal })
       } finally {
-        prewarmInFlightRef.current = false
-        if (
-          mountedRef.current &&
-          !playingRef.current &&
-          pendingTimeRef.current === null &&
-          queuedPrewarmTimesRef.current.length > 0
-        ) {
-          queueMicrotask(() => {
-            if (!mountedRef.current) return
-            pumpDirectionalPrewarm()
-          })
+        if (prewarmAbortControllerRef.current === controller) {
+          prewarmAbortControllerRef.current = null
+          prewarmInFlightRef.current = false
+          if (
+            mountedRef.current &&
+            !playingRef.current &&
+            pendingTimeRef.current === null &&
+            queuedPrewarmTimesRef.current.length > 0
+          ) {
+            queueMicrotask(() => {
+              if (!mountedRef.current) return
+              pumpDirectionalPrewarm()
+            })
+          }
         }
       }
     }
@@ -376,6 +400,7 @@ function VideoSource({
       const { width: decodedWidth, height: decodedHeight } = extractor.getDimensions()
       const targetWidth = Math.max(1, Math.round(decodedWidth || 640))
       const targetHeight = Math.max(1, Math.round(decodedHeight || 360))
+      const frameCacheCapacity = getSourceMonitorFrameCacheCapacity(targetWidth, targetHeight)
 
       if (canvas.width !== targetWidth || canvas.height !== targetHeight) {
         canvas.width = targetWidth
@@ -441,11 +466,15 @@ function VideoSource({
       )
       if (!didDraw) return false
 
+      if (playingRef.current) {
+        return true
+      }
+
       try {
         const bitmap = await createImageBitmap(canvas)
         cache.set(cacheKey, bitmap)
         cacheOrder.push(cacheKey)
-        while (cacheOrder.length > SOURCE_MONITOR_FRAME_CACHE_MAX) {
+        while (cacheOrder.length > frameCacheCapacity) {
           const evictKey = cacheOrder.shift()
           if (evictKey === undefined) break
           const evicted = cache.get(evictKey)
@@ -528,8 +557,12 @@ function VideoSource({
     const video = pool.acquireForClip(clipId, activeSrc)
     if (!video) return
 
-    video.muted = true
-    video.volume = 0
+    // Source Monitor owns this pooled element while it is mounted. Let the
+    // browser synchronize the element's original audio and video tracks on a
+    // single media clock; a second <audio> element can continue in real time
+    // while a heavy muted video decoder stalls several seconds behind.
+    video.muted = false
+    video.volume = 1
     video.playsInline = true
     video.style.width = '100%'
     video.style.height = '100%'
@@ -548,6 +581,8 @@ function VideoSource({
 
     return () => {
       video.pause()
+      video.muted = true
+      video.volume = 0
       if (video.parentElement) {
         video.parentElement.removeChild(video)
       }
@@ -612,11 +647,11 @@ function VideoSource({
   }, [activeSrc, decoderItemId, pumpLatestDecodedFrame])
 
   const syncSourceFrame = useCallback(
-    (frame: number) => {
+    (frame: number, options: { forceMediaSeek?: boolean } = {}) => {
       const video = videoRef.current
-      const audio = audioRef.current
       const targetTime = frame / fps
       const targetCacheKey = quantizeSourceMonitorTime(targetTime)
+      const forceMediaSeek = options.forceMediaSeek === true
       latestTargetTimeRef.current = targetTime
 
       lastFrameRef.current = frame
@@ -637,26 +672,16 @@ function VideoSource({
         pendingTimeRef.current = null
       }
 
-      const syncAudioTime = () => {
-        if (!audio || !src || audio.readyState < 1) {
-          return
-        }
-
-        if (playingRef.current) {
-          if (!shouldSeekPlayingMedia(audio, targetTime, fps)) {
-            return
-          }
-        }
-
-        try {
-          audio.currentTime = targetTime
-        } catch {
-          // Ignore seek errors while media is loading
-        }
+      // During ordinary forward playback, let the browser media elements run
+      // continuously. Chasing the independent Clock with currentTime writes
+      // repeatedly flushes slow 4K decoders and turns recoverable frame drops
+      // into multi-second stalls. Explicit transport seeks still force both
+      // elements to the requested source time below.
+      if (playingRef.current && !forceMediaSeek) {
+        return
       }
 
       if (!video || !activeSrc) {
-        syncAudioTime()
         return
       }
 
@@ -670,21 +695,15 @@ function VideoSource({
         !useLegacyPausedSeek &&
         (!isPreviewScrubbing || shouldUseDecodedScrubFrame)
       ) {
-        syncAudioTime()
         return
       }
 
       if (playingRef.current) {
-        if (!shouldSeekPlayingMedia(video, targetTime, fps)) {
-          syncAudioTime()
-          return
-        }
         try {
           video.currentTime = targetTime
         } catch {
           // Ignore seek errors while media is loading
         }
-        syncAudioTime()
         return
       }
 
@@ -704,7 +723,6 @@ function VideoSource({
         }
       }
 
-      syncAudioTime()
     },
     [
       activeSrc,
@@ -713,7 +731,6 @@ function VideoSource({
       isPreviewScrubbing,
       pumpLatestDecodedFrame,
       shouldUseDecodedScrubFrame,
-      src,
       strictDecodeReady,
       useLegacyPausedSeek,
     ],
@@ -728,6 +745,14 @@ function VideoSource({
       syncSourceFrame(frame)
     })
   }, [clock, getResolvedPausedSourceFrame, playing, syncSourceFrame])
+
+  useEffect(() => {
+    const syncExplicitSourceSeek = () => {
+      syncSourceFrame(clock.currentFrame, { forceMediaSeek: true })
+    }
+    clock.addEventListener('seek', syncExplicitSourceSeek)
+    return () => clock.removeEventListener('seek', syncExplicitSourceSeek)
+  }, [clock, syncSourceFrame])
 
   useEffect(() => {
     syncSourceFrame(playing ? clock.currentFrame : getResolvedPausedSourceFrame())
@@ -772,23 +797,10 @@ function VideoSource({
   }, [activeSrc, isReverseShuttle, mediaPlaybackRate, playing])
 
   useEffect(() => {
-    const audio = audioRef.current
-    if (!audio || !src) return
-
-    if (playing && !isReverseShuttle) {
-      audio.playbackRate = mediaPlaybackRate
-      if (audio.readyState >= 1) {
-        try {
-          audio.currentTime = latestTargetTimeRef.current
-        } catch {
-          // Ignore seek errors while media is loading
-        }
-      }
-      audio.play().catch(() => {})
-    } else {
-      audio.pause()
-    }
-  }, [isReverseShuttle, mediaPlaybackRate, playing, src])
+    const video = videoRef.current
+    if (!video || !playing || isReverseShuttle) return
+    return observeMediaPlaybackDiagnostics(video)
+  }, [activeSrc, isReverseShuttle, playing])
 
   const showDecodedCanvas =
     !playing &&
@@ -817,7 +829,6 @@ function VideoSource({
           display: showDecodedCanvas ? 'block' : 'none',
         }}
       />
-      <audio ref={audioRef} src={src} preload="auto" style={{ display: 'none' }} />
     </AbsoluteFill>
   )
 }
