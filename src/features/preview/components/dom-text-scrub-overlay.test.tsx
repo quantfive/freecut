@@ -182,6 +182,13 @@ describe('DomTextScrubOverlay', () => {
         paints: 1,
       })
       expect(hybridCanvas).toHaveAttribute('data-html-in-canvas-paints', '1')
+
+      act(() => usePlaybackStore.setState({ isPlaying: true }))
+      expect(hybridCanvas).toHaveAttribute('data-html-in-canvas-paints', '0')
+
+      act(() => hybridCanvas?.onpaint?.(new Event('paint')))
+      act(() => usePlaybackStore.setState({ isPlaying: false }))
+      expect(hybridCanvas).toHaveAttribute('data-html-in-canvas-paints', '1')
     } finally {
       getContext.mockRestore()
       delete (HTMLCanvasElement.prototype as HTMLCanvasElement & { layoutSubtree?: boolean })

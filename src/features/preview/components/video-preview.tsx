@@ -57,6 +57,7 @@ import {
 } from '../utils/preview-display-canvas'
 import { buildDomTextScrubOverlayPlan } from '../utils/dom-text-scrub-overlay'
 import { shouldPreferDomPlayerForGizmo } from '../utils/gizmo-preview-presentation'
+import { shouldEnableHtmlInCanvasPlayback, supportsHtmlInCanvas } from '../utils/html-in-canvas'
 import { importCompositionRenderer, type CompositionRendererInstance } from '../deps/export'
 
 interface VideoPreviewProps {
@@ -323,6 +324,16 @@ const VideoPreviewBase = memo(function VideoPreviewBase({
     () => buildDomTextScrubOverlayPlan(fastScrubScaledTracks, fastScrubScaledKeyframes),
     [fastScrubScaledKeyframes, fastScrubScaledTracks],
   )
+  const htmlInCanvasPlaybackEnabled = useMemo(
+    () =>
+      shouldEnableHtmlInCanvasPlayback({
+        fastRendererEnabled: FAST_SCRUB_RENDERER_ENABLED,
+        domTextOverlayEnabled: domTextScrubOverlayPlan.enabled,
+        comparisonEnabled: colorGradeComparisonMode !== 'off',
+        htmlInCanvasSupported: supportsHtmlInCanvas(),
+      }),
+    [colorGradeComparisonMode, domTextScrubOverlayPlan.enabled],
+  )
   const domTextScrubInputProps = useMemo(
     () =>
       domTextScrubOverlayPlan.enabled
@@ -497,11 +508,15 @@ const VideoPreviewBase = memo(function VideoPreviewBase({
       renderSize.width,
     ])
 
-  // Enter the composited path in the same render that activates the editor.
-  // Waiting for the timeline-wide effect scan adds a reactive round trip that
-  // makes the first neutral-EV drag look stuck until another parameter changes.
+  // Enter the composited path in the same render that activates an editor or
+  // an eligible HTML-in-canvas scene. The existing rendered-playback pump then
+  // owns ordinary forward playback too, while the primary Player remains
+  // mounted for audio and as the immediate compatibility fallback.
   const forceFastScrubOverlay =
-    showGpuEffectsOverlay || isPowerWindowEditing || isSpatialEffectEditing
+    showGpuEffectsOverlay ||
+    isPowerWindowEditing ||
+    isSpatialEffectEditing ||
+    htmlInCanvasPlaybackEnabled
   const previousForceFastScrubOverlayRef = useRef(forceFastScrubOverlay)
 
   // The split comparison is the only render-time branch that needs playback

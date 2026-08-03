@@ -14,6 +14,7 @@ import type { CompositionInputProps } from '@/types/export'
 import { HeadlessPlayer, type PlayerRef } from '@/features/preview/deps/player-core'
 import { MainComposition } from '@/features/preview/deps/composition-runtime'
 import { useItemsStore } from '@/features/preview/deps/timeline-store'
+import { supportsHtmlInCanvas } from '../utils/html-in-canvas'
 import { copyPreviewDisplayCanvasContent } from '../utils/preview-display-canvas'
 
 interface DomTextScrubOverlayProps {
@@ -140,18 +141,6 @@ function createDiagnostics(supported: boolean): MutableDiagnostics {
   }
 }
 
-function supportsHtmlInCanvas(): boolean {
-  if (typeof document === 'undefined') return false
-  const canvas = document.createElement('canvas') as HtmlInCanvasElement
-  canvas.setAttribute('layoutsubtree', '')
-  const context = canvas.getContext('2d') as HtmlInCanvasContext | null
-  return (
-    'layoutSubtree' in canvas &&
-    typeof canvas.requestPaint === 'function' &&
-    typeof context?.drawElementImage === 'function'
-  )
-}
-
 const ignoreFrameChange = () => undefined
 const ignorePlayStateChange = () => undefined
 
@@ -229,6 +218,13 @@ export const DomTextScrubOverlay = memo(function DomTextScrubOverlay({
       publishDiagnosticSnapshot()
     }
     canvas.addEventListener('freecut-html-in-canvas-reset', resetDiagnostics)
+    const unsubscribePlaybackDiagnostics = usePlaybackStore.subscribe((state, previousState) => {
+      if (state.isPlaying && !previousState.isPlaying) {
+        resetDiagnostics()
+      } else if (!state.isPlaying && previousState.isPlaying) {
+        publishDiagnosticSnapshot()
+      }
+    })
     publishDiagnosticSnapshot()
     let cachedPaintMisses = 0
     let retryPaintRaf: number | null = null
@@ -269,6 +265,7 @@ export const DomTextScrubOverlay = memo(function DomTextScrubOverlay({
     return () => {
       canvas.onpaint = null
       canvas.removeEventListener('freecut-html-in-canvas-reset', resetDiagnostics)
+      unsubscribePlaybackDiagnostics()
       if (retryPaintRaf !== null) cancelAnimationFrame(retryPaintRaf)
       diagnostics.active = false
     }
