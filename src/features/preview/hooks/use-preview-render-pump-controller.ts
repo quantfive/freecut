@@ -111,6 +111,10 @@ import {
   recordPreviewScrubRequest,
 } from '@/shared/logging/preview-scrub-performance'
 import type { CompositionRendererInstance } from '@/features/preview/deps/export'
+import {
+  createRenderedPlaybackDiagnostics,
+  publishRenderedPlaybackDiagnostics,
+} from '../utils/rendered-playback-diagnostics'
 
 const logger = createLogger('VideoPreview')
 
@@ -356,6 +360,14 @@ export function usePreviewRenderPump({
   useEffect(() => {
     let effectDisposed = false
     scrubMountedRef.current = true
+    const renderedPlaybackDiagnostics = createRenderedPlaybackDiagnostics()
+    const publishPlaybackDiagnostics = () => {
+      if (!import.meta.env.DEV) return
+      publishRenderedPlaybackDiagnostics(
+        scrubCanvasRef.current,
+        renderedPlaybackDiagnostics.snapshot(),
+      )
+    }
 
     let transportSettlingUntilMs = 0
     let pausedTransportHeldFrame: number | null = null
@@ -475,6 +487,7 @@ export function usePreviewRenderPump({
         // instead of merely declining the blank replacement.
         drawSourceToPreviewDisplayCanvas(displayCtx, displayCanvas, committedPreviewSnapshot.canvas)
         setDisplayedFrame(renderedFrame)
+        renderedPlaybackDiagnostics.recordPresentation(renderedFrame)
         return
       }
       const shouldReleaseScrubSnapshotGuardAfterDraw =
@@ -513,6 +526,7 @@ export function usePreviewRenderPump({
       }
       drawSourceToPreviewDisplayCanvas(displayCtx, displayCanvas, source)
       setDisplayedFrame(renderedFrame)
+      renderedPlaybackDiagnostics.recordPresentation(renderedFrame)
       recordPreviewScrubPresentationQuality(renderedFrame, usedFallback)
       recordPreviewScrubPresented(renderedFrame)
       if (
@@ -1008,6 +1022,7 @@ export function usePreviewRenderPump({
             priorityRenderUsedFallback =
               'wasLastRenderFallback' in renderer && renderer.wasLastRenderFallback?.() === true
             const renderMs = performance.now() - renderStartMs
+            renderedPlaybackDiagnostics.recordRender(renderMs)
             recordPreviewScrubRenderCompleted(frameToRender)
             const renderedSource = scrubOffscreenCanvasRef.current
             const displayedSource = scrubCanvasRef.current
@@ -1424,10 +1439,12 @@ export function usePreviewRenderPump({
       const playbackState = usePlaybackStore.getState()
       if (!usesRenderedPlaybackOverlay(playbackState)) return
       const currentFrame = playbackState.currentFrame
+      renderedPlaybackDiagnostics.recordRaf(performance.now())
       const renderOwnerActive = scrubRenderInFlightRef.current
       const playbackDirection = playbackState.playbackRate < 0 ? -1 : 1
 
       if (currentFrame !== lastRafRenderedFrame) {
+        renderedPlaybackDiagnostics.recordClockFrame()
         lastRafRenderedFrame = currentFrame
         if (playbackDirection < 0 && currentFrame !== lastReversePreseekFrame) {
           lastReversePreseekFrame = currentFrame
@@ -1489,6 +1506,8 @@ export function usePreviewRenderPump({
       prev: PlaybackStoreSnapshot,
     ) => {
       if (state.isPlaying && !prev.isPlaying) {
+        renderedPlaybackDiagnostics.start(performance.now())
+        publishPlaybackDiagnostics()
         beginPlaybackColdStart({
           startFrame: state.currentFrame,
           forceFastScrubOverlay,
@@ -1500,6 +1519,8 @@ export function usePreviewRenderPump({
         // effect/RVFC resume, which lands 50-100ms after first frame.
         ensureAudioContextResumed()
       } else if (!state.isPlaying && prev.isPlaying) {
+        renderedPlaybackDiagnostics.stop(performance.now())
+        publishPlaybackDiagnostics()
         // No-op if the measurement already resolved on a frame advance.
         cancelPlaybackColdStart('paused_before_first_frame_advance')
       }

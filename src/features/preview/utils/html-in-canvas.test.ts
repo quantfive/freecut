@@ -50,18 +50,14 @@ describe('supportsHtmlInCanvas', () => {
 describe('shouldEnableHtmlInCanvasPlayback', () => {
   const eligible = {
     fastRendererEnabled: true,
-    domTextOverlayEnabled: true,
     comparisonEnabled: false,
     htmlInCanvasSupported: true,
   }
 
-  it('enables normal playback only for the fully supported safe-text route', () => {
+  it('enables canvas-owned playback for supported non-comparison previews', () => {
     expect(shouldEnableHtmlInCanvasPlayback(eligible)).toBe(true)
     expect(
       shouldEnableHtmlInCanvasPlayback({ ...eligible, htmlInCanvasSupported: false }),
-    ).toBe(false)
-    expect(
-      shouldEnableHtmlInCanvasPlayback({ ...eligible, domTextOverlayEnabled: false }),
     ).toBe(false)
     expect(shouldEnableHtmlInCanvasPlayback({ ...eligible, comparisonEnabled: true })).toBe(false)
   })
