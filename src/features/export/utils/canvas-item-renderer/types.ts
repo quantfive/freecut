@@ -158,6 +158,7 @@ export interface ItemRenderContext {
   isActivePreviewFrameSuperseded?: (frame: number) => boolean
   isActivePreviewFrameCurrent?: (frame: number) => boolean
   isActivePreviewFrameDecodeReady?: (frame: number) => boolean
+  isActivePreviewFrameDecodeFailed?: (frame: number) => boolean
   hasActivePreviewDecodeFailure?: (
     src: string,
     timestamp: number,

@@ -140,6 +140,20 @@ export function resolveActivePreviewPresentationTarget({
 }
 
 /**
+ * `undefined` means keep the current exact-presentation gate. Paused store
+ * updates unrelated to the seek must not clear a released ruler target while
+ * its decoder fallback is still settling.
+ */
+export function resolveActivePreviewPresentationTargetUpdate(
+  params: ResolveActivePreviewPresentationTargetParams,
+): number | null | undefined {
+  const target = resolveActivePreviewPresentationTarget(params)
+  if (target !== null) return target
+  if (params.state.isPlaying || params.state.currentFrame !== params.prev.currentFrame) return null
+  return undefined
+}
+
+/**
  * A play/pause handoff for the frame already on screen must be visually
  * idempotent. If the shared render target was cleared while a nested source
  * was settling, keep the known-good front buffer instead of presenting black.
@@ -259,7 +273,7 @@ export function shouldRecoverFailedActivePreseekSchedule({
     scheduleVersion === activeScheduleVersion &&
     mounted &&
     !isPlaying &&
-    currentTarget === targetFrame
+    Math.abs(currentTarget - targetFrame) <= 1
   )
 }
 

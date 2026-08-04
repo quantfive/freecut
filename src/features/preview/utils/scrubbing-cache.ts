@@ -46,6 +46,25 @@ interface EvictionHint {
   direction: -1 | 0 | 1
 }
 
+function findNearestFrame(
+  frames: Iterable<number>,
+  targetFrame: number,
+  maxDistanceFrames: number,
+): number | undefined {
+  const boundedDistance = Math.max(0, Math.floor(maxDistanceFrames))
+  let nearestFrame: number | undefined
+  let nearestDistance = Number.POSITIVE_INFINITY
+
+  for (const frame of frames) {
+    const distance = Math.abs(frame - targetFrame)
+    if (distance === 0 || distance > boundedDistance || distance >= nearestDistance) continue
+    nearestFrame = frame
+    nearestDistance = distance
+  }
+
+  return nearestFrame
+}
+
 class GpuTextureCache {
   private cache = new Map<number, GpuCacheEntry>()
   private slots: GpuCacheEntry[] = []
@@ -136,6 +155,16 @@ class GpuTextureCache {
     this.cache.delete(frame)
     this.cache.set(frame, entry)
     return entry
+  }
+
+  getNearest(
+    frame: number,
+    maxDistanceFrames: number,
+  ): { frame: number; entry: GpuCacheEntry } | undefined {
+    const nearestFrame = findNearestFrame(this.cache.keys(), frame, maxDistanceFrames)
+    if (nearestFrame === undefined) return undefined
+    const entry = this.get(nearestFrame)
+    return entry ? { frame: nearestFrame, entry } : undefined
   }
 
   put(frame: number, source: ImageBitmap | OffscreenCanvas): GpuCacheEntry | null {
@@ -509,6 +538,16 @@ class RamPreviewCache {
     return bitmap
   }
 
+  getNearest(
+    frame: number,
+    maxDistanceFrames: number,
+  ): { frame: number; bitmap: ImageBitmap } | undefined {
+    const nearestFrame = findNearestFrame(this.cache.keys(), frame, maxDistanceFrames)
+    if (nearestFrame === undefined) return undefined
+    const bitmap = this.get(nearestFrame)
+    return bitmap ? { frame: nearestFrame, bitmap } : undefined
+  }
+
   put(frame: number, bitmap: ImageBitmap): void {
     if (this.cache.has(frame)) {
       bitmap.close()
@@ -598,6 +637,7 @@ export interface ScrubbingCacheStats {
   tier1Hits: number
   tier2Hits: number
   tier3Hits: number
+  nearestFrameHits: number
   misses: number
   tier3Bytes: number
   tier3BudgetBytes: number
@@ -669,6 +709,7 @@ export class ScrubbingCache {
   private _tier1Hits = 0
   private _tier2Hits = 0
   private _tier3Hits = 0
+  private _nearestFrameHits = 0
   private _misses = 0
   private ramGeneration = 0
   private disposed = false
@@ -829,6 +870,32 @@ export class ScrubbingCache {
   }
 
   /**
+   * Return the closest cached full composite inside a small temporal window.
+   * This is provisional only: callers must keep decoding the exact target.
+   */
+  getNearestFrame(
+    frame: number,
+    maxDistanceFrames: number,
+  ): { frame: number; source: ImageBitmap | OffscreenCanvas } | null {
+    const gpuResult = this.tier1.getNearest(frame, maxDistanceFrames)
+    if (gpuResult) {
+      const source = this.blitToCanvas(gpuResult.entry)
+      if (source) {
+        this._tier1Hits++
+        this._nearestFrameHits++
+        return { frame: gpuResult.frame, source }
+      }
+    }
+
+    const ramResult = this.tier3.getNearest(frame, maxDistanceFrames)
+    if (!ramResult) return null
+    this._tier3Hits++
+    this._nearestFrameHits++
+    this.tier1.put(ramResult.frame, ramResult.bitmap)
+    return { frame: ramResult.frame, source: ramResult.bitmap }
+  }
+
+  /**
    * Cache a fully composited frame into Tier 1 + Tier 3.
    * Call after renderFrame() completes.
    *
@@ -932,6 +999,7 @@ export class ScrubbingCache {
       tier1Hits: this._tier1Hits,
       tier2Hits: this._tier2Hits,
       tier3Hits: this._tier3Hits,
+      nearestFrameHits: this._nearestFrameHits,
       misses: this._misses,
       tier3Bytes: this.tier3.bytes,
       tier3BudgetBytes: this.tier3.budgetBytes,

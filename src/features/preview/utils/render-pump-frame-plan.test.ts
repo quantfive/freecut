@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vite-plus/test'
 import {
   isAtomicPreviewTarget,
   resolveActivePreviewPresentationTarget,
+  resolveActivePreviewPresentationTargetUpdate,
   resolveBackwardScrubFlags,
   resolveBackwardScrubFramePlan,
   resolveRenderPumpTargetFrame,
@@ -223,6 +224,14 @@ describe('render pump frame plan', () => {
     expect(
       shouldRecoverFailedActivePreseekSchedule({
         ...currentSchedule,
+        // The committed playhead can quantize one frame away from the hover
+        // target during pointer release; that must not suppress recovery.
+        currentTarget: 121,
+      }),
+    ).toBe(true)
+    expect(
+      shouldRecoverFailedActivePreseekSchedule({
+        ...currentSchedule,
         // Models an old promise settling after the replacement effect has set
         // the shared mounted ref back to true.
         effectDisposed: true,
@@ -294,6 +303,26 @@ describe('render pump frame plan', () => {
         forceFastScrubOverlay: true,
       }),
     ).toBe(125)
+  })
+
+  it('preserves a released seek gate across unrelated paused store updates', () => {
+    expect(
+      resolveActivePreviewPresentationTargetUpdate({
+        state: { currentFrame: 125, previewFrame: null, isPlaying: false },
+        prev: { currentFrame: 125, previewFrame: null, isPlaying: false },
+        settlingReleasedScrubFrame: null,
+        forceFastScrubOverlay: false,
+      }),
+    ).toBeUndefined()
+
+    expect(
+      resolveActivePreviewPresentationTargetUpdate({
+        state: { currentFrame: 126, previewFrame: null, isPlaying: false },
+        prev: { currentFrame: 125, previewFrame: null, isPlaying: false },
+        settlingReleasedScrubFrame: null,
+        forceFastScrubOverlay: false,
+      }),
+    ).toBeNull()
   })
 
   it('prefers preview frame over current frame', () => {

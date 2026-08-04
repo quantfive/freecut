@@ -125,6 +125,7 @@ export interface PreviewFrameCacheMetricsSample {
   tier1Hits: number
   tier2Hits: number
   tier3Hits: number
+  nearestFrameHits: number
   misses: number
 }
 

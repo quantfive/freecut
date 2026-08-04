@@ -307,12 +307,13 @@ export async function renderVideoItem(
     rctx.getResolvedVideoSource?.(item, sourceTime, tier2ToleranceSeconds) ?? item.src
   const hasActiveDecodeFailure = () =>
     Boolean(
-      resolvedPreviewWorkerSource &&
-      rctx.hasActivePreviewDecodeFailure?.(
-        resolvedPreviewWorkerSource,
-        sourceTime,
-        tier2ToleranceSeconds,
-      ),
+      rctx.isActivePreviewFrameDecodeFailed?.(previewRootFrame) ||
+      (resolvedPreviewWorkerSource &&
+        rctx.hasActivePreviewDecodeFailure?.(
+          resolvedPreviewWorkerSource,
+          sourceTime,
+          tier2ToleranceSeconds,
+        )),
     )
   const holdPreviewFrontBuffer = () => {
     if (isPreviewMode) rctx.markActivePreviewFramePending?.()

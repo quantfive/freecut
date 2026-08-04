@@ -120,9 +120,35 @@ describe('TimelineMarkers ruler scrub cancellation', () => {
     fireEvent.mouseDown(ruler, { button: 0, clientX: 24 })
     expect(playhead).toHaveStyle({ transform: 'translate3d(23px, 0, 0)' })
 
-    fireEvent.mouseUp(document, { clientX: 24 })
+    fireEvent.mouseUp(document, { button: 0, clientX: 24 })
     expect(usePlaybackStore.getState().currentFrame).toBe(7)
     expect(playhead).toHaveStyle({ transform: 'translate3d(23px, 0, 0)' })
+  })
+
+  it('commits a fast ruler click before any document-level drag effect can mount', () => {
+    const { container } = render(
+      <div className="timeline-container">
+        <TimelineMarkers duration={10} width={1000} />
+      </div>,
+    )
+    const ruler = container.querySelector('[style*="cursor: ew-resize"]') as HTMLDivElement
+    ruler.getBoundingClientRect = () =>
+      ({
+        left: 0,
+        right: 1000,
+        top: 0,
+        bottom: 34,
+        width: 1000,
+        height: 34,
+      }) as DOMRect
+
+    fireEvent.mouseDown(ruler, { button: 0, clientX: 100 })
+    fireEvent.mouseUp(document, { button: 0, clientX: 100 })
+
+    expect(usePlaybackStore.getState().currentFrame).toBe(30)
+    expect(usePlaybackStore.getState().previewFrame).toBeNull()
+    expect(mainTimelineScrubActiveRef.current).toBe(false)
+    expect(timelineSkimmerScrubSignal.current).toBe(false)
   })
 
   it('keeps the skim target while moving from the ruler into timeline tracks', async () => {

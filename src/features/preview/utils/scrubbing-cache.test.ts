@@ -206,6 +206,20 @@ describe('ScrubbingCache GPU lifecycle', () => {
     expect(texture.destroy).toHaveBeenCalledOnce()
   })
 
+  it('returns the nearest GPU composite only inside the provisional window', () => {
+    const { device } = installMockWebGpu()
+    const cache = new ScrubbingCache(4)
+    const source = {} as ImageBitmap
+
+    cache.setGpuDevice(device, 64, 64)
+    cache.putGpuFrame(100, source)
+    cache.putGpuFrame(112, source)
+
+    expect(cache.getNearestFrame(110, 5)?.frame).toBe(112)
+    expect(cache.getNearestFrame(120, 5)).toBeNull()
+    expect(cache.getStats()).toMatchObject({ nearestFrameHits: 1, tier1Hits: 1 })
+  })
+
   it('drops differently sized RAM frames when render dimensions change', () => {
     const { device } = installMockWebGpu()
     const cache = new ScrubbingCache()

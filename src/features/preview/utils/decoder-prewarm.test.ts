@@ -12,6 +12,7 @@ import {
   hasActivePreviewDecodeFailure,
   isActivePreviewFrameCurrent,
   isActivePreviewFrameDecodeReady,
+  isActivePreviewFrameDecodeFailed,
   isActivePreviewSourceTarget,
   replaceActivePreviewSourceTargets,
   scheduleActivePreviewRetry,
@@ -521,6 +522,8 @@ describe('decoder prewarm', () => {
 
     await expect(pending).resolves.toBeNull()
     expect(isActivePreviewFrameCurrent(47)).toBe(true)
+    expect(isActivePreviewFrameDecodeFailed(47)).toBe(true)
+    expect(isActivePreviewFrameDecodeFailed(48)).toBe(false)
     expect(hasActivePreviewDecodeFailure('blob:failed-active', 5)).toBe(true)
     expect(onReady).toHaveBeenCalledWith('blob:failed-active', 5)
     unsubscribe()

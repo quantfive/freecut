@@ -74,6 +74,8 @@ export interface DecoderPrewarmMetricsSnapshot {
   activeLastInitMs: number
   activeLastDecodeMs: number
   activeLastFailure: string
+  activeTimelineFrame: number | null
+  activeFailedTimelineFrame: number | null
   fallbackRequests: number
   fallbackCacheHits: number
   fallbackBitmaps: number
@@ -133,6 +135,7 @@ export interface ActivePreviewPreseekRequest {
 type ActivePreviewRequestState = {
   src: string
   timestamp: number
+  timelineFrame: number | null
   lookaheadTimestamps: number[]
   promise: Promise<ImageBitmap | null>
   resolve: (bitmap: ImageBitmap | null) => void
@@ -177,6 +180,8 @@ const decoderPrewarmMetrics: DecoderPrewarmMetricsSnapshot = {
   activeLastInitMs: 0,
   activeLastDecodeMs: 0,
   activeLastFailure: '',
+  activeTimelineFrame: null,
+  activeFailedTimelineFrame: null,
   fallbackRequests: 0,
   fallbackCacheHits: 0,
   fallbackBitmaps: 0,
@@ -196,6 +201,7 @@ const activePreviewInflightById = new Map<string, ActivePreviewInflightState>()
 const queuedActivePreviewRequestsBySrc = new Map<string, ActivePreviewRequestState>()
 let activePreviewScrubSession = false
 let latestActivePreviewTimelineFrame: number | null = null
+let latestFailedActivePreviewTimelineFrame: number | null = null
 let activePreviewRequestVersion = 0
 let activePreviewSettleTimer: ReturnType<typeof setTimeout> | null = null
 const latestActivePreviewTimestampsBySrc = new Map<string, number[]>()
@@ -473,6 +479,23 @@ function replaceDuplicateCachedBitmap(entries: CachedBitmapEntry[], timestamp: n
   duplicate?.bitmap.close()
 }
 
+function clearActivePreviewDecodeFailure(src: string): void {
+  activePreviewDecodeFailuresBySrc.delete(src)
+  if (activePreviewDecodeFailuresBySrc.size === 0) {
+    latestFailedActivePreviewTimelineFrame = null
+  }
+}
+
+function clearMatchingActivePreviewDecodeFailure(src: string, timestamp: number): void {
+  const failedTimestamp = activePreviewDecodeFailuresBySrc.get(src)
+  if (
+    failedTimestamp !== undefined &&
+    Math.abs(failedTimestamp - timestamp) <= PRESEEK_REQUEST_REUSE_TOLERANCE_SECONDS
+  ) {
+    clearActivePreviewDecodeFailure(src)
+  }
+}
+
 function cachePredecodedBitmap(
   src: string,
   timestamp: number,
@@ -493,13 +516,7 @@ function cachePredecodedBitmap(
   trimCachedBitmapEntries(entries, capacity)
   bitmapCache.delete(src)
   bitmapCache.set(src, entries)
-  const failedTimestamp = activePreviewDecodeFailuresBySrc.get(src)
-  if (
-    failedTimestamp !== undefined &&
-    Math.abs(failedTimestamp - timestamp) <= PRESEEK_REQUEST_REUSE_TOLERANCE_SECONDS
-  ) {
-    activePreviewDecodeFailuresBySrc.delete(src)
-  }
+  clearMatchingActivePreviewDecodeFailure(src, timestamp)
   const retryTimer = activePreviewRetryTimerBySrc.get(src)
   if (retryTimer !== undefined) clearTimeout(retryTimer)
   activePreviewRetryTimerBySrc.delete(src)
@@ -732,6 +749,7 @@ function createActivePreviewRequestState({
   const state: ActivePreviewRequestState = {
     src,
     timestamp,
+    timelineFrame: latestActivePreviewTimelineFrame,
     lookaheadTimestamps: [...new Set(lookaheadTimestamps)]
       .filter(
         (candidate) =>
@@ -759,13 +777,16 @@ function settleActivePreviewRequest(
   request.resolve(bitmap)
 }
 
-function recordFailedActivePreviewTarget(src: string, timestamp: number): void {
-  if (!activePreviewScrubSession) return
-  const activeTargets = latestActivePreviewTimestampsBySrc.get(src)
+function recordFailedActivePreviewTarget(
+  src: string,
+  timestamp: number,
+  timelineFrame: number | null,
+): void {
   if (
-    !activeTargets?.some(
-      (target) => Math.abs(target - timestamp) <= PRESEEK_REQUEST_REUSE_TOLERANCE_SECONDS,
-    )
+    !activePreviewScrubSession ||
+    timelineFrame === null ||
+    latestActivePreviewTimelineFrame === null ||
+    Math.abs(latestActivePreviewTimelineFrame - timelineFrame) > 1
   ) {
     return
   }
@@ -775,6 +796,7 @@ function recordFailedActivePreviewTarget(src: string, timestamp: number): void {
   // DOM video/main-thread extractor path. Keep the session active until that
   // exact fallback actually reaches the front buffer.
   activePreviewDecodeFailuresBySrc.set(src, timestamp)
+  latestFailedActivePreviewTimelineFrame = latestActivePreviewTimelineFrame
   for (const listener of activePreviewReadyListeners) listener(src, timestamp)
 }
 
@@ -892,7 +914,7 @@ function startActivePreviewRequest(request: ActivePreviewRequestState): void {
     settleActivePreviewRequest(inflight, resolvedBitmap)
 
     if (!wasCancelled && !resolvedBitmap) {
-      recordFailedActivePreviewTarget(inflight.src, inflight.timestamp)
+      recordFailedActivePreviewTarget(inflight.src, inflight.timestamp, inflight.timelineFrame)
     }
 
     if (resolvedBitmap && inflight.lookaheadTimestamps.length > 0) {
@@ -987,7 +1009,7 @@ export function activePreviewPreseek(
 ): Promise<ImageBitmap | null> {
   decoderPrewarmMetrics.activeRequests += 1
   activePreviewRequestVersion += 1
-  activePreviewDecodeFailuresBySrc.delete(request.src)
+  clearActivePreviewDecodeFailure(request.src)
   const retryTimer = activePreviewRetryTimerBySrc.get(request.src)
   if (retryTimer !== undefined) clearTimeout(retryTimer)
   activePreviewRetryTimerBySrc.delete(request.src)
@@ -1054,6 +1076,9 @@ export function activePreviewPreseek(
 }
 
 export function setActivePreviewRenderTarget(frame: number | null): void {
+  if (frame === null || frame !== latestActivePreviewTimelineFrame) {
+    latestFailedActivePreviewTimelineFrame = null
+  }
   latestActivePreviewTimelineFrame = frame
   activePreviewScrubSession = frame !== null
   if (frame === null) {
@@ -1084,6 +1109,23 @@ export function hasActivePreviewDecodeFailure(
 ): boolean {
   const failedTimestamp = activePreviewDecodeFailuresBySrc.get(src)
   return failedTimestamp !== undefined && Math.abs(failedTimestamp - timestamp) <= toleranceSeconds
+}
+
+export function isActivePreviewFrameDecodeFailed(frame: number): boolean {
+  if (!activePreviewScrubSession || latestActivePreviewTimelineFrame !== frame) return false
+  if (latestFailedActivePreviewTimelineFrame === frame) return true
+  for (const [src, targets] of latestActivePreviewTimestampsBySrc) {
+    const failedTimestamp = activePreviewDecodeFailuresBySrc.get(src)
+    if (failedTimestamp === undefined) continue
+    if (
+      targets.some(
+        (target) => Math.abs(target - failedTimestamp) <= PRESEEK_REQUEST_REUSE_TOLERANCE_SECONDS,
+      )
+    ) {
+      return true
+    }
+  }
+  return false
 }
 
 export function settleActivePreviewRenderTarget(
@@ -1624,6 +1666,7 @@ export function disposePrewarmWorker(): void {
   activePreviewWorker = null
   activePreviewGeneration = 0
   activePreviewDecodeFailuresBySrc.clear()
+  latestFailedActivePreviewTimelineFrame = null
   for (const retryTimer of activePreviewRetryTimerBySrc.values()) clearTimeout(retryTimer)
   activePreviewRetryTimerBySrc.clear()
   activePreviewRequestVersion = 0
@@ -1657,5 +1700,9 @@ export function disposePrewarmWorker(): void {
 }
 
 export function getDecoderPrewarmMetricsSnapshot(): DecoderPrewarmMetricsSnapshot {
-  return { ...decoderPrewarmMetrics }
+  return {
+    ...decoderPrewarmMetrics,
+    activeTimelineFrame: latestActivePreviewTimelineFrame,
+    activeFailedTimelineFrame: latestFailedActivePreviewTimelineFrame,
+  }
 }

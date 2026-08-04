@@ -538,6 +538,32 @@ export function collectPriorityMediaItemIdsForFrames({
   }
 }
 
+export function getFrameVisualCacheSignature({
+  tracks,
+  frame,
+  fps,
+  compositionById,
+}: {
+  tracks: TimelineTrack[]
+  frame: number
+  fps: number
+  compositionById: Record<string, SubComposition | undefined>
+}): string {
+  const { visibleTracks } = resolveTrackRenderState(tracks)
+  const rootItemIds = visibleTracks
+    .flatMap((track) => track.items ?? [])
+    .filter((item) => isVisibleAtFrame(item, frame, null))
+    .map((item) => item.id)
+    .sort()
+  const media = collectPriorityMediaItemIds({ tracks, frame, fps, compositionById })
+  return [
+    rootItemIds.join(','),
+    [...media.video].sort().join(','),
+    [...media.image].sort().join(','),
+    [...media.lottie].sort().join(','),
+  ].join('|')
+}
+
 export function collectPriorityNestedVideoItemIds(
   options: Parameters<typeof collectPriorityMediaItemIds>[0],
 ): string[] {
@@ -599,6 +625,8 @@ type ScrubPerfGlobal = {
   __SCRUB_PERF__?: boolean
   __scrubPerf?: ScrubPerfSample[]
 }
+
+const PROVISIONAL_SCRUB_CACHE_WINDOW_SECONDS = 3
 
 function scrubPerfStart(): number {
   return (globalThis as ScrubPerfGlobal).__SCRUB_PERF__ ||
@@ -755,6 +783,7 @@ export async function createCompositionRenderer(
   let lastRenderAborted = false
   let activePreviewFramePending = false
   let activePreviewFallbackUsed = false
+  let lastProvisionalCacheTarget: number | null = null
   let nonBlockingVideoFrameToleranceSeconds: number | undefined
   let liveDomVideoPlaybackActive = Boolean(domVideoElementProvider)
   let liveRenderedPlaybackActive = false
@@ -1502,6 +1531,7 @@ export async function createCompositionRenderer(
         hasActivePreviewDecodeFailure,
         scheduleActivePreviewRetry,
         isActivePreviewFrameCurrent,
+        isActivePreviewFrameDecodeFailed,
         isActivePreviewFrameDecodeReady,
         isActivePreviewSourceTarget,
         isActivePreviewFrameSuperseded,
@@ -1514,6 +1544,7 @@ export async function createCompositionRenderer(
         itemRenderContext.getCachedActivePreviewFallbackBitmap =
           getCachedActivePreviewFallbackBitmap
         itemRenderContext.isActivePreviewFrameCurrent = isActivePreviewFrameCurrent
+        itemRenderContext.isActivePreviewFrameDecodeFailed = isActivePreviewFrameDecodeFailed
         itemRenderContext.isActivePreviewFrameDecodeReady = isActivePreviewFrameDecodeReady
         itemRenderContext.hasActivePreviewDecodeFailure = hasActivePreviewDecodeFailure
         itemRenderContext.scheduleActivePreviewRetry = scheduleActivePreviewRetry
@@ -2107,10 +2138,43 @@ export async function createCompositionRenderer(
       if (scrubbingCache && scrubbingFrameCacheActive) {
         const cached = scrubbingCache.getFrame(frame)
         if (cached) {
+          lastProvisionalCacheTarget = null
           ctx.clearRect(0, 0, canvas.width, canvas.height)
           ctx.drawImage(cached, 0, 0)
           recordScrubPerf(frame, 'cache-hit', scrubPerfStartMs)
           return
+        }
+
+        const isActiveScrubTarget = itemRenderContext.isActivePreviewFrameCurrent?.(frame) === true
+        const exactDecodeReady = itemRenderContext.isActivePreviewFrameDecodeReady?.(frame) === true
+        if (isActiveScrubTarget && !exactDecodeReady && lastProvisionalCacheTarget !== frame) {
+          const provisional = scrubbingCache.getNearestFrame(
+            frame,
+            Math.max(1, Math.round(fps * PROVISIONAL_SCRUB_CACHE_WINDOW_SECONDS)),
+          )
+          if (provisional) {
+            const compositionById = useCompositionsStore.getState().compositionById
+            const targetSignature = getFrameVisualCacheSignature({
+              tracks,
+              frame,
+              fps,
+              compositionById,
+            })
+            const provisionalSignature = getFrameVisualCacheSignature({
+              tracks,
+              frame: provisional.frame,
+              fps,
+              compositionById,
+            })
+            if (provisionalSignature === targetSignature) {
+              lastProvisionalCacheTarget = frame
+              activePreviewFallbackUsed = true
+              ctx.clearRect(0, 0, canvas.width, canvas.height)
+              ctx.drawImage(provisional.source, 0, 0)
+              recordScrubPerf(frame, 'cache-hit', scrubPerfStartMs)
+              return
+            }
+          }
         }
       }
 
@@ -2439,6 +2503,7 @@ export async function createCompositionRenderer(
         }
 
         cacheRenderedFrame(frame)
+        if (!activePreviewFallbackUsed) lastProvisionalCacheTarget = null
         recordScrubPerf(frame, 'direct', scrubPerfStartMs)
         return
       }
@@ -2642,6 +2707,7 @@ export async function createCompositionRenderer(
       // Release content canvas back to pool
       canvasPool.release(contentCanvas)
       cacheRenderedFrame(frame)
+      if (!activePreviewFallbackUsed) lastProvisionalCacheTarget = null
       if (scrubPerfStartMs >= 0) {
         const scrubPerfEndMs = performance.now()
         recordScrubPerf(frame, 'full', scrubPerfStartMs, {

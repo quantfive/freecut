@@ -6,6 +6,7 @@ import {
   collectPriorityMediaItemIds,
   collectPriorityMediaItemIdsForFrames,
   collectPriorityNestedVideoItemIds,
+  getFrameVisualCacheSignature,
   resolveCompositionRendererExecutionPolicy,
   resolveRenderedFrameCacheMode,
   resolveWorkerPredecodeWaitMs,
@@ -16,6 +17,60 @@ import {
   selectPreviewVideoSource,
   subCompositionRenderDataHasGpuEffects,
 } from './client-render-engine'
+
+describe('provisional composite cache identity', () => {
+  const makeTrack = (items: TimelineItem[]) => ({
+    id: 'track',
+    name: 'Track',
+    order: 0,
+    height: 60,
+    locked: false,
+    visible: true,
+    muted: false,
+    solo: false,
+    items,
+  })
+
+  it('keeps nearby frames in the same visible clip eligible', () => {
+    const video = {
+      id: 'video-a',
+      type: 'video',
+      trackId: 'track',
+      from: 0,
+      durationInFrames: 60,
+    } as TimelineItem
+    const tracks = [makeTrack([video])]
+
+    expect(getFrameVisualCacheSignature({ tracks, frame: 10, fps: 30, compositionById: {} })).toBe(
+      getFrameVisualCacheSignature({ tracks, frame: 25, fps: 30, compositionById: {} }),
+    )
+  })
+
+  it('rejects a nearby composite from the other side of an edit', () => {
+    const tracks = [
+      makeTrack([
+        {
+          id: 'video-a',
+          type: 'video',
+          trackId: 'track',
+          from: 0,
+          durationInFrames: 30,
+        } as TimelineItem,
+        {
+          id: 'video-b',
+          type: 'video',
+          trackId: 'track',
+          from: 30,
+          durationInFrames: 30,
+        } as TimelineItem,
+      ]),
+    ]
+
+    expect(
+      getFrameVisualCacheSignature({ tracks, frame: 29, fps: 30, compositionById: {} }),
+    ).not.toBe(getFrameVisualCacheSignature({ tracks, frame: 30, fps: 30, compositionById: {} }))
+  })
+})
 
 describe('nested transcript captions', () => {
   it('adds a virtual transcript track when a clip inside a compound has captions enabled', () => {

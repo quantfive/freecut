@@ -484,6 +484,7 @@ export const TimelineMarkers = memo(function TimelineMarkers({
   const scrollContainerRef = useRef<HTMLDivElement | null>(null)
   const scrubMouseClientXRef = useRef<number>(0)
   const scrubRAFIdRef = useRef<number | null>(null)
+  const scrubGestureCleanupRef = useRef<(() => void) | null>(null)
   const scrubAnimationTimeRef = useRef<number | null>(null)
   const scrubPlayheadElementsRef = useRef<HTMLElement[]>([])
   const skimmerScrubOwnerRef = useRef({})
@@ -853,7 +854,7 @@ export const TimelineMarkers = memo(function TimelineMarkers({
 
   const handleRulerMouseMove = useCallback(
     (e: React.MouseEvent) => {
-      if (isDragging || isRangeDragging) return
+      if (isScrubActiveRef.current || isDragging || isRangeDragging) return
       // The ruler owns this hover. Prevent TimelineContent's bubbling handler
       // from scheduling a second publication for the same pointer sample.
       e.stopPropagation()
@@ -987,23 +988,44 @@ export const TimelineMarkers = memo(function TimelineMarkers({
   )
 
   // Scrubbing handlers
+  const finishMouseScrub = useCallback(() => {
+    if (!isScrubActiveRef.current) return
+
+    const skimmerScrubOwner = skimmerScrubOwnerRef.current
+    scrubGestureCleanupRef.current?.()
+    scrubGestureCleanupRef.current = null
+    isScrubActiveRef.current = false
+    if (scrubRAFIdRef.current !== null) {
+      cancelAnimationFrame(scrubRAFIdRef.current)
+      scrubRAFIdRef.current = null
+    }
+    const finalFrame = getFrameFromClientX(scrubMouseClientXRef.current)
+    setScrubFrameRef.current(finalFrame)
+    const finalTimelineX = Math.round(frameToPixelsNow(finalFrame))
+    for (const element of scrubPlayheadElementsRef.current) {
+      element.style.transform = `translate3d(${finalTimelineX}px, 0, 0)`
+    }
+    scrubAnimationTimeRef.current = null
+    scrubPlayheadElementsRef.current = []
+    setIsDragging(false)
+    setPreviewFrameRef.current(null)
+    // Clear after the preview notification so linked playheads retain the
+    // final frame while their slower React props catch up.
+    mainTimelineScrubActiveRef.current = false
+    endTimelineSkimmerScrub(skimmerScrubOwner)
+  }, [getFrameFromClientX])
+
   const handleMouseDown = useCallback(
-    (e: React.MouseEvent) => {
+    (e: React.MouseEvent<HTMLDivElement>) => {
       e.preventDefault()
-      e.stopPropagation() // Prevent click from bubbling to container and clearing selection
+      e.stopPropagation()
       if (!containerRef.current) return
-
-      // Seeking is disabled during a voiceover take — moving the playhead
-      // without moving the mic audio would desync the recording irreparably.
       if (isMicRecordingActive(useMicRecordingStore.getState().status)) return
+      finishMouseScrub()
 
-      // Clear marker selection when clicking on ruler (only if a marker is selected)
       const { selectedMarkerId } = useSelectionStore.getState()
-      if (selectedMarkerId) {
-        selectMarker(null)
-      }
+      if (selectedMarkerId) selectMarker(null)
 
-      // Cache scroll container for edge-scrolling
       scrollContainerRef.current = containerRef.current.closest(
         '.timeline-container',
       ) as HTMLDivElement | null
@@ -1012,17 +1034,33 @@ export const TimelineMarkers = memo(function TimelineMarkers({
             scrollContainerRef.current.querySelectorAll<HTMLElement>('[data-timeline-playhead]'),
           )
         : []
-
-      // Initialize unified scrub state
       scrubMouseClientXRef.current = e.clientX
       scrubAnimationTimeRef.current = null
       isScrubActiveRef.current = true
       mainTimelineScrubActiveRef.current = true
       beginTimelineSkimmerScrub(skimmerScrubOwnerRef.current)
 
-      pauseRef.current()
+      const handleDocumentMouseMove = (event: MouseEvent) => {
+        scrubMouseClientXRef.current = event.clientX
+      }
+      const handleDocumentMouseUp = (event: MouseEvent) => {
+        scrubMouseClientXRef.current = event.clientX
+        finishMouseScrub()
+      }
+      const handleWindowBlur = () => finishMouseScrub()
+      const originalCursor = document.body.style.cursor
+      document.body.style.cursor = 'ew-resize'
+      document.addEventListener('mousemove', handleDocumentMouseMove)
+      document.addEventListener('mouseup', handleDocumentMouseUp)
+      window.addEventListener('blur', handleWindowBlur)
+      scrubGestureCleanupRef.current = () => {
+        document.removeEventListener('mousemove', handleDocumentMouseMove)
+        document.removeEventListener('mouseup', handleDocumentMouseUp)
+        window.removeEventListener('blur', handleWindowBlur)
+        document.body.style.cursor = originalCursor
+      }
 
-      // Immediate frame update on click using the ruler's time-axis origin.
+      pauseRef.current()
       const x = e.clientX - containerRef.current.getBoundingClientRect().left
       const maxFrame = Math.floor(durationRef.current * fpsRef.current)
       const frame = Math.min(maxFrame, Math.max(0, Math.round(pixelsToFrameRef.current(x))))
@@ -1039,73 +1077,15 @@ export const TimelineMarkers = memo(function TimelineMarkers({
         frame,
         nowMs: performance.now(),
       })
-
       setIsDragging(true)
-
-      // Start unified RAF loop
       if (scrubRAFIdRef.current === null) {
         scrubRAFIdRef.current = requestAnimationFrame(runUnifiedScrubLoop)
       }
     },
-    [selectMarker, runUnifiedScrubLoop],
+    [finishMouseScrub, runUnifiedScrubLoop, selectMarker],
   )
 
-  useEffect(() => {
-    if (!isDragging) return
-    const skimmerScrubOwner = skimmerScrubOwnerRef.current
-
-    const originalCursor = document.body.style.cursor
-    document.body.style.cursor = 'ew-resize'
-
-    const handleMouseMove = (e: MouseEvent) => {
-      // Just store position - the unified RAF loop handles everything else
-      scrubMouseClientXRef.current = e.clientX
-    }
-
-    const handleMouseUp = () => {
-      // Stop the unified scrub loop
-      isScrubActiveRef.current = false
-      if (scrubRAFIdRef.current !== null) {
-        cancelAnimationFrame(scrubRAFIdRef.current)
-        scrubRAFIdRef.current = null
-      }
-      const finalFrame = getFrameFromClientX(scrubMouseClientXRef.current)
-      setScrubFrameRef.current(finalFrame)
-      const finalTimelineX = Math.round(frameToPixelsNow(finalFrame))
-      for (const element of scrubPlayheadElementsRef.current) {
-        element.style.transform = `translate3d(${finalTimelineX}px, 0, 0)`
-      }
-      scrubAnimationTimeRef.current = null
-      scrubPlayheadElementsRef.current = []
-      setIsDragging(false)
-      setPreviewFrameRef.current(null)
-      // Clear after the preview notification so linked playheads retain the
-      // final frame while their slower React props catch up.
-      mainTimelineScrubActiveRef.current = false
-      endTimelineSkimmerScrub(skimmerScrubOwner)
-    }
-
-    document.addEventListener('mousemove', handleMouseMove)
-    document.addEventListener('mouseup', handleMouseUp)
-    window.addEventListener('blur', handleMouseUp)
-
-    return () => {
-      document.removeEventListener('mousemove', handleMouseMove)
-      document.removeEventListener('mouseup', handleMouseUp)
-      window.removeEventListener('blur', handleMouseUp)
-      document.body.style.cursor = originalCursor
-      // Ensure cleanup
-      isScrubActiveRef.current = false
-      mainTimelineScrubActiveRef.current = false
-      endTimelineSkimmerScrub(skimmerScrubOwner)
-      if (scrubRAFIdRef.current !== null) {
-        cancelAnimationFrame(scrubRAFIdRef.current)
-        scrubRAFIdRef.current = null
-      }
-      scrubAnimationTimeRef.current = null
-      scrubPlayheadElementsRef.current = []
-    }
-  }, [getFrameFromClientX, isDragging])
+  useEffect(() => () => finishMouseScrub(), [finishMouseScrub])
 
   // Tear down an in-flight range drag if the component unmounts mid-gesture.
   useEffect(() => () => rangeDragCleanupRef.current?.(), [])

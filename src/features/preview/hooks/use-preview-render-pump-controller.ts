@@ -45,6 +45,7 @@ import {
 import {
   isAtomicPreviewTarget,
   resolveActivePreviewPresentationTarget,
+  resolveActivePreviewPresentationTargetUpdate,
   resolveBackwardScrubFlags,
   resolveBackwardScrubFramePlan,
   resolveReleasedScrubSnapshotGuardUntilMs,
@@ -1732,12 +1733,11 @@ export function usePreviewRenderPump({
         }
 
         recoveredFailedSchedule = true
-        // A latest-target worker failure/cancellation has no ready
-        // notification. Leaving the active gate pinned would make every retry
-        // abort forever until the pointer requested a different frame. Unpin
-        // this exact schedule and retry through the normal DOM/MediaBunny
-        // renderer while preserving the visible front buffer.
-        setActivePreviewRenderTarget(null)
+        // Keep the latest target active while retrying. The renderer treats a
+        // recorded worker failure as permission to use the authoritative DOM/
+        // main-thread path, and the active target keeps its DOM seek wait alive.
+        // Clearing it here used to cancel that wait at the exact moment the
+        // worker failed, losing the recovery render entirely.
         if (scrubOffscreenRenderedFrameRef.current === targetFrame) {
           scrubOffscreenRenderedFrameRef.current = null
         }
@@ -2339,14 +2339,22 @@ export function usePreviewRenderPump({
       } else if (settlingReleasedScrubFrame !== null) {
         clearReleasedScrubSnapshotGuard()
       }
-      const activePreviewPresentationTarget = resolveActivePreviewPresentationTarget({
+      const activePreviewPresentationParams = {
         state,
         prev,
         settlingReleasedScrubFrame,
         forceFastScrubOverlay:
           forceFastScrubOverlay || renderedPlaybackActive || renderedPlaybackWasActive,
-      })
-      setActivePreviewRenderTarget(activePreviewPresentationTarget)
+      }
+      const activePreviewPresentationTarget = resolveActivePreviewPresentationTarget(
+        activePreviewPresentationParams,
+      )
+      const activePreviewPresentationTargetUpdate = resolveActivePreviewPresentationTargetUpdate(
+        activePreviewPresentationParams,
+      )
+      if (activePreviewPresentationTargetUpdate !== undefined) {
+        setActivePreviewRenderTarget(activePreviewPresentationTargetUpdate)
+      }
       if (!renderedPlaybackActive && shouldPreferPlayerForPreview(state.previewFrame)) {
         resetScrubLoopState()
         hideAllOverlays()
