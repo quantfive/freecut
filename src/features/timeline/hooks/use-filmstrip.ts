@@ -5,6 +5,7 @@ import {
   PREVIEW_IMMEDIATE_IDLE_TIMEOUT_MS,
   schedulePreviewWork,
 } from './preview-work-budget'
+import { usePlaybackStore } from '@/shared/state/playback'
 
 export type { FilmstripFrame }
 
@@ -57,6 +58,7 @@ export function useFilmstrip({
   targetFrameCount,
   targetFrameIndices,
 }: UseFilmstripOptions): UseFilmstripResult {
+  const isPlaying = usePlaybackStore((state) => state.isPlaying)
   // Initialize from cache to avoid flash on remount
   const [filmstrip, setFilmstrip] = useState<Filmstrip | null>(() => {
     return filmstripCache.getFromCacheSync(mediaId)
@@ -181,7 +183,7 @@ export function useFilmstrip({
 
   // Once a clip leaves the active workset, stop spending background decode time on it.
   useEffect(() => {
-    if (enabled && blobUrl && duration > 0 && isVisible) {
+    if (enabled && blobUrl && duration > 0 && isVisible && !isPlaying) {
       return
     }
 
@@ -192,11 +194,11 @@ export function useFilmstrip({
     isGeneratingRef.current = false
     hasPendingStartRef.current = false
     setIsLoading(false)
-  }, [mediaId, enabled, blobUrl, duration, isVisible])
+  }, [mediaId, enabled, blobUrl, duration, isVisible, isPlaying])
 
   // Load filmstrip when visible
   useEffect(() => {
-    if (!enabled || !blobUrl || !duration || duration <= 0) {
+    if (!enabled || !blobUrl || !duration || duration <= 0 || isPlaying) {
       return
     }
 
@@ -289,6 +291,7 @@ export function useFilmstrip({
     blobUrl,
     duration,
     isVisible,
+    isPlaying,
     enabled,
     filmstrip?.frames?.length,
     filmstrip?.isComplete,

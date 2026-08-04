@@ -430,6 +430,74 @@ describe('renderVideoItem', () => {
     expect(markActivePreviewFramePending).toHaveBeenCalledOnce()
   })
 
+  it('waits for the original 4K frame on a committed wide seek', async () => {
+    const listeners = new Map<string, () => void>()
+    const seekingVideo = {
+      readyState: 1,
+      videoWidth: 4000,
+      videoHeight: 2250,
+      currentTime: 0,
+      dataset: {},
+      addEventListener: vi.fn((name: string, callback: () => void) => listeners.set(name, callback)),
+      removeEventListener: vi.fn((name: string) => listeners.delete(name)),
+    } as unknown as HTMLVideoElement
+    const ctx = createCanvasContext()
+    const renderContext = createRenderContext({
+      domVideoElementProvider: vi.fn(() => seekingVideo),
+      workerPredecodeWaitMs: 900,
+    })
+
+    const render = renderVideoItem(ctx, item, transform, 12, renderContext)
+    await Promise.resolve()
+    Object.assign(seekingVideo, { readyState: 4, currentTime: 0.4 })
+    listeners.get('loadeddata')?.()
+
+    await expect(render).resolves.toBe(true)
+    expect(ctx.drawImage).toHaveBeenCalledWith(
+      seekingVideo,
+      expect.any(Number),
+      expect.any(Number),
+      expect.any(Number),
+      expect.any(Number),
+    )
+  })
+
+  it('presents the latest ready DOM frame without blocking live canvas playback on drift', async () => {
+    const decodedVideo = {
+      readyState: 4,
+      videoWidth: 4000,
+      videoHeight: 2250,
+      currentTime: 0,
+      dataset: {},
+    } as HTMLVideoElement
+    const extractor = {
+      drawFrame: vi.fn(async () => true),
+      drawFrameWithCapture: vi.fn(),
+      getLastFailureKind: vi.fn(() => 'none' as const),
+      getDimensions: vi.fn(() => ({ width: 4000, height: 2250 })),
+      getDuration: vi.fn(() => 30),
+    }
+    const ctx = createCanvasContext()
+    const renderContext = createRenderContext({
+      liveRenderedPlaybackActive: true,
+      domVideoElementProvider: vi.fn(() => decodedVideo),
+      videoExtractors: new Map([[item.id, extractor]]),
+      useMediabunny: new Set([item.id]),
+      isActivePreviewFrameCurrent: vi.fn(() => true),
+    } as unknown as Partial<ItemRenderContext>)
+
+    await expect(renderVideoItem(ctx, item, transform, 12, renderContext)).resolves.toBe(true)
+
+    expect(ctx.drawImage).toHaveBeenCalledWith(
+      decodedVideo,
+      expect.any(Number),
+      expect.any(Number),
+      expect.any(Number),
+      expect.any(Number),
+    )
+    expect(extractor.drawFrame).not.toHaveBeenCalled()
+  })
+
   it('prefers a nearby worker frame over a nested DOM seek during reverse delivery', async () => {
     const nearbyWorkerBitmap = { width: 480, height: 270 } as ImageBitmap
     const staleDomVideo = {

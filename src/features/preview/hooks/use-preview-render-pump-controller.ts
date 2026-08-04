@@ -937,6 +937,7 @@ export function usePreviewRenderPump({
           // the correct frame — reading from them avoids mediabunny decode entirely.
           if ('setDomVideoElementProvider' in renderer) {
             const playbackNow = usePlaybackStore.getState()
+            renderer.setLiveRenderedPlaybackActive?.(playbackNow.isPlaying)
             renderer.setNonBlockingVideoFrameTolerance?.(
               playbackNow.isPlaying && playbackNow.playbackRate < 0 ? 0.5 : undefined,
             )

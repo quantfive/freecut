@@ -114,6 +114,24 @@ describe('planLayoutVideoSync', () => {
       shouldMarkInitialSyncComplete: true,
     })
   })
+
+  it('does not discard an already decoded initial frame with a redundant seek', () => {
+    expect(
+      planLayoutVideoSync({
+        isPremounted: false,
+        isTransitionHeld: false,
+        canSeek: true,
+        currentTime: 2,
+        targetTime: 2,
+        isPlaying: true,
+        needsInitialSync: true,
+      }),
+    ).toEqual({
+      shouldPause: false,
+      seekTo: null,
+      shouldMarkInitialSyncComplete: true,
+    })
+  })
 })
 
 describe('planPlayingVideoInitialSync', () => {

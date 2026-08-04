@@ -102,6 +102,8 @@ export interface ItemRenderContext {
   renderMode: 'export' | 'preview'
   renderItem: RenderItemDelegate
   scrubbingCache?: ScrubbingCache | null
+  /** Live canvas presentation must not deep-copy decoded frames into scrub caches. */
+  liveRenderedPlaybackActive?: boolean
   /** Skip the expensive full-resolution per-video ImageBitmap copy on isolated seeks. */
   captureDecodedVideoFrames?: boolean
   /** Maximum wait for an existing worker decode; undefined uses the short opportunistic wait. */

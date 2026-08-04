@@ -55,14 +55,22 @@ describe('shouldEnableHtmlInCanvasPlayback', () => {
     htmlInCanvasSupported: true,
   }
 
-  it('enables canvas-owned playback only for supported DOM-text previews', () => {
+  it('enables canvas-owned playback for supported non-comparison previews', () => {
     expect(shouldEnableHtmlInCanvasPlayback(eligible)).toBe(true)
-    expect(shouldEnableHtmlInCanvasPlayback({ ...eligible, domTextOverlayEnabled: false })).toBe(
-      false,
-    )
+    expect(shouldEnableHtmlInCanvasPlayback({ ...eligible, domTextOverlayEnabled: false })).toBe(true)
     expect(
       shouldEnableHtmlInCanvasPlayback({ ...eligible, htmlInCanvasSupported: false }),
-    ).toBe(false)
+    ).toBe(true)
     expect(shouldEnableHtmlInCanvasPlayback({ ...eligible, comparisonEnabled: true })).toBe(false)
+  })
+
+  it('keeps non-text scenes canvas-owned when the experimental DOM paint API is absent', () => {
+    expect(
+      shouldEnableHtmlInCanvasPlayback({
+        ...eligible,
+        domTextOverlayEnabled: false,
+        htmlInCanvasSupported: false,
+      }),
+    ).toBe(true)
   })
 })

@@ -16,16 +16,13 @@ interface HtmlInCanvasPlaybackEligibility {
 
 export function shouldEnableHtmlInCanvasPlayback({
   fastRendererEnabled,
-  domTextOverlayEnabled,
   comparisonEnabled,
-  htmlInCanvasSupported,
 }: HtmlInCanvasPlaybackEligibility): boolean {
-  return (
-    fastRendererEnabled &&
-    domTextOverlayEnabled &&
-    !comparisonEnabled &&
-    htmlInCanvasSupported
-  )
+  // Canvas-owned media/compositing does not require the experimental DOM paint
+  // API. Text uses that bridge when available and the existing DOM overlay as
+  // its compatibility fallback, so unsupported browsers can still use the
+  // low-copy canvas playback lane for the rest of the scene.
+  return fastRendererEnabled && !comparisonEnabled
 }
 
 /**

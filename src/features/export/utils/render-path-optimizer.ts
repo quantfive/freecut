@@ -18,8 +18,9 @@ export interface FrameRenderOptimization {
 export function shouldUseScrubbingFrameCache(
   hasScrubbingCache: boolean,
   liveDomVideoPlaybackActive: boolean,
+  liveRenderedPlaybackActive = false,
 ): boolean {
-  return hasScrubbingCache && !liveDomVideoPlaybackActive
+  return hasScrubbingCache && !liveDomVideoPlaybackActive && !liveRenderedPlaybackActive
 }
 
 export function resolveFrameRenderOptimization(

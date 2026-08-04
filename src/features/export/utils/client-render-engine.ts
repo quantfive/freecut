@@ -730,9 +730,11 @@ export async function createCompositionRenderer(
   let activePreviewFallbackUsed = false
   let nonBlockingVideoFrameToleranceSeconds: number | undefined
   let liveDomVideoPlaybackActive = Boolean(domVideoElementProvider)
+  let liveRenderedPlaybackActive = false
   let scrubbingFrameCacheActive = shouldUseScrubbingFrameCache(
     Boolean(scrubbingCache),
     liveDomVideoPlaybackActive,
+    liveRenderedPlaybackActive,
   )
   const cacheRenderedFrame = (frame: number) => {
     // Sequential playback already has the decoder's live frame available and
@@ -2685,6 +2687,17 @@ export async function createCompositionRenderer(
       scrubbingFrameCacheActive = shouldUseScrubbingFrameCache(
         Boolean(scrubbingCache),
         liveDomVideoPlaybackActive,
+        liveRenderedPlaybackActive,
+      )
+    },
+
+    setLiveRenderedPlaybackActive(active: boolean) {
+      liveRenderedPlaybackActive = active
+      itemRenderContext.liveRenderedPlaybackActive = active
+      scrubbingFrameCacheActive = shouldUseScrubbingFrameCache(
+        Boolean(scrubbingCache),
+        liveDomVideoPlaybackActive,
+        liveRenderedPlaybackActive,
       )
     },
 

@@ -136,7 +136,12 @@ export function planLayoutVideoSync(input: {
   if (input.needsInitialSync) {
     return {
       shouldPause: false,
-      seekTo: input.targetTime,
+      // Reassigning currentTime to the value the decoder already presents is
+      // not a no-op for large GOP sources. Chrome tears down the ready frame,
+      // drops readyState, and decodes forward from a keyframe again. That can
+      // turn Play into a multi-second stall for 4K VP8 even though the paused
+      // preview was already exact.
+      seekTo: Math.abs(input.currentTime - input.targetTime) > 0.016 ? input.targetTime : null,
       shouldMarkInitialSyncComplete: true,
     }
   }

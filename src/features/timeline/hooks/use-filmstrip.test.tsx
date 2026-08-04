@@ -27,6 +27,7 @@ vi.mock('./preview-work-budget', () => ({
 
 import { useFilmstrip } from './use-filmstrip'
 import { schedulePreviewWork } from './preview-work-budget'
+import { usePlaybackStore } from '@/shared/state/playback'
 
 function FilmstripProbe({ mediaId, isVisible }: { mediaId: string; isVisible: boolean }) {
   useFilmstrip({
@@ -49,6 +50,7 @@ describe('useFilmstrip', () => {
     filmstripCacheMocks.hasPendingExtraction.mockReturnValue(false)
     filmstripCacheMocks.getFilmstrip.mockReturnValue(new Promise<never>(() => {}))
     filmstripCacheMocks.loadFromDisk.mockReturnValue(Promise.resolve(null))
+    usePlaybackStore.setState({ isPlaying: false })
   })
 
   it('aborts extraction when the clip leaves the active workset', async () => {
@@ -116,6 +118,31 @@ describe('useFilmstrip', () => {
           ignoreAudioStartupHold: true,
         }),
       )
+    })
+  })
+
+  it('aborts active refinement during playback and resumes it after pause', async () => {
+    render(
+      createElement(FilmstripProbe, {
+        mediaId: 'media-1',
+        isVisible: true,
+      }),
+    )
+
+    await waitFor(() => {
+      expect(filmstripCacheMocks.getFilmstrip).toHaveBeenCalledTimes(1)
+    })
+
+    usePlaybackStore.setState({ isPlaying: true })
+
+    await waitFor(() => {
+      expect(filmstripCacheMocks.abort).toHaveBeenCalledWith('media-1')
+    })
+
+    usePlaybackStore.setState({ isPlaying: false })
+
+    await waitFor(() => {
+      expect(filmstripCacheMocks.getFilmstrip).toHaveBeenCalledTimes(2)
     })
   })
 })

@@ -424,15 +424,33 @@ export async function renderVideoItem(
     sourceTime,
     speed,
     isRenderingTransition: !!rctx.isRenderingTransition,
-    maxDriftSeconds: rctx.isActivePreviewFrameCurrent?.(previewRootFrame)
-      ? 0.5 / sourceFps
-      : undefined,
+    // During live canvas playback, presentation follows the latest browser-decoded
+    // frame without waiting for the decoder to catch the independent timeline
+    // clock. A strict half-frame freshness gate turns decode pressure into a 48ms
+    // wait on every render and slows the whole scene graph. Paused/scrub renders
+    // retain exact freshness and decoder fallbacks.
+    maxDriftSeconds: rctx.liveRenderedPlaybackActive
+      ? Number.POSITIVE_INFINITY
+      : rctx.isActivePreviewFrameCurrent?.(previewRootFrame)
+        ? 0.5 / sourceFps
+        : undefined,
   }
   let domVideoDecision = resolvePreviewDomVideoDrawDecision(domVideoDecisionOptions)
-  if (domVideoDecision.hasReadyDomVideo && !domVideoDecision.shouldDraw) {
-    if (nonBlockingToleranceSeconds === undefined) {
-      domVideoDecision = await waitForPreviewDomVideoDrawDecision(domVideoDecisionOptions)
-    } else {
+  if (domVideo && !domVideoDecision.shouldDraw) {
+    if (
+      nonBlockingToleranceSeconds === undefined &&
+      (domVideoDecision.hasReadyDomVideo || rctx.workerPredecodeWaitMs !== undefined)
+    ) {
+      // Large committed seeks already receive a 900ms worker-decode budget.
+      // Give the original DOM decoder the same event-driven window; 4K sources
+      // commonly need several hundred milliseconds to present the first frame.
+      // Sequential scrubs keep the default 48ms wait so stale targets cannot
+      // serialize rapid pointer input.
+      domVideoDecision = await waitForPreviewDomVideoDrawDecision(
+        domVideoDecisionOptions,
+        rctx.workerPredecodeWaitMs,
+      )
+    } else if (nonBlockingToleranceSeconds !== undefined) {
       // Reverse shuttle must not serialize the render pump behind a browser
       // seek. Mark a stale DOM frame unavailable so worker/proxy delivery can
       // continue immediately while the coalesced seek settles.
