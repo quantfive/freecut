@@ -121,7 +121,9 @@ function createDiagnostics(supported: boolean): MutableDiagnostics {
         paints,
         distinctFrames: distinctFrames.size,
         effectivePaintFps:
-          paints <= 1 || elapsedMs === 0 ? 0 : Number((((paints - 1) * 1000) / elapsedMs).toFixed(1)),
+          paints <= 1 || elapsedMs === 0
+            ? 0
+            : Number((((paints - 1) * 1000) / elapsedMs).toFixed(1)),
         p95PaintIntervalMs: Number(percentile(paintIntervals, 0.95).toFixed(3)),
         p95CompositeMs: Number(percentile(compositeTimes, 0.95).toFixed(3)),
         maxCompositeMs: Number(Math.max(0, ...compositeTimes).toFixed(3)),
@@ -143,6 +145,76 @@ function createDiagnostics(supported: boolean): MutableDiagnostics {
 
 const ignoreFrameChange = () => undefined
 const ignorePlayStateChange = () => undefined
+
+interface HtmlInCanvasSurface {
+  canvas: HtmlInCanvasElement
+  textRoot: HTMLDivElement
+  sourceCanvas: HTMLCanvasElement
+  context: HtmlInCanvasContext
+}
+
+type HtmlInCanvasPaintResult =
+  | { kind: 'painted'; paints: number }
+  | { kind: 'retry'; message: string }
+  | { kind: 'failed'; message: string }
+
+function resolveHtmlInCanvasSurface(
+  canvas: HtmlInCanvasElement | null,
+  textRoot: HTMLDivElement | null,
+  sourceCanvas: HTMLCanvasElement | null | undefined,
+): HtmlInCanvasSurface | null {
+  const context = canvas?.getContext('2d') as HtmlInCanvasContext | null | undefined
+  return canvas && textRoot && sourceCanvas && context?.drawElementImage
+    ? { canvas, textRoot, sourceCanvas, context }
+    : null
+}
+
+function configureHtmlInCanvasSurface(
+  canvas: HtmlInCanvasElement,
+  width: number,
+  height: number,
+): void {
+  canvas.layoutSubtree = true
+  if (canvas.width !== width) canvas.width = width
+  if (canvas.height !== height) canvas.height = height
+}
+
+function publishHtmlInCanvasDiagnostics(
+  canvas: HtmlInCanvasElement,
+  diagnostics: MutableDiagnostics,
+): void {
+  if (!import.meta.env.DEV) return
+  const snapshot = diagnostics.snapshot()
+  canvas.dataset.htmlInCanvasPaints = String(snapshot.paints)
+  canvas.dataset.htmlInCanvasFps = String(snapshot.effectivePaintFps)
+  canvas.dataset.htmlInCanvasP95IntervalMs = String(snapshot.p95PaintIntervalMs)
+  canvas.dataset.htmlInCanvasP95CompositeMs = String(snapshot.p95CompositeMs)
+  canvas.dataset.htmlInCanvasMaxCompositeMs = String(snapshot.maxCompositeMs)
+}
+
+function paintHtmlInCanvasSurface(
+  surface: HtmlInCanvasSurface,
+  diagnostics: MutableDiagnostics,
+  frame: number,
+  cachedPaintMisses: number,
+): HtmlInCanvasPaintResult {
+  const { context, sourceCanvas, textRoot } = surface
+  const paintAt = performance.now()
+  try {
+    context.reset()
+    copyPreviewDisplayCanvasContent(sourceCanvas, context)
+    const transform = context.drawElementImage?.(textRoot, 0, 0)
+    if (!transform) throw new Error('drawElementImage did not return a transform')
+    textRoot.style.transform = transform.toString()
+    diagnostics.recordPaint(frame, paintAt, performance.now() - paintAt)
+    return { kind: 'painted', paints: diagnostics.snapshot().paints }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    return message.includes('No cached paint record') && cachedPaintMisses < 3
+      ? { kind: 'retry', message }
+      : { kind: 'failed', message }
+  }
+}
 
 /**
  * A text-only Player that remains mounted beside the primary composition.
@@ -189,30 +261,22 @@ export const DomTextScrubOverlay = memo(function DomTextScrubOverlay({
     window.__FREECUT_HTML_IN_CANVAS_PREVIEW__ = diagnostics
     if (!hybridSupported) return
 
-    const canvas = hybridCanvasRef.current
-    const textRoot = hybridTextRootRef.current
-    const sourceCanvas = backgroundCanvasRef?.current
-    const context = canvas?.getContext('2d') as HtmlInCanvasContext | null | undefined
-    if (!canvas || !textRoot || !sourceCanvas || !context?.drawElementImage) {
+    const surface = resolveHtmlInCanvasSurface(
+      hybridCanvasRef.current,
+      hybridTextRootRef.current,
+      backgroundCanvasRef?.current,
+    )
+    if (!surface) {
       diagnostics.active = false
       diagnostics.failure = 'The preview compositor could not acquire its canvas surfaces.'
       setHybridFailure(diagnostics.failure)
       return
     }
+    const { canvas } = surface
 
-    canvas.layoutSubtree = true
-    if (canvas.width !== renderSize.width) canvas.width = renderSize.width
-    if (canvas.height !== renderSize.height) canvas.height = renderSize.height
+    configureHtmlInCanvasSurface(canvas, renderSize.width, renderSize.height)
 
-    const publishDiagnosticSnapshot = () => {
-      if (!import.meta.env.DEV) return
-      const snapshot = diagnostics.snapshot()
-      canvas.dataset.htmlInCanvasPaints = String(snapshot.paints)
-      canvas.dataset.htmlInCanvasFps = String(snapshot.effectivePaintFps)
-      canvas.dataset.htmlInCanvasP95IntervalMs = String(snapshot.p95PaintIntervalMs)
-      canvas.dataset.htmlInCanvasP95CompositeMs = String(snapshot.p95CompositeMs)
-      canvas.dataset.htmlInCanvasMaxCompositeMs = String(snapshot.maxCompositeMs)
-    }
+    const publishDiagnosticSnapshot = () => publishHtmlInCanvasDiagnostics(canvas, diagnostics)
     const resetDiagnostics = () => {
       diagnostics.reset()
       publishDiagnosticSnapshot()
@@ -230,35 +294,32 @@ export const DomTextScrubOverlay = memo(function DomTextScrubOverlay({
     let retryPaintRaf: number | null = null
 
     canvas.onpaint = () => {
-      const paintAt = performance.now()
-      try {
-        context.reset()
-        copyPreviewDisplayCanvasContent(sourceCanvas, context)
-        const transform = context.drawElementImage?.(textRoot, 0, 0)
-        if (!transform) throw new Error('drawElementImage did not return a transform')
-        textRoot.style.transform = transform.toString()
-        diagnostics.recordPaint(lastFrameRef.current ?? 0, paintAt, performance.now() - paintAt)
+      const result = paintHtmlInCanvasSurface(
+        surface,
+        diagnostics,
+        lastFrameRef.current ?? 0,
+        cachedPaintMisses,
+      )
+      if (result.kind === 'painted') {
         cachedPaintMisses = 0
-        const paints = diagnostics.snapshot().paints
-        if (paints === 1 || paints % 15 === 0) publishDiagnosticSnapshot()
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error)
-        if (message.includes('No cached paint record') && cachedPaintMisses < 3) {
-          cachedPaintMisses += 1
-          if (import.meta.env.DEV) {
-            canvas.dataset.htmlInCanvasPaintRecordRetries = String(cachedPaintMisses)
-          }
-          retryPaintRaf = requestAnimationFrame(() => {
-            retryPaintRaf = null
-            canvas.requestPaint?.()
-          })
-          return
-        }
-        diagnostics.active = false
-        diagnostics.failure = message
-        canvas.onpaint = null
-        setHybridFailure(diagnostics.failure)
+        if (result.paints === 1 || result.paints % 15 === 0) publishDiagnosticSnapshot()
+        return
       }
+      if (result.kind === 'retry') {
+        cachedPaintMisses += 1
+        if (import.meta.env.DEV) {
+          canvas.dataset.htmlInCanvasPaintRecordRetries = String(cachedPaintMisses)
+        }
+        retryPaintRaf = requestAnimationFrame(() => {
+          retryPaintRaf = null
+          canvas.requestPaint?.()
+        })
+        return
+      }
+      diagnostics.active = false
+      diagnostics.failure = result.message
+      canvas.onpaint = null
+      setHybridFailure(diagnostics.failure)
     }
     canvas.requestPaint?.()
 

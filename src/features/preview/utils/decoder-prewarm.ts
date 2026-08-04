@@ -73,6 +73,7 @@ export interface DecoderPrewarmMetricsSnapshot {
   activeWorkerRestarts: number
   activeLastInitMs: number
   activeLastDecodeMs: number
+  activeLastFailure: string
   fallbackRequests: number
   fallbackCacheHits: number
   fallbackBitmaps: number
@@ -175,6 +176,7 @@ const decoderPrewarmMetrics: DecoderPrewarmMetricsSnapshot = {
   activeWorkerRestarts: 0,
   activeLastInitMs: 0,
   activeLastDecodeMs: 0,
+  activeLastFailure: '',
   fallbackRequests: 0,
   fallbackCacheHits: 0,
   fallbackBitmaps: 0,
@@ -198,6 +200,9 @@ let activePreviewRequestVersion = 0
 let activePreviewSettleTimer: ReturnType<typeof setTimeout> | null = null
 const latestActivePreviewTimestampsBySrc = new Map<string, number[]>()
 const activePreviewReadyListeners = new Set<(src: string, timestamp: number) => void>()
+const activePreviewLookaheadAbortBySrc = new Map<string, AbortController>()
+const activePreviewDecodeFailuresBySrc = new Map<string, number>()
+const activePreviewRetryTimerBySrc = new Map<string, ReturnType<typeof setTimeout>>()
 
 // Dev: expose cache for debugging. Guard `window` — this module is also pulled
 // into worker bundles (e.g. via the export deps barrel), where `window` is
@@ -221,6 +226,9 @@ function handleWorkerMessage(event: MessageEvent): void {
     }
     if (msg.step === 'active_decode_complete' && Number.isFinite(msg.ms)) {
       decoderPrewarmMetrics.activeLastDecodeMs = Math.max(0, Number(msg.ms))
+    }
+    if (msg.step === 'active_decode_failed') {
+      decoderPrewarmMetrics.activeLastFailure = String(msg.error ?? 'unknown')
     }
     return
   }
@@ -368,6 +376,7 @@ function findClosestBitmapEntry(
   // clip resident across Edit/Color/Animate workspace switches.
   bitmapCache.delete(src)
   bitmapCache.set(src, entries)
+  decoderPrewarmMetrics.activeLastFailure = ''
 
   let best: CachedBitmapEntry | null = null
   let bestDist = Infinity
@@ -484,6 +493,16 @@ function cachePredecodedBitmap(
   trimCachedBitmapEntries(entries, capacity)
   bitmapCache.delete(src)
   bitmapCache.set(src, entries)
+  const failedTimestamp = activePreviewDecodeFailuresBySrc.get(src)
+  if (
+    failedTimestamp !== undefined &&
+    Math.abs(failedTimestamp - timestamp) <= PRESEEK_REQUEST_REUSE_TOLERANCE_SECONDS
+  ) {
+    activePreviewDecodeFailuresBySrc.delete(src)
+  }
+  const retryTimer = activePreviewRetryTimerBySrc.get(src)
+  if (retryTimer !== undefined) clearTimeout(retryTimer)
+  activePreviewRetryTimerBySrc.delete(src)
   removeMatchingFallbackBitmaps(src, timestamp)
   decoderPrewarmMetrics.cacheSources = bitmapCache.size
   decoderPrewarmMetrics.cacheBitmaps = [...bitmapCache.values()].reduce(
@@ -740,14 +759,52 @@ function settleActivePreviewRequest(
   request.resolve(bitmap)
 }
 
+function recordFailedActivePreviewTarget(src: string, timestamp: number): void {
+  if (!activePreviewScrubSession) return
+  const activeTargets = latestActivePreviewTimestampsBySrc.get(src)
+  if (
+    !activeTargets?.some(
+      (target) => Math.abs(target - timestamp) <= PRESEEK_REQUEST_REUSE_TOLERANCE_SECONDS,
+    )
+  ) {
+    return
+  }
+
+  // The exact worker lane is an optimization, not a presentation gate. Mark
+  // this source so the renderer skips strict waiting and wakes the original
+  // DOM video/main-thread extractor path. Keep the session active until that
+  // exact fallback actually reaches the front buffer.
+  activePreviewDecodeFailuresBySrc.set(src, timestamp)
+  for (const listener of activePreviewReadyListeners) listener(src, timestamp)
+}
+
+function cancelActivePreviewLookahead(src?: string): void {
+  if (src !== undefined) {
+    activePreviewLookaheadAbortBySrc.get(src)?.abort()
+    activePreviewLookaheadAbortBySrc.delete(src)
+    return
+  }
+
+  for (const controller of activePreviewLookaheadAbortBySrc.values()) controller.abort()
+  activePreviewLookaheadAbortBySrc.clear()
+}
+
 function scheduleMissingActivePreviewLookahead(src: string, timestamps: number[]): void {
-  const missing = timestamps.filter(
+  cancelActivePreviewLookahead(src)
+  const missing = [...new Set(timestamps)].filter(
     (timestamp) =>
-      !getCachedPredecodedBitmap(src, timestamp, PRESEEK_REQUEST_REUSE_TOLERANCE_SECONDS),
+      !getCachedPredecodedBitmap(src, timestamp, PRESEEK_REQUEST_REUSE_TOLERANCE_SECONDS) &&
+      !findMatchingInflightPreseek(src, timestamp, PRESEEK_REQUEST_REUSE_TOLERANCE_SECONDS),
   )
   if (missing.length === 0) return
+  const controller = new AbortController()
+  activePreviewLookaheadAbortBySrc.set(src, controller)
   decoderPrewarmMetrics.activeLookaheadPosts += 1
-  void backgroundBatchPreseek(src, missing)
+  void backgroundBatchPreseek(src, missing, { signal: controller.signal }).finally(() => {
+    if (activePreviewLookaheadAbortBySrc.get(src) === controller) {
+      activePreviewLookaheadAbortBySrc.delete(src)
+    }
+  })
 }
 
 function drainQueuedActivePreviewRequests(): void {
@@ -833,6 +890,10 @@ function startActivePreviewRequest(request: ActivePreviewRequestState): void {
           PRESEEK_REQUEST_REUSE_TOLERANCE_SECONDS,
         )
     settleActivePreviewRequest(inflight, resolvedBitmap)
+
+    if (!wasCancelled && !resolvedBitmap) {
+      recordFailedActivePreviewTarget(inflight.src, inflight.timestamp)
+    }
 
     if (resolvedBitmap && inflight.lookaheadTimestamps.length > 0) {
       scheduleMissingActivePreviewLookahead(inflight.src, inflight.lookaheadTimestamps)
@@ -926,6 +987,11 @@ export function activePreviewPreseek(
 ): Promise<ImageBitmap | null> {
   decoderPrewarmMetrics.activeRequests += 1
   activePreviewRequestVersion += 1
+  activePreviewDecodeFailuresBySrc.delete(request.src)
+  const retryTimer = activePreviewRetryTimerBySrc.get(request.src)
+  if (retryTimer !== undefined) clearTimeout(retryTimer)
+  activePreviewRetryTimerBySrc.delete(request.src)
+  cancelActivePreviewLookahead(request.src)
   if (activePreviewSettleTimer !== null) {
     clearTimeout(activePreviewSettleTimer)
     activePreviewSettleTimer = null
@@ -990,12 +1056,42 @@ export function activePreviewPreseek(
 export function setActivePreviewRenderTarget(frame: number | null): void {
   latestActivePreviewTimelineFrame = frame
   activePreviewScrubSession = frame !== null
-  if (frame === null) latestActivePreviewTimestampsBySrc.clear()
+  if (frame === null) {
+    latestActivePreviewTimestampsBySrc.clear()
+    cancelActivePreviewLookahead()
+  }
 }
 
-export function settleActivePreviewRenderTarget(frame: number): void {
+export function scheduleActivePreviewRetry(src: string, timestamp: number, delayMs = 80): void {
+  const existing = activePreviewRetryTimerBySrc.get(src)
+  if (existing !== undefined) clearTimeout(existing)
+  const requestVersion = activePreviewRequestVersion
+  const retryTimer = setTimeout(
+    () => {
+      activePreviewRetryTimerBySrc.delete(src)
+      if (requestVersion !== activePreviewRequestVersion) return
+      for (const listener of activePreviewReadyListeners) listener(src, timestamp)
+    },
+    Math.max(0, delayMs),
+  )
+  activePreviewRetryTimerBySrc.set(src, retryTimer)
+}
+
+export function hasActivePreviewDecodeFailure(
+  src: string,
+  timestamp: number,
+  toleranceSeconds = PRESEEK_REQUEST_REUSE_TOLERANCE_SECONDS,
+): boolean {
+  const failedTimestamp = activePreviewDecodeFailuresBySrc.get(src)
+  return failedTimestamp !== undefined && Math.abs(failedTimestamp - timestamp) <= toleranceSeconds
+}
+
+export function settleActivePreviewRenderTarget(
+  frame: number,
+  exactPresentationReady = false,
+): void {
   if (!activePreviewScrubSession || latestActivePreviewTimelineFrame !== frame) return
-  if (!isActivePreviewFrameExactDecodeReady(frame)) return
+  if (!exactPresentationReady && !isActivePreviewFrameExactDecodeReady(frame)) return
   if (activePreviewSettleTimer !== null) clearTimeout(activePreviewSettleTimer)
   const requestVersion = activePreviewRequestVersion
   activePreviewSettleTimer = setTimeout(() => {
@@ -1471,6 +1567,7 @@ export async function waitForInflightPredecodedBitmap(
  */
 function clearPredecodedCache(src?: string): void {
   if (src) {
+    cancelActivePreviewLookahead(src)
     const entries = bitmapCache.get(src)
     if (entries) {
       for (const entry of entries) entry.bitmap.close()
@@ -1484,6 +1581,7 @@ function clearPredecodedCache(src?: string): void {
     unavailableBlobUrls.delete(src)
     keyframesSentForSrc.delete(src)
   } else {
+    cancelActivePreviewLookahead()
     for (const entries of bitmapCache.values()) {
       for (const entry of entries) entry.bitmap.close()
     }
@@ -1512,6 +1610,7 @@ function clearPredecodedCache(src?: string): void {
  * Dispose all workers in the pool and clean up.
  */
 export function disposePrewarmWorker(): void {
+  cancelActivePreviewLookahead()
   for (const inflight of activePreviewInflightById.values()) {
     pendingRequests.delete(inflight.id)
     settleActivePreviewRequest(inflight, null)
@@ -1524,6 +1623,9 @@ export function disposePrewarmWorker(): void {
   activePreviewWorker?.terminate()
   activePreviewWorker = null
   activePreviewGeneration = 0
+  activePreviewDecodeFailuresBySrc.clear()
+  for (const retryTimer of activePreviewRetryTimerBySrc.values()) clearTimeout(retryTimer)
+  activePreviewRetryTimerBySrc.clear()
   activePreviewRequestVersion = 0
   if (activePreviewSettleTimer !== null) clearTimeout(activePreviewSettleTimer)
   activePreviewSettleTimer = null

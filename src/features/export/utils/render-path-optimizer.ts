@@ -11,16 +11,18 @@ export interface FrameRenderOptimization {
 }
 
 /**
- * The scrub cache is optimized for paused random access. During live DOM-video
- * playback, reading it can display an old rendered frame and writing it adds a
- * full-frame GPU copy that contends with the next effect/composite submission.
+ * The scrub cache is optimized for paused random access. A DOM video provider
+ * is also installed while paused so the browser can satisfy exact seeks before
+ * the worker; that must not disable retention. Only advancing playback bypasses
+ * cache reads and writes because its full-frame copies contend with the next
+ * presentation.
  */
 export function shouldUseScrubbingFrameCache(
   hasScrubbingCache: boolean,
-  liveDomVideoPlaybackActive: boolean,
+  _liveDomVideoPlaybackActive: boolean,
   liveRenderedPlaybackActive = false,
 ): boolean {
-  return hasScrubbingCache && !liveDomVideoPlaybackActive && !liveRenderedPlaybackActive
+  return hasScrubbingCache && !liveRenderedPlaybackActive
 }
 
 export function resolveFrameRenderOptimization(

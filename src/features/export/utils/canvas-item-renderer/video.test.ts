@@ -326,6 +326,71 @@ describe('renderVideoItem', () => {
     expect(drawFrame).not.toHaveBeenCalled()
   })
 
+  it('observes a worker failure that arrives after rendering starts and falls through immediately', async () => {
+    const drawFrame = vi.fn(async () => true)
+    const extractor = {
+      drawFrame,
+      drawFrameWithCapture: vi.fn(),
+      getLastFailureKind: vi.fn(() => 'none' as const),
+      getDimensions: vi.fn(() => ({ width: 1920, height: 1080 })),
+      getCanBeTransparent: vi.fn(() => false),
+      getDuration: vi.fn(() => 30),
+    }
+    let workerFailed = false
+    const renderContext = createRenderContext({
+      videoExtractors: new Map([[item.id, extractor]]),
+      useMediabunny: new Set([item.id]),
+      getCachedPredecodedBitmap: vi.fn(() => null),
+      waitForInflightPredecodedBitmap: vi.fn(async () => {
+        workerFailed = true
+        return null
+      }),
+      isActivePreviewFrameCurrent: vi.fn(() => true),
+      isActivePreviewFrameSuperseded: vi.fn(() => false),
+      isActivePreviewFrameDecodeReady: vi.fn(() => false),
+      hasActivePreviewDecodeFailure: vi.fn(() => workerFailed),
+      workerPredecodeWaitMs: 900,
+    } as unknown as Partial<ItemRenderContext>)
+
+    await expect(
+      renderVideoItem(createCanvasContext(), item, transform, 12, renderContext),
+    ).resolves.toBe(true)
+
+    expect(drawFrame).toHaveBeenCalledOnce()
+  })
+
+  it('schedules a non-blocking DOM retry after the active worker fails', async () => {
+    const unavailableVideo = Object.assign(new EventTarget(), {
+      readyState: 1,
+      videoWidth: 4000,
+      videoHeight: 2250,
+      currentTime: 0,
+      dataset: {},
+    }) as unknown as HTMLVideoElement
+    const scheduleActivePreviewRetry = vi.fn()
+    const markActivePreviewFramePending = vi.fn()
+    const renderContext = createRenderContext({
+      domVideoElementProvider: vi.fn(() => unavailableVideo),
+      getCachedPredecodedBitmap: vi.fn(() => null),
+      waitForInflightPredecodedBitmap: vi.fn(async () => null),
+      getResolvedVideoSource: vi.fn(() => 'blob:original'),
+      isActivePreviewFrameCurrent: vi.fn(() => true),
+      isActivePreviewFrameSuperseded: vi.fn(() => false),
+      isActivePreviewFrameDecodeReady: vi.fn(() => false),
+      hasActivePreviewDecodeFailure: vi.fn(() => true),
+      scheduleActivePreviewRetry,
+      markActivePreviewFramePending,
+      workerPredecodeWaitMs: 900,
+    } as unknown as Partial<ItemRenderContext>)
+
+    await expect(
+      renderVideoItem(createCanvasContext(), item, transform, 12, renderContext),
+    ).resolves.toBe(false)
+
+    expect(scheduleActivePreviewRetry).toHaveBeenCalledWith('blob:original', expect.any(Number))
+    expect(markActivePreviewFramePending).toHaveBeenCalled()
+  })
+
   it('draws a scrub-proxy fallback immediately while the exact worker frame settles', async () => {
     const fallbackBitmap = { width: 480, height: 270 } as ImageBitmap
     const waitForInflightPredecodedBitmap = vi.fn(async () => null)
@@ -438,7 +503,9 @@ describe('renderVideoItem', () => {
       videoHeight: 2250,
       currentTime: 0,
       dataset: {},
-      addEventListener: vi.fn((name: string, callback: () => void) => listeners.set(name, callback)),
+      addEventListener: vi.fn((name: string, callback: () => void) =>
+        listeners.set(name, callback),
+      ),
       removeEventListener: vi.fn((name: string) => listeners.delete(name)),
     } as unknown as HTMLVideoElement
     const ctx = createCanvasContext()
@@ -496,6 +563,64 @@ describe('renderVideoItem', () => {
       expect.any(Number),
     )
     expect(extractor.drawFrame).not.toHaveBeenCalled()
+  })
+
+  it('presents a nearby original-resolution DOM frame while exact active decode settles', async () => {
+    const decodedVideo = {
+      readyState: 4,
+      videoWidth: 4000,
+      videoHeight: 2250,
+      currentTime: 0.3,
+      dataset: {},
+    } as HTMLVideoElement
+    const markActivePreviewFallbackUsed = vi.fn()
+    const ctx = createCanvasContext()
+    const renderContext = createRenderContext({
+      domVideoElementProvider: vi.fn(() => decodedVideo),
+      getCachedPredecodedBitmap: vi.fn(() => null),
+      waitForInflightPredecodedBitmap: vi.fn(async () => null),
+      isActivePreviewFrameCurrent: vi.fn(() => true),
+      isActivePreviewFrameSuperseded: vi.fn(() => false),
+      isActivePreviewFrameDecodeReady: vi.fn(() => false),
+      markActivePreviewFallbackUsed,
+      workerPredecodeWaitMs: 900,
+    } as unknown as Partial<ItemRenderContext>)
+
+    await expect(renderVideoItem(ctx, item, transform, 12, renderContext)).resolves.toBe(true)
+
+    expect(ctx.drawImage).toHaveBeenCalledWith(
+      decodedVideo,
+      expect.any(Number),
+      expect.any(Number),
+      expect.any(Number),
+      expect.any(Number),
+    )
+    expect(markActivePreviewFallbackUsed).toHaveBeenCalledOnce()
+  })
+
+  it('treats a frame-accurate active DOM frame as exact', async () => {
+    const decodedVideo = {
+      readyState: 4,
+      videoWidth: 4000,
+      videoHeight: 2250,
+      currentTime: 0.4,
+      dataset: {},
+    } as HTMLVideoElement
+    const markActivePreviewFallbackUsed = vi.fn()
+    const renderContext = createRenderContext({
+      domVideoElementProvider: vi.fn(() => decodedVideo),
+      getCachedPredecodedBitmap: vi.fn(() => null),
+      waitForInflightPredecodedBitmap: vi.fn(async () => null),
+      isActivePreviewFrameCurrent: vi.fn(() => true),
+      isActivePreviewFrameSuperseded: vi.fn(() => false),
+      isActivePreviewFrameDecodeReady: vi.fn(() => false),
+      markActivePreviewFallbackUsed,
+      workerPredecodeWaitMs: 900,
+    } as unknown as Partial<ItemRenderContext>)
+
+    await renderVideoItem(createCanvasContext(), item, transform, 12, renderContext)
+
+    expect(markActivePreviewFallbackUsed).not.toHaveBeenCalled()
   })
 
   it('prefers a nearby worker frame over a nested DOM seek during reverse delivery', async () => {

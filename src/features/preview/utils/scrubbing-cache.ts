@@ -24,8 +24,21 @@ import {
 interface GpuCacheEntry {
   texture: GPUTexture
   view: GPUTextureView
+  slotIndex: number
+  arrayLayer: number
   blitBindGroup?: GPUBindGroup
 }
+
+interface GpuTextureCacheStats {
+  capacity: number
+  estimatedBytes: number
+  allocations: number
+  evictions: number
+  uploads: number
+  arrayBacked: boolean
+}
+
+const MAX_FIXED_GPU_CACHE_BYTES = 512 * 1024 * 1024
 
 /** Eviction hint: prefer evicting frames in the opposite scrub direction */
 interface EvictionHint {
@@ -35,12 +48,19 @@ interface EvictionHint {
 
 class GpuTextureCache {
   private cache = new Map<number, GpuCacheEntry>()
+  private slots: GpuCacheEntry[] = []
+  private freeSlotIndices: number[] = []
   private readonly configuredMaxFrames: number
   private maxFrames: number
   private device: GPUDevice | null = null
+  private storageTexture: GPUTexture | null = null
+  private arrayBacked = false
   private texW = 0
   private texH = 0
   private hint: EvictionHint | null = null
+  private allocationCount = 0
+  private evictionCount = 0
+  private uploadCount = 0
 
   constructor(maxFrames: number) {
     this.configuredMaxFrames = Math.max(1, maxFrames)
@@ -53,30 +73,66 @@ class GpuTextureCache {
 
   setDevice(device: GPUDevice, width: number, height: number): void {
     if (this.device === device && this.texW === width && this.texH === height) return
-    // Device or dimensions changed — flush
-    this.clear()
+    this.disposeStorage()
     this.device = device
     this.texW = width
     this.texH = height
-    // Adaptive VRAM budget based on detected device memory.
-    // navigator.deviceMemory (GB, rounded) is available in Chromium — use as proxy
-    // for GPU memory on integrated GPUs. Fall back to conservative 500MB.
+
     const deviceMemoryGb = (navigator as { deviceMemory?: number }).deviceMemory
     const vramBudgetBytes =
       deviceMemoryGb !== undefined
-        ? Math.min(deviceMemoryGb * 0.125, 1) * 1_000_000_000 // 12.5% of system RAM, max 1GB
-        : 500_000_000 // conservative default (~500MB)
+        ? Math.min(deviceMemoryGb * 0.125, 1) * 1_000_000_000
+        : 500_000_000
+    const fixedAllocationBudgetBytes = Math.min(vramBudgetBytes, MAX_FIXED_GPU_CACHE_BYTES)
     const bytesPerFrame = width * height * 4
     this.maxFrames = Math.max(
       1,
-      Math.min(this.configuredMaxFrames, Math.floor(vramBudgetBytes / bytesPerFrame)),
+      Math.min(
+        this.configuredMaxFrames,
+        Math.floor(fixedAllocationBudgetBytes / bytesPerFrame),
+        Number(
+          (device as GPUDevice & { limits?: GPUSupportedLimits }).limits?.maxTextureArrayLayers,
+        ) || this.configuredMaxFrames,
+      ),
     )
+
+    try {
+      const texture = device.createTexture({
+        label: 'scrub-cache-frame-array',
+        size: { width, height, depthOrArrayLayers: this.maxFrames },
+        format: 'rgba8unorm',
+        usage:
+          GPUTextureUsage.TEXTURE_BINDING |
+          GPUTextureUsage.COPY_DST |
+          GPUTextureUsage.RENDER_ATTACHMENT,
+      })
+      this.storageTexture = texture
+      this.arrayBacked = true
+      this.allocationCount++
+      this.slots = Array.from({ length: this.maxFrames }, (_, arrayLayer) => ({
+        texture,
+        view: texture.createView({
+          dimension: '2d',
+          baseArrayLayer: arrayLayer,
+          arrayLayerCount: 1,
+        }),
+        slotIndex: arrayLayer,
+        arrayLayer,
+      }))
+      this.resetFreeSlots()
+    } catch {
+      // Keep a recycled per-slot fallback for adapters that reject one large
+      // array allocation. It still reaches allocation stability after warmup.
+      this.storageTexture = null
+      this.arrayBacked = false
+      this.slots = []
+      this.freeSlotIndices = []
+    }
   }
 
   get(frame: number): GpuCacheEntry | undefined {
     const entry = this.cache.get(frame)
     if (!entry) return undefined
-    // LRU touch: delete + re-insert moves to end
     this.cache.delete(frame)
     this.cache.set(frame, entry)
     return entry
@@ -84,62 +140,87 @@ class GpuTextureCache {
 
   put(frame: number, source: ImageBitmap | OffscreenCanvas): GpuCacheEntry | null {
     if (!this.device || this.texW < 2 || this.texH < 2) return null
+    const cached = this.cache.get(frame)
+    if (cached) return cached
 
-    // Already cached
-    if (this.cache.has(frame)) {
-      return this.cache.get(frame)!
+    const entry = this.takeVictimSlot() ?? this.acquireSlot()
+    if (!entry) return null
+    if (!this.uploadToSlot(entry, source)) {
+      this.releaseSlot(entry)
+      return null
     }
+    this.cache.set(frame, entry)
+    this.uploadCount++
+    return entry
+  }
 
-    // Evict if full — prefer frames in the opposite scrub direction
-    if (this.cache.size >= this.maxFrames) {
-      const victim = this.pickEvictionVictim()
-      if (victim !== undefined) {
-        const old = this.cache.get(victim)
-        old?.texture.destroy()
-        this.cache.delete(victim)
-      }
-    }
+  private takeVictimSlot(): GpuCacheEntry | undefined {
+    if (this.cache.size < this.maxFrames) return undefined
+    const victim = this.pickEvictionVictim()
+    if (victim === undefined) return undefined
+    const entry = this.cache.get(victim)
+    this.cache.delete(victim)
+    this.evictionCount++
+    return entry
+  }
 
+  private uploadToSlot(entry: GpuCacheEntry, source: ImageBitmap | OffscreenCanvas): boolean {
+    if (!this.device) return false
     try {
-      const texture = this.device.createTexture({
-        size: { width: this.texW, height: this.texH },
-        format: 'rgba8unorm',
-        usage:
-          GPUTextureUsage.TEXTURE_BINDING |
-          GPUTextureUsage.COPY_DST |
-          GPUTextureUsage.RENDER_ATTACHMENT,
-      })
       this.device.queue.copyExternalImageToTexture(
         { source, flipY: false },
-        { texture },
+        this.arrayBacked
+          ? { texture: entry.texture, origin: { x: 0, y: 0, z: entry.arrayLayer } }
+          : { texture: entry.texture },
         { width: this.texW, height: this.texH },
       )
-      const view = texture.createView()
-      const entry: GpuCacheEntry = { texture, view }
-      this.cache.set(frame, entry)
-      return entry
+      return true
     } catch {
-      return null
+      return false
     }
   }
 
-  /**
-   * Pick the best frame to evict. When scrub direction is known, prefer
-   * the oldest frame in the OPPOSITE direction (behind when scrubbing
-   * forward, ahead when scrubbing backward). Falls back to pure LRU.
-   */
+  private acquireSlot(): GpuCacheEntry | undefined {
+    const freeSlotIndex = this.freeSlotIndices.pop()
+    if (freeSlotIndex !== undefined) return this.slots[freeSlotIndex]
+    if (this.arrayBacked || !this.device || this.slots.length >= this.maxFrames) return undefined
+
+    const texture = this.device.createTexture({
+      label: 'scrub-cache-frame-slot',
+      size: { width: this.texW, height: this.texH },
+      format: 'rgba8unorm',
+      usage:
+        GPUTextureUsage.TEXTURE_BINDING |
+        GPUTextureUsage.COPY_DST |
+        GPUTextureUsage.RENDER_ATTACHMENT,
+    })
+    const entry: GpuCacheEntry = {
+      texture,
+      view: texture.createView(),
+      slotIndex: this.slots.length,
+      arrayLayer: 0,
+    }
+    this.slots.push(entry)
+    this.allocationCount++
+    return entry
+  }
+
+  private releaseSlot(entry: GpuCacheEntry): void {
+    if (!this.freeSlotIndices.includes(entry.slotIndex)) {
+      this.freeSlotIndices.push(entry.slotIndex)
+    }
+  }
+
+  private resetFreeSlots(): void {
+    this.freeSlotIndices = this.slots.map((entry) => entry.slotIndex).reverse()
+  }
+
   private pickEvictionVictim(): number | undefined {
-    if (!this.hint || this.hint.direction === 0) {
-      return this.cache.keys().next().value
-    }
+    if (!this.hint || this.hint.direction === 0) return this.cache.keys().next().value
     const { currentFrame, direction } = this.hint
-    // Scan oldest-first; pick the first frame in the opposite direction
     for (const frame of this.cache.keys()) {
-      if (direction > 0 ? frame < currentFrame : frame > currentFrame) {
-        return frame
-      }
+      if (direction > 0 ? frame < currentFrame : frame > currentFrame) return frame
     }
-    // All frames are in the same direction — fall back to LRU
     return this.cache.keys().next().value
   }
 
@@ -154,16 +235,43 @@ class GpuTextureCache {
   deleteMatching(predicate: (frame: number) => boolean): void {
     for (const [frame, entry] of this.cache.entries()) {
       if (!predicate(frame)) continue
-      entry.texture.destroy()
       this.cache.delete(frame)
+      this.releaseSlot(entry)
     }
   }
 
   clear(): void {
-    for (const entry of this.cache.values()) {
-      entry.texture.destroy()
-    }
     this.cache.clear()
+    this.resetFreeSlots()
+  }
+
+  dispose(): void {
+    this.disposeStorage()
+    this.device = null
+    this.texW = 0
+    this.texH = 0
+  }
+
+  getStats(): GpuTextureCacheStats {
+    return {
+      capacity: this.maxFrames,
+      estimatedBytes:
+        this.texW * this.texH * 4 * (this.arrayBacked ? this.maxFrames : this.slots.length),
+      allocations: this.allocationCount,
+      evictions: this.evictionCount,
+      uploads: this.uploadCount,
+      arrayBacked: this.arrayBacked,
+    }
+  }
+
+  private disposeStorage(): void {
+    this.cache.clear()
+    if (this.storageTexture) this.storageTexture.destroy()
+    else for (const entry of this.slots) entry.texture.destroy()
+    this.storageTexture = null
+    this.slots = []
+    this.freeSlotIndices = []
+    this.arrayBacked = false
   }
 }
 
@@ -178,12 +286,55 @@ export interface VideoFrameEntry {
   sourceTime: number
 }
 
-class VideoFrameCache {
-  private cache = new Map<string, VideoFrameEntry[]>()
-  private maxEntriesPerItem: number
+interface StoredVideoFrameEntry extends VideoFrameEntry {
+  byteSize: number
+  lastUsed: number
+}
 
-  constructor(maxEntriesPerItem = 4) {
+function getDecodedFrameAllocationSize(frame: Tier2VideoFrame): number {
+  const allocationSize = (frame as VideoFrame & { allocationSize?: () => number }).allocationSize
+  if (typeof allocationSize !== 'function') return 0
+  try {
+    const bytes = allocationSize.call(frame)
+    return Number.isFinite(bytes) && bytes > 0 ? bytes : 0
+  } catch {
+    return 0
+  }
+}
+
+function getDecodedFrameDimensions(
+  frame: Tier2VideoFrame,
+): { width: number; height: number } | null {
+  const dimensions = frame as Tier2VideoFrame & {
+    width?: number
+    height?: number
+    displayWidth?: number
+    displayHeight?: number
+  }
+  const width = Number(dimensions.displayWidth ?? dimensions.width ?? 0)
+  const height = Number(dimensions.displayHeight ?? dimensions.height ?? 0)
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) return null
+  return { width: Math.round(width), height: Math.round(height) }
+}
+
+function estimateDecodedFrameBytes(frame: Tier2VideoFrame): number {
+  const allocationBytes = getDecodedFrameAllocationSize(frame)
+  if (allocationBytes > 0) return allocationBytes
+  const dimensions = getDecodedFrameDimensions(frame)
+  return dimensions ? dimensions.width * dimensions.height * 4 : 0
+}
+
+class VideoFrameCache {
+  private cache = new Map<string, StoredVideoFrameEntry[]>()
+  private maxEntriesPerItem: number
+  private readonly maxBytes: number
+  private totalBytes = 0
+  private accessClock = 0
+  private evictionCount = 0
+
+  constructor(maxEntriesPerItem = 4, maxBytes = Number.POSITIVE_INFINITY) {
     this.maxEntriesPerItem = Math.max(1, maxEntriesPerItem)
+    this.maxBytes = Math.max(1, maxBytes)
   }
 
   get(
@@ -217,6 +368,7 @@ class VideoFrameCache {
     }
 
     const [entry] = entries.splice(bestIndex, 1)
+    entry!.lastUsed = ++this.accessClock
     entries.push(entry!)
     return entry
   }
@@ -228,16 +380,60 @@ class VideoFrameCache {
     )
     if (existingIndex !== -1) {
       const [existing] = entries.splice(existingIndex, 1)
+      this.totalBytes -= existing?.byteSize ?? 0
       existing?.frame.close()
     }
 
-    entries.push({ frame, sourceTime })
+    const entry: StoredVideoFrameEntry = {
+      frame,
+      sourceTime,
+      byteSize: estimateDecodedFrameBytes(frame),
+      lastUsed: ++this.accessClock,
+    }
+    entries.push(entry)
+    this.totalBytes += entry.byteSize
     while (entries.length > this.maxEntriesPerItem) {
-      const evicted = entries.shift()
-      evicted?.frame.close()
+      this.evictEntry(itemId, entries, 0)
     }
 
-    this.cache.set(itemId, entries)
+    if (entries.length > 0) this.cache.set(itemId, entries)
+
+    while (this.totalBytes > this.maxBytes) {
+      const victim = this.findOldestEntry()
+      if (!victim) break
+      this.evictEntry(victim.itemId, victim.entries, victim.index)
+    }
+  }
+
+  private findOldestEntry(): {
+    itemId: string
+    entries: StoredVideoFrameEntry[]
+    index: number
+  } | null {
+    let oldest: {
+      itemId: string
+      entries: StoredVideoFrameEntry[]
+      index: number
+      lastUsed: number
+    } | null = null
+    for (const [itemId, entries] of this.cache) {
+      for (let index = 0; index < entries.length; index++) {
+        const candidate = entries[index]!
+        if (!oldest || candidate.lastUsed < oldest.lastUsed) {
+          oldest = { itemId, entries, index, lastUsed: candidate.lastUsed }
+        }
+      }
+    }
+    return oldest
+  }
+
+  private evictEntry(itemId: string, entries: StoredVideoFrameEntry[], index: number): void {
+    const [evicted] = entries.splice(index, 1)
+    if (!evicted) return
+    this.totalBytes = Math.max(0, this.totalBytes - evicted.byteSize)
+    evicted.frame.close()
+    this.evictionCount++
+    if (entries.length === 0) this.cache.delete(itemId)
   }
 
   has(itemId: string): boolean {
@@ -252,6 +448,18 @@ class VideoFrameCache {
     return total
   }
 
+  get bytes(): number {
+    return this.totalBytes
+  }
+
+  get budgetBytes(): number {
+    return this.maxBytes
+  }
+
+  get evictions(): number {
+    return this.evictionCount
+  }
+
   clear(): void {
     for (const entries of this.cache.values()) {
       for (const entry of entries) {
@@ -259,6 +467,7 @@ class VideoFrameCache {
       }
     }
     this.cache.clear()
+    this.totalBytes = 0
   }
 }
 
@@ -378,6 +587,12 @@ class RamPreviewCache {
 
 export interface ScrubbingCacheStats {
   tier1Size: number
+  tier1Capacity: number
+  tier1Bytes: number
+  tier1Allocations: number
+  tier1Evictions: number
+  tier1Uploads: number
+  tier1ArrayBacked: boolean
   tier2Size: number
   tier3Size: number
   tier1Hits: number
@@ -387,6 +602,9 @@ export interface ScrubbingCacheStats {
   tier3Bytes: number
   tier3BudgetBytes: number
   pendingRamFrames: number
+  tier2Bytes: number
+  tier2BudgetBytes: number
+  tier2Evictions: number
 }
 
 const DEFAULT_MAX_RAM_FRAMES = 900
@@ -395,6 +613,10 @@ const MIN_RAM_CACHE_BUDGET_BYTES = 256_000_000
 const MAX_RAM_CACHE_BUDGET_BYTES = 1_000_000_000
 const RAM_CACHE_SYSTEM_MEMORY_FRACTION = 0.0625
 const MAX_PENDING_RAM_FRAME_COPIES = 2
+const FALLBACK_DECODED_FRAME_CACHE_BUDGET_BYTES = 192_000_000
+const MIN_DECODED_FRAME_CACHE_BUDGET_BYTES = 128_000_000
+const MAX_DECODED_FRAME_CACHE_BUDGET_BYTES = 512_000_000
+const DECODED_FRAME_CACHE_SYSTEM_MEMORY_FRACTION = 0.03125
 
 export function resolveScrubbingRamBudgetBytes(deviceMemoryGb?: number): number {
   if (!deviceMemoryGb || !Number.isFinite(deviceMemoryGb)) {
@@ -415,6 +637,27 @@ function getDefaultRamCacheBudgetBytes(): number {
       ? undefined
       : (navigator as { deviceMemory?: number }).deviceMemory
   return resolveScrubbingRamBudgetBytes(deviceMemoryGb)
+}
+
+export function resolveDecodedFrameBudgetBytes(deviceMemoryGb?: number): number {
+  if (!deviceMemoryGb || !Number.isFinite(deviceMemoryGb)) {
+    return FALLBACK_DECODED_FRAME_CACHE_BUDGET_BYTES
+  }
+  return Math.max(
+    MIN_DECODED_FRAME_CACHE_BUDGET_BYTES,
+    Math.min(
+      MAX_DECODED_FRAME_CACHE_BUDGET_BYTES,
+      Math.round(deviceMemoryGb * DECODED_FRAME_CACHE_SYSTEM_MEMORY_FRACTION * 1_000_000_000),
+    ),
+  )
+}
+
+function getDefaultDecodedFrameCacheBudgetBytes(): number {
+  const deviceMemoryGb =
+    typeof navigator === 'undefined'
+      ? undefined
+      : (navigator as { deviceMemory?: number }).deviceMemory
+  return resolveDecodedFrameBudgetBytes(deviceMemoryGb)
 }
 
 export class ScrubbingCache {
@@ -447,9 +690,10 @@ export class ScrubbingCache {
     maxGpuFrames = 300,
     maxRamFrames = DEFAULT_MAX_RAM_FRAMES,
     maxRamBytes = getDefaultRamCacheBudgetBytes(),
+    maxDecodedFrameBytes = getDefaultDecodedFrameCacheBudgetBytes(),
   ) {
     this.tier1 = new GpuTextureCache(maxGpuFrames)
-    this.tier2 = new VideoFrameCache()
+    this.tier2 = new VideoFrameCache(4, maxDecodedFrameBytes)
     this.tier3 = new RamPreviewCache(maxRamFrames, maxRamBytes)
   }
 
@@ -674,8 +918,15 @@ export class ScrubbingCache {
   // -----------------------------------------------------------------------
 
   getStats(): ScrubbingCacheStats {
+    const gpuStats = this.tier1.getStats()
     return {
       tier1Size: this.tier1.size,
+      tier1Capacity: gpuStats.capacity,
+      tier1Bytes: gpuStats.estimatedBytes,
+      tier1Allocations: gpuStats.allocations,
+      tier1Evictions: gpuStats.evictions,
+      tier1Uploads: gpuStats.uploads,
+      tier1ArrayBacked: gpuStats.arrayBacked,
       tier2Size: this.tier2.size,
       tier3Size: this.tier3.size,
       tier1Hits: this._tier1Hits,
@@ -685,6 +936,9 @@ export class ScrubbingCache {
       tier3Bytes: this.tier3.bytes,
       tier3BudgetBytes: this.tier3.budgetBytes,
       pendingRamFrames: this.pendingRamFrames.size,
+      tier2Bytes: this.tier2.bytes,
+      tier2BudgetBytes: this.tier2.budgetBytes,
+      tier2Evictions: this.tier2.evictions,
     }
   }
 
@@ -695,7 +949,7 @@ export class ScrubbingCache {
   dispose(): void {
     this.disposed = true
     this.invalidateAllPendingRamFrames()
-    this.tier1.clear()
+    this.tier1.dispose()
     this.tier2.clear()
     this.tier3.clear()
     this.blitCanvas = null

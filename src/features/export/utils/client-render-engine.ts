@@ -195,6 +195,32 @@ export function selectPreviewVideoSource(options: {
   return candidates[0] ?? null
 }
 
+export function getPreviewVideoSourceCandidates({
+  itemSource,
+  proxySource,
+  registeredSource,
+  cachedSource,
+  useProxyMedia,
+}: {
+  itemSource?: string | null
+  proxySource?: string | null
+  registeredSource?: string | null
+  cachedSource?: string | null
+  useProxyMedia: boolean
+}): Array<string | null | undefined> {
+  if (useProxyMedia) {
+    return [proxySource, itemSource, registeredSource, cachedSource]
+  }
+
+  // blobUrlManager owns the current original-media URL and is also what the
+  // active preseek scheduler uses with proxy playback disabled. Timeline item
+  // src values can lag a proxy-mode toggle, so never let an explicit proxy URL
+  // outrank or masquerade as the original source here.
+  return [cachedSource, registeredSource, itemSource].map((candidate) =>
+    candidate === proxySource ? null : candidate,
+  )
+}
+
 // Predicate helpers (GPU-effect / animated-image classifiers) live in
 // `render-engine-predicates.ts`. `subCompositionRenderDataHasGpuEffects` is
 // re-exported so existing import sites (and its test) keep working.
@@ -519,9 +545,10 @@ export function collectPriorityNestedVideoItemIds(
 }
 
 /**
- * Avoid retaining isolated frames from large random seeks. They have almost no
- * reuse value (especially on an overview timeline), while each full-resolution
- * cache entry creates both a GPU texture and a deep ImageBitmap copy.
+ * Isolated overview frames keep the `skip` classification so decode waits and
+ * full-resolution frame capture remain conservative. The completed composite
+ * is still retained GPU-only downstream: fixed layers make that a recycled
+ * upload instead of a new texture allocation.
  */
 export function resolveRenderedFrameCacheMode({
   previousFrame,
@@ -752,15 +779,12 @@ export async function createCompositionRenderer(
       fps,
     })
     lastRenderedFrame = frame
-    // Overview timelines can move tens of thousands of frames per pointer
-    // pixel. Caching those isolated frames only creates GPU textures and deep
-    // ImageBitmaps that are almost never revisited, adding allocation/GC churn
-    // to the latency-sensitive render path.
-    if (cacheMode === 'skip') return
     if (gpu.effects) {
       scrubbingCache.setGpuDevice(gpu.effects.getDevice(), canvas.width, canvas.height)
     }
-    scrubbingCache.cacheFrame(frame, canvas, cacheMode === 'gpu-only')
+    // `skip` still controls decoder wait/capture policy for overview seeks,
+    // but fixed GPU layers make retaining the final composited result cheap.
+    scrubbingCache.cacheFrame(frame, canvas, cacheMode !== 'full')
   }
 
   // === GPU pipeline cluster ===
@@ -1228,17 +1252,19 @@ export async function createCompositionRenderer(
           : selectExportVideoSource(item, registeredSource)
       }
       return selectPreviewVideoSource({
-        candidates: [
-          item.src,
-          item.mediaId ? resolveProxyUrl(item.mediaId) : null,
+        candidates: getPreviewVideoSourceCandidates({
+          itemSource: item.src,
+          proxySource: item.mediaId ? resolveProxyUrl(item.mediaId) : null,
           registeredSource,
-          item.mediaId ? blobUrlManager.get(item.mediaId) : null,
-        ],
+          cachedSource: item.mediaId ? blobUrlManager.get(item.mediaId) : null,
+          useProxyMedia,
+        }),
         sourceTime,
         toleranceSeconds,
         getCachedPredecodedBitmap: itemRenderContext.getCachedPredecodedBitmap,
-        getCachedActivePreviewFallbackBitmap:
-          itemRenderContext.getCachedActivePreviewFallbackBitmap,
+        getCachedActivePreviewFallbackBitmap: useProxyMedia
+          ? itemRenderContext.getCachedActivePreviewFallbackBitmap
+          : undefined,
         isActivePreviewSourceTarget: itemRenderContext.isActivePreviewSourceTarget,
       })
     },
@@ -1473,6 +1499,8 @@ export async function createCompositionRenderer(
       const {
         getCachedPredecodedBitmap,
         getCachedActivePreviewFallbackBitmap,
+        hasActivePreviewDecodeFailure,
+        scheduleActivePreviewRetry,
         isActivePreviewFrameCurrent,
         isActivePreviewFrameDecodeReady,
         isActivePreviewSourceTarget,
@@ -1487,6 +1515,8 @@ export async function createCompositionRenderer(
           getCachedActivePreviewFallbackBitmap
         itemRenderContext.isActivePreviewFrameCurrent = isActivePreviewFrameCurrent
         itemRenderContext.isActivePreviewFrameDecodeReady = isActivePreviewFrameDecodeReady
+        itemRenderContext.hasActivePreviewDecodeFailure = hasActivePreviewDecodeFailure
+        itemRenderContext.scheduleActivePreviewRetry = scheduleActivePreviewRetry
         itemRenderContext.isActivePreviewSourceTarget = isActivePreviewSourceTarget
         itemRenderContext.isActivePreviewFrameSuperseded = isActivePreviewFrameSuperseded
         itemRenderContext.isActivePreviewTargetSuperseded = isActivePreviewTargetSuperseded
@@ -1505,6 +1535,110 @@ export async function createCompositionRenderer(
         failedCount: failedItemIds.length,
         failedItemIds,
       })
+    }
+  }
+
+  interface ExtractorPrewarmBatch {
+    extractor: VideoFrameSource
+    timestamps: number[]
+  }
+
+  const appendExtractorPrewarmCandidate = (
+    frame: number,
+    item: VideoItem,
+    batchByExtractor: Map<string, ExtractorPrewarmBatch>,
+    fallbackFrames: Set<number>,
+  ) => {
+    if (!useMediabunny.has(item.id) || mediabunnyDisabledItems.has(item.id)) return
+    const extractor = videoExtractors.get(item.id)
+    if (!extractor) return
+    if (!extractor.isBatchPrewarmAvailable()) {
+      fallbackFrames.add(frame)
+      return
+    }
+    const sourceTime = getPrewarmVideoSourceTimeSeconds(item, frame, fps)
+    const clampedTime = Math.max(0, Math.min(sourceTime, extractor.getDuration() - 0.01))
+    const existing = batchByExtractor.get(item.id)
+    if (existing) existing.timestamps.push(clampedTime)
+    else batchByExtractor.set(item.id, { extractor, timestamps: [clampedTime] })
+  }
+
+  const collectExtractorPrewarmBatches = (frames: number[]) => {
+    const batchByExtractor = new Map<string, ExtractorPrewarmBatch>()
+    const fallbackFrames = new Set<number>()
+    for (const frame of frames) {
+      for (const item of collectPrewarmVideoCandidatesForFrame(frame)) {
+        appendExtractorPrewarmCandidate(frame, item, batchByExtractor, fallbackFrames)
+      }
+    }
+    return { batchByExtractor, fallbackFrames: [...fallbackFrames] }
+  }
+
+  const runExtractorPrewarmBatch = async (
+    itemId: string,
+    batch: ExtractorPrewarmBatch,
+    ctx2d: OffscreenCanvasRenderingContext2D | CanvasRenderingContext2D,
+  ) => {
+    if (isDisposed) return
+    batch.timestamps.sort((a, b) => a - b)
+    const retainFrame =
+      scrubbingCache && scrubbingFrameCacheActive
+        ? (capturedFrame: ImageBitmap | VideoFrame, sourceTime: number) => {
+            scrubbingCache.putVideoFrame(itemId, capturedFrame, sourceTime)
+          }
+        : undefined
+    const result = await batch.extractor.prewarmBatch(
+      ctx2d,
+      batch.timestamps,
+      0,
+      0,
+      1,
+      1,
+      retainFrame,
+    )
+    if (result >= 0) mediabunnyFailureCountByItem.set(itemId, 0)
+  }
+
+  const resolveFallbackPrewarmTarget = (frame: number, item: VideoItem) => {
+    if (!useMediabunny.has(item.id) || mediabunnyDisabledItems.has(item.id)) return
+    const extractor = videoExtractors.get(item.id)
+    if (!extractor) return
+    const sourceTime = getPrewarmVideoSourceTimeSeconds(item, frame, fps)
+    const clampedTime = Math.max(0, Math.min(sourceTime, extractor.getDuration() - 0.01))
+    return { extractor, clampedTime }
+  }
+
+  const runFallbackItemPrewarm = async (
+    frame: number,
+    item: VideoItem,
+    ctx2d: OffscreenCanvasRenderingContext2D | CanvasRenderingContext2D,
+  ) => {
+    const target = resolveFallbackPrewarmTarget(frame, item)
+    if (!target) return
+    try {
+      const decodedFrameCache = scrubbingFrameCacheActive ? scrubbingCache : null
+      if (!decodedFrameCache) {
+        await target.extractor.drawFrame(ctx2d, target.clampedTime, 0, 0, 1, 1)
+        return
+      }
+      const captured = await target.extractor.captureFrame(target.clampedTime)
+      if (!captured.success || !captured.frame) return
+      decodedFrameCache.putVideoFrame(
+        item.id,
+        captured.frame,
+        captured.sourceTime ?? target.clampedTime,
+      )
+    } catch {
+      // Best-effort background fill.
+    }
+  }
+
+  const runFallbackFramePrewarm = async (
+    frame: number,
+    ctx2d: OffscreenCanvasRenderingContext2D | CanvasRenderingContext2D,
+  ) => {
+    for (const item of collectPrewarmVideoCandidatesForFrame(frame)) {
+      await runFallbackItemPrewarm(frame, item, ctx2d)
     }
   }
 
@@ -1968,13 +2102,6 @@ export async function createCompositionRenderer(
         abortActivePreviewRender()
         return
       }
-      if (
-        itemRenderContext.isActivePreviewFrameCurrent?.(frame) &&
-        itemRenderContext.isActivePreviewFrameDecodeReady?.(frame) === false
-      ) {
-        abortActivePreviewRender()
-        return
-      }
       // 3-tier cache lookup (preview only)
       // Tier 1 (GPU texture) → Tier 3 (RAM ImageBitmap) → miss → full render
       if (scrubbingCache && scrubbingFrameCacheActive) {
@@ -1993,7 +2120,7 @@ export async function createCompositionRenderer(
         fps,
       })
       itemRenderContext.captureDecodedVideoFrames =
-        Boolean(scrubbingCache && scrubbingFrameCacheActive) && renderedFrameCacheMode !== 'skip'
+        Boolean(scrubbingCache && scrubbingFrameCacheActive) && renderedFrameCacheMode === 'full'
       itemRenderContext.nonBlockingVideoFrameToleranceSeconds =
         nonBlockingVideoFrameToleranceSeconds
       itemRenderContext.workerPredecodeWaitMs =
@@ -2604,78 +2731,19 @@ export async function createCompositionRenderer(
       if (frames.length === 0) return
       const ctx2d = getPrewarmContext()
       if (!ctx2d) return
-
-      // Expand frames → candidate items → source timestamps grouped by extractor
-      const batchByExtractor = new Map<
-        string,
-        { extractor: ReturnType<typeof videoExtractors.get>; timestamps: number[] }
-      >()
-      const fallbackFrames: number[] = []
-
-      for (const frame of frames) {
-        const candidates = collectPrewarmVideoCandidatesForFrame(frame)
-
-        for (const item of candidates) {
-          if (!useMediabunny.has(item.id) || mediabunnyDisabledItems.has(item.id)) continue
-          const extractor = videoExtractors.get(item.id)
-          if (!extractor) continue
-
-          // Check if batch mode is available for this extractor
-          if (!extractor.isBatchPrewarmAvailable()) {
-            if (!fallbackFrames.includes(frame)) fallbackFrames.push(frame)
-            continue
-          }
-
-          const sourceTime = getPrewarmVideoSourceTimeSeconds(item, frame, fps)
-          const clampedTime = Math.max(0, Math.min(sourceTime, extractor.getDuration() - 0.01))
-
-          const existing = batchByExtractor.get(item.id)
-          if (existing) {
-            existing.timestamps.push(clampedTime)
-          } else {
-            batchByExtractor.set(item.id, { extractor, timestamps: [clampedTime] })
-          }
-        }
-      }
-
-      // Initialize any missing extractors
+      const { batchByExtractor, fallbackFrames } = collectExtractorPrewarmBatches(frames)
       const missingIds = [...batchByExtractor.keys()].filter(
         (id) => !useMediabunny.has(id) && !mediabunnyDisabledItems.has(id),
       )
-      if (missingIds.length > 0) {
-        await initializeMediabunnyForItems(missingIds)
-      }
-
-      // Batch decode per extractor — sorted timestamps for optimal pipeline
+      if (missingIds.length > 0) await initializeMediabunnyForItems(missingIds)
       await Promise.all(
-        [...batchByExtractor.entries()].map(async ([itemId, { extractor, timestamps }]) => {
-          if (isDisposed || !extractor) return
-          timestamps.sort((a, b) => a - b)
-          const result = await extractor.prewarmBatch(ctx2d, timestamps, 0, 0, 1, 1)
-          if (result >= 0) {
-            mediabunnyFailureCountByItem.set(itemId, 0)
-          }
-          // result === -1 means batch disabled or failed — fallback frames
-          // are handled below
-        }),
+        [...batchByExtractor].map(([itemId, batch]) =>
+          runExtractorPrewarmBatch(itemId, batch, ctx2d),
+        ),
       )
-
-      // Sequential fallback for extractors where batch is disabled
       for (const frame of fallbackFrames) {
         if (isDisposed) break
-        const candidates = collectPrewarmVideoCandidatesForFrame(frame)
-        for (const item of candidates) {
-          if (!useMediabunny.has(item.id) || mediabunnyDisabledItems.has(item.id)) continue
-          const extractor = videoExtractors.get(item.id)
-          if (!extractor) continue
-          const sourceTime = getPrewarmVideoSourceTimeSeconds(item, frame, fps)
-          const clampedTime = Math.max(0, Math.min(sourceTime, extractor.getDuration() - 0.01))
-          try {
-            await extractor.drawFrame(ctx2d, clampedTime, 0, 0, 1, 1)
-          } catch {
-            /* best-effort fallback */
-          }
-        }
+        await runFallbackFramePrewarm(frame, ctx2d)
       }
     },
 

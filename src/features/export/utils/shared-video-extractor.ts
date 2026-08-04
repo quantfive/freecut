@@ -41,6 +41,7 @@ export interface VideoFrameSource {
     y: number,
     width: number,
     height: number,
+    onCapturedFrame?: (frame: ImageBitmap | VideoFrame, sourceTime: number) => void,
   ): Promise<number>
   isBatchPrewarmAvailable(): boolean
   dispose(): void
@@ -231,8 +232,19 @@ class SharedItemVideoSource implements VideoFrameSource {
     y: number,
     width: number,
     height: number,
+    onCapturedFrame?: (frame: ImageBitmap | VideoFrame, sourceTime: number) => void,
   ): Promise<number> {
-    return this.pool.prewarmItemBatch(this.itemId, this.src, ctx, timestamps, x, y, width, height)
+    return this.pool.prewarmItemBatch(
+      this.itemId,
+      this.src,
+      ctx,
+      timestamps,
+      x,
+      y,
+      width,
+      height,
+      onCapturedFrame,
+    )
   }
 
   isBatchPrewarmAvailable(): boolean {
@@ -459,13 +471,14 @@ export class SharedVideoExtractorPool {
     y: number,
     width: number,
     height: number,
+    onCapturedFrame?: (frame: ImageBitmap | VideoFrame, sourceTime: number) => void,
   ): Promise<number> {
     const state = this.ensureSourceState(src)
     return this.withSourceOperation(state, async () => {
       if (!(await this.initSource(src))) return -1
       const extractor = this.getExtractorForItem(itemId, src)
       if (!extractor) return -1
-      return extractor.prewarmBatch(ctx, timestamps, x, y, width, height)
+      return extractor.prewarmBatch(ctx, timestamps, x, y, width, height, onCapturedFrame)
     })
   }
 

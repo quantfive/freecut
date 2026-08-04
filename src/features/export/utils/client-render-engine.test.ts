@@ -10,6 +10,7 @@ import {
   resolveRenderedFrameCacheMode,
   resolveWorkerPredecodeWaitMs,
   resolveVideoPreloadPlan,
+  getPreviewVideoSourceCandidates,
   selectNestedMediaSource,
   selectRendererPreloadItems,
   selectPreviewVideoSource,
@@ -378,6 +379,42 @@ describe('collectPriorityNestedVideoItemIds', () => {
 })
 
 describe('selectPreviewVideoSource', () => {
+  it('prioritizes the canonical original URL and excludes proxies when source media is selected', () => {
+    expect(
+      getPreviewVideoSourceCandidates({
+        itemSource: 'blob:source',
+        proxySource: 'blob:proxy',
+        registeredSource: 'blob:registered-source',
+        cachedSource: 'blob:cached-source',
+        useProxyMedia: false,
+      }),
+    ).toEqual(['blob:cached-source', 'blob:registered-source', 'blob:source'])
+  })
+
+  it('drops a stale proxy item source when proxy playback is disabled', () => {
+    expect(
+      getPreviewVideoSourceCandidates({
+        itemSource: 'blob:proxy',
+        proxySource: 'blob:proxy',
+        registeredSource: 'blob:proxy',
+        cachedSource: 'blob:original',
+        useProxyMedia: false,
+      }),
+    ).toEqual(['blob:original', null, null])
+  })
+
+  it('includes cached proxies when proxy media is selected', () => {
+    expect(
+      getPreviewVideoSourceCandidates({
+        itemSource: 'blob:proxy',
+        proxySource: 'blob:proxy',
+        registeredSource: 'blob:registered-proxy',
+        cachedSource: 'blob:source',
+        useProxyMedia: true,
+      }),
+    ).toEqual(['blob:proxy', 'blob:proxy', 'blob:registered-proxy', 'blob:source'])
+  })
+
   it('selects the cached proxy when a compound item still carries its original source', () => {
     const proxyBitmap = {} as ImageBitmap
     expect(
@@ -439,7 +476,7 @@ describe('resolveVideoPreloadPlan', () => {
 })
 
 describe('resolveRenderedFrameCacheMode', () => {
-  it('seeds the cache, keeps nearby scrub frames, and skips isolated overview seeks', () => {
+  it('seeds RAM locally and recycles GPU layers for isolated overview seeks', () => {
     expect(resolveRenderedFrameCacheMode({ previousFrame: null, frame: 9000, fps: 30 })).toBe(
       'full',
     )

@@ -106,6 +106,28 @@ export interface PreviewDecoderMetricsSample {
   exactFallbackReplacements: number
 }
 
+export interface PreviewFrameCacheMetricsSample {
+  tier1Size: number
+  tier1Capacity: number
+  tier1Bytes: number
+  tier1Allocations: number
+  tier1Evictions: number
+  tier1Uploads: number
+  tier1ArrayBacked: boolean
+  tier2Size: number
+  tier2Bytes: number
+  tier2BudgetBytes: number
+  tier2Evictions: number
+  tier3Size: number
+  tier3Bytes: number
+  tier3BudgetBytes: number
+  pendingRamFrames: number
+  tier1Hits: number
+  tier2Hits: number
+  tier3Hits: number
+  misses: number
+}
+
 export interface PreviewScrubPerformanceState {
   version: 1
   requests: PreviewScrubRequestSample[]
@@ -116,6 +138,7 @@ export interface PreviewScrubPerformanceState {
   preseeks: PreviewPreseekPlanSample[]
   canvasPools: PreviewCanvasPoolSample[]
   decoder: PreviewDecoderMetricsSample | null
+  frameCache: PreviewFrameCacheMetricsSample | null
   reset: () => void
 }
 
@@ -186,6 +209,7 @@ function scheduleDomSnapshot(state: PreviewScrubPerformanceState): void {
       preseeks: state.preseeks,
       canvasPools: state.canvasPools,
       decoder: state.decoder,
+      frameCache: state.frameCache,
     })
   }, PERF_SNAPSHOT_DEBOUNCE_MS)
 }
@@ -201,6 +225,7 @@ function createPerformanceState(): PreviewScrubPerformanceState {
     preseeks: [],
     canvasPools: [],
     decoder: null,
+    frameCache: null,
     reset: () => {
       state.requests.length = 0
       state.renders.length = 0
@@ -210,6 +235,7 @@ function createPerformanceState(): PreviewScrubPerformanceState {
       state.preseeks.length = 0
       state.canvasPools.length = 0
       state.decoder = null
+      state.frameCache = null
       resetInternalState()
       scheduleDomSnapshot(state)
     },
@@ -386,6 +412,13 @@ export function recordPreviewDecoderMetrics(sample: PreviewDecoderMetricsSample)
   const state = getPerformanceState()
   if (!state) return
   state.decoder = { ...sample }
+  scheduleDomSnapshot(state)
+}
+
+export function recordPreviewFrameCacheMetrics(sample: PreviewFrameCacheMetricsSample): void {
+  const state = getPerformanceState()
+  if (!state) return
+  state.frameCache = { ...sample }
   scheduleDomSnapshot(state)
 }
 

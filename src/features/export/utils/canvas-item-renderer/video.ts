@@ -62,10 +62,7 @@ function tryDrawActivePreviewFallback(options: {
   allowOutsideActivePreview?: boolean
 }): boolean {
   const { rctx, previewRootFrame, workerSource, sourceTime, toleranceSeconds, drawBitmap } = options
-  if (
-    !options.allowOutsideActivePreview &&
-    !rctx.isActivePreviewFrameCurrent?.(previewRootFrame)
-  )
+  if (!options.allowOutsideActivePreview && !rctx.isActivePreviewFrameCurrent?.(previewRootFrame))
     return false
   const bitmap = rctx.getCachedActivePreviewFallbackBitmap?.(
     workerSource,
@@ -306,6 +303,17 @@ export async function renderVideoItem(
   const tier2ToleranceSeconds = getTier2VideoFrameToleranceSeconds(sourceFps)
   const nonBlockingToleranceSeconds = rctx.nonBlockingVideoFrameToleranceSeconds
   const previewRootFrame = rctx.previewRootTimelineFrame ?? frame
+  const resolvedPreviewWorkerSource =
+    rctx.getResolvedVideoSource?.(item, sourceTime, tier2ToleranceSeconds) ?? item.src
+  const hasActiveDecodeFailure = () =>
+    Boolean(
+      resolvedPreviewWorkerSource &&
+      rctx.hasActivePreviewDecodeFailure?.(
+        resolvedPreviewWorkerSource,
+        sourceTime,
+        tier2ToleranceSeconds,
+      ),
+    )
   const holdPreviewFrontBuffer = () => {
     if (isPreviewMode) rctx.markActivePreviewFramePending?.()
   }
@@ -427,13 +435,10 @@ export async function renderVideoItem(
     // During live canvas playback, presentation follows the latest browser-decoded
     // frame without waiting for the decoder to catch the independent timeline
     // clock. A strict half-frame freshness gate turns decode pressure into a 48ms
-    // wait on every render and slows the whole scene graph. Paused/scrub renders
-    // retain exact freshness and decoder fallbacks.
-    maxDriftSeconds: rctx.liveRenderedPlaybackActive
-      ? Number.POSITIVE_INFINITY
-      : rctx.isActivePreviewFrameCurrent?.(previewRootFrame)
-        ? 0.5 / sourceFps
-        : undefined,
+    // wait on every render and slows the whole scene graph. Paused scrubs use
+    // the normal bounded drift, mark nearby frames as provisional, and replace
+    // them with the exact worker result.
+    maxDriftSeconds: rctx.liveRenderedPlaybackActive ? Number.POSITIVE_INFINITY : undefined,
   }
   let domVideoDecision = resolvePreviewDomVideoDrawDecision(domVideoDecisionOptions)
   if (domVideo && !domVideoDecision.shouldDraw) {
@@ -446,10 +451,36 @@ export async function renderVideoItem(
       // commonly need several hundred milliseconds to present the first frame.
       // Sequential scrubs keep the default 48ms wait so stale targets cannot
       // serialize rapid pointer input.
+      const activeFrameAtWaitStart = rctx.isActivePreviewFrameCurrent?.(previewRootFrame) === true
+      const shouldContinueDomSeekWait = () =>
+        rctx.isActivePreviewFrameSuperseded?.(previewRootFrame) !== true &&
+        (!activeFrameAtWaitStart ||
+          (rctx.isActivePreviewFrameCurrent?.(previewRootFrame) === true &&
+            rctx.isActivePreviewFrameDecodeReady?.(previewRootFrame) === false))
       domVideoDecision = await waitForPreviewDomVideoDrawDecision(
         domVideoDecisionOptions,
         rctx.workerPredecodeWaitMs,
+        shouldContinueDomSeekWait,
       )
+      if (rctx.isActivePreviewFrameSuperseded?.(previewRootFrame)) {
+        holdPreviewFrontBuffer()
+        return false
+      }
+      if (activeFrameAtWaitStart) {
+        // The cancellation poll also wakes when the exact worker finishes.
+        // Retry its now-cached bitmap before falling through to slower paths.
+        const drewCompletedWorkerBitmap = await tryDrawWorkerPredecodedBitmap(
+          ctx,
+          item,
+          transform,
+          canvasSettings,
+          rctx,
+          frame,
+          sourceTime,
+          tier2ToleranceSeconds,
+        )
+        if (drewCompletedWorkerBitmap) return true
+      }
     } else if (nonBlockingToleranceSeconds !== undefined) {
       // Reverse shuttle must not serialize the render pump behind a browser
       // seek. Mark a stale DOM frame unavailable so worker/proxy delivery can
@@ -488,6 +519,19 @@ export async function renderVideoItem(
   // keyframe seek (400ms+) is worse than DOM video's timing drift. Only skip DOM
   // video for 1x speed clips when mediabunny is available (frame-accurate, fast).
   if (domVideo && domVideoDecision.shouldDraw) {
+    if (
+      rctx.isActivePreviewFrameCurrent?.(previewRootFrame) &&
+      domVideoDecision.drift !== null &&
+      domVideoDecision.drift > 0.5 / sourceFps
+    ) {
+      // Present a nearby frame from the original-resolution browser decoder
+      // during a cold seek, but never let it enter the exact frame cache. The
+      // active worker notification re-renders the frame-accurate replacement.
+      rctx.markActivePreviewFallbackUsed?.()
+      if (resolvedPreviewWorkerSource) {
+        rctx.scheduleActivePreviewRetry?.(resolvedPreviewWorkerSource, sourceTime)
+      }
+    }
     recordPreviewVideoSource({ frame, itemId: item.id, path: 'dom-video', sourceTime })
     // Variable-speed clips naturally drift from their DOM video element
     // because the browser plays at 1x while sourceTime advances at speed.
@@ -627,6 +671,9 @@ export async function renderVideoItem(
 
     const pendingWorkerSource =
       rctx.getResolvedVideoSource?.(item, sourceTime, tier2ToleranceSeconds) ?? item.src
+    if (hasActiveDecodeFailure() && pendingWorkerSource) {
+      rctx.scheduleActivePreviewRetry?.(pendingWorkerSource, sourceTime)
+    }
     if (domVideo) {
       // A nested/compound DOM video can briefly fall below drawable readiness
       // while rapid Play/Pause seeks it. This happens on both pause and resume;
@@ -689,8 +736,7 @@ export async function renderVideoItem(
     return false
   }
 
-  const resolvedWorkerSource =
-    rctx.getResolvedVideoSource?.(item, sourceTime, tier2ToleranceSeconds) ?? item.src
+  const resolvedWorkerSource = resolvedPreviewWorkerSource
   const rootFrameSuperseded = rctx.isActivePreviewFrameSuperseded?.(previewRootFrame) === true
   const sourceTargetSuperseded = Boolean(
     resolvedWorkerSource &&
@@ -705,7 +751,7 @@ export async function renderVideoItem(
     return false
   }
 
-  if (rctx.isActivePreviewFrameCurrent?.(previewRootFrame)) {
+  if (rctx.isActivePreviewFrameCurrent?.(previewRootFrame) && !hasActiveDecodeFailure()) {
     // Keep the last valid preview visible while the isolated worker finishes
     // this exact target. The worker-ready subscription wakes the render pump;
     // avoiding MediaBunny here keeps pointer input and cancellation responsive.

@@ -6,11 +6,12 @@ describe('shouldUseScrubbingFrameCache', () => {
     expect(shouldUseScrubbingFrameCache(true, false)).toBe(true)
   })
 
-  it('bypasses cache reads and writes during live DOM-video playback', () => {
-    expect(shouldUseScrubbingFrameCache(true, true)).toBe(false)
+  it('keeps caching enabled when paused rendering borrows a DOM video frame', () => {
+    expect(shouldUseScrubbingFrameCache(true, true)).toBe(true)
   })
 
   it('bypasses cache reads and decoded-frame copies during live canvas playback', () => {
+    expect(shouldUseScrubbingFrameCache(true, true, true)).toBe(false)
     expect(shouldUseScrubbingFrameCache(true, false, true)).toBe(false)
   })
 

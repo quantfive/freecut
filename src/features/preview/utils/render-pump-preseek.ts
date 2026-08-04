@@ -35,6 +35,27 @@ export interface PreseekSourceTarget {
   time: number
 }
 
+export interface PreviewPreseekSourceInput {
+  useProxy: boolean
+  proxySource?: string | null
+  liveSource?: string | null
+  itemSource?: string | null
+}
+
+/**
+ * Keep worker preseek source selection aligned with the renderer. A disabled
+ * proxy must never remain in the latency-critical decode lane or gate an
+ * original-resolution render behind the wrong source.
+ */
+export function resolvePreviewPreseekSource({
+  useProxy,
+  proxySource,
+  liveSource,
+  itemSource,
+}: PreviewPreseekSourceInput): string | null {
+  return (useProxy ? proxySource : null) ?? liveSource ?? itemSource ?? null
+}
+
 export interface PausedVariableSpeedPrewarmPlan {
   itemIds: string[]
   visibilityFrame: number

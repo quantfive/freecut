@@ -69,6 +69,7 @@ import {
   collectVisibleTrackVideoSourceTimesBySrc,
   getVideoItemSourceTimeSeconds,
   resolveActivePreviewLookaheadTimestamps,
+  resolvePreviewPreseekSource,
   resolvePausedVariableSpeedPrewarmPlan,
   shouldRunJumpPreseek,
 } from '../utils/render-pump-preseek'
@@ -191,6 +192,7 @@ interface UsePreviewRenderPumpParams {
   playerRef: RefObject<PlayerRef | null>
   fps: number
   forceFastScrubOverlay: boolean
+  useProxy: boolean
   combinedTracks: TimelineTrack[]
   fastScrubBoundaryFrames: number[]
   fastScrubBoundarySources: FastScrubBoundarySource[]
@@ -274,6 +276,7 @@ export function usePreviewRenderPump({
   playerRef,
   fps,
   forceFastScrubOverlay,
+  useProxy,
   combinedTracks,
   fastScrubBoundaryFrames,
   fastScrubBoundarySources,
@@ -537,7 +540,10 @@ export function usePreviewRenderPump({
         if (source !== committedPreviewSnapshot.canvas) {
           captureCommittedPreviewSnapshot(renderedFrame)
         }
-        settleActivePreviewRenderTarget(renderedFrame)
+        // An exact original-resolution DOM/Main-thread frame is just as valid
+        // a settlement as a worker bitmap. Fallback proxy/nearby frames keep
+        // the session alive until their exact replacement arrives.
+        settleActivePreviewRenderTarget(renderedFrame, !usedFallback)
       }
       if (shouldReleaseScrubSnapshotGuardAfterDraw) {
         // Only a replacement that actually reached the front buffer may
@@ -1538,7 +1544,12 @@ export function usePreviewRenderPump({
     const resolvePreseekItemSrc = (item: VideoItem) => {
       const proxyUrl = item.mediaId ? resolveProxyUrl(item.mediaId) : null
       const liveUrl = item.mediaId ? blobUrlManager.get(item.mediaId) : null
-      return proxyUrl ?? liveUrl ?? (item.src || null)
+      return resolvePreviewPreseekSource({
+        useProxy,
+        proxySource: proxyUrl,
+        liveSource: liveUrl,
+        itemSource: item.src,
+      })
     }
 
     function scheduleReversePlaybackPreseek(targetFrame: number) {
@@ -1587,10 +1598,12 @@ export function usePreviewRenderPump({
         return
       }
 
-      for (const [src, timestamps] of bySource) {
-        const currentTimestamp = timestamps[0]
-        if (currentTimestamp !== undefined) {
-          scheduleScrubProxyFallback(src, currentTimestamp)
+      if (useProxy) {
+        for (const [src, timestamps] of bySource) {
+          const currentTimestamp = timestamps[0]
+          if (currentTimestamp !== undefined) {
+            scheduleScrubProxyFallback(src, currentTimestamp)
+          }
         }
       }
 
@@ -1745,7 +1758,9 @@ export function usePreviewRenderPump({
         const exactTimestamp = timestamps[0]
         if (exactTimestamp === undefined) continue
         nextSourceTimes.set(src, exactTimestamp)
-        scheduleScrubProxyFallback(src, exactTimestamp)
+        if (useProxy) {
+          scheduleScrubProxyFallback(src, exactTimestamp)
+        }
 
         if (!usedDedicatedLane) {
           usedDedicatedLane = true
@@ -3023,6 +3038,7 @@ export function usePreviewRenderPump({
     fastScrubBoundarySources,
     forceFastScrubOverlay,
     fps,
+    useProxy,
     clearTransitionPlaybackSession,
     getPausedTransitionPrewarmStartFrame,
     getPinnedTransitionElementForItem,

@@ -393,6 +393,7 @@ const VideoPreviewBase = memo(function VideoPreviewBase({
         project.width,
         project.height,
         project.backgroundColor ?? '',
+        useProxy ? 'proxy' : 'source',
         fastScrubTracksTopologyFingerprint,
         domTextScrubOverlayPlan.enabled ? 'dom-text-overlay' : 'composited-text',
         playbackTransitionFingerprint,
@@ -405,6 +406,7 @@ const VideoPreviewBase = memo(function VideoPreviewBase({
       project.backgroundColor,
       project.height,
       project.width,
+      useProxy,
     ],
   )
 
@@ -464,7 +466,7 @@ const VideoPreviewBase = memo(function VideoPreviewBase({
           const { createCompositionRenderer } = await importCompositionRenderer()
           const renderer = await createCompositionRenderer(fastScrubInputProps, canvas, ctx, {
             mode: 'preview',
-            useProxyMedia: true,
+            useProxyMedia: useProxy,
             getPreviewTransformOverride,
             getPreviewEffectsOverride: getPreviewEffectsOverrideWithGradeApplied,
             getPreviewCornerPinOverride,
@@ -506,6 +508,7 @@ const VideoPreviewBase = memo(function VideoPreviewBase({
       isResolving,
       renderSize.height,
       renderSize.width,
+      useProxy,
     ])
 
   // Enter the composited path in the same render that activates an editor or
@@ -667,6 +670,7 @@ const VideoPreviewBase = memo(function VideoPreviewBase({
       preserveRendererAcrossOverlayRouting: shouldWarmGpuEffectsRenderer,
       domTextScrubOverlayEnabled: domTextScrubOverlayPlan.enabled,
       items,
+      useProxy,
       playerSize,
       playerRenderSize,
       renderSize,
@@ -716,6 +720,7 @@ const VideoPreviewBase = memo(function VideoPreviewBase({
   usePreviewRenderPump({
     fps,
     forceFastScrubOverlay,
+    useProxy,
     // Scrub decoding must use the same proxy/source URLs as the renderer.
     // Feeding unresolved project tracks here silently made the worker decode
     // full-resolution originals while the composition rendered proxies.

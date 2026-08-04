@@ -1489,6 +1489,38 @@ describe('VideoPreview sync behavior', () => {
     expect(renderer.renderFrame).not.toHaveBeenCalledWith(25)
   })
 
+  it('rebuilds the fast-scrub renderer with the selected proxy mode', async () => {
+    usePlaybackStore.setState({ useProxy: false })
+    setSingleVideoItemAtFrame({
+      id: 'item-proxy-mode',
+      effects: [
+        {
+          id: 'effect-proxy-mode',
+          enabled: true,
+          effect: { type: 'gpu-effect', gpuEffectType: 'gpu-sepia', params: { amount: 0.5 } },
+        },
+      ],
+    })
+
+    const { renderer } = await renderReadySingleRendererPreview(24)
+    const rendererCalls = createCompositionRendererMock.mock.calls as unknown as Array<
+      [unknown, unknown, unknown, { useProxyMedia?: boolean }]
+    >
+    const firstOptions = rendererCalls[0]?.[3]
+    expect(firstOptions?.useProxyMedia).toBe(false)
+
+    act(() => {
+      usePlaybackStore.getState().toggleUseProxy()
+    })
+
+    await waitFor(() => {
+      expect(renderer.dispose).toHaveBeenCalledOnce()
+      expect(createCompositionRendererMock).toHaveBeenCalledTimes(2)
+    })
+    const secondOptions = rendererCalls[1]?.[3]
+    expect(secondOptions?.useProxyMedia).toBe(true)
+  })
+
   it('reuses the active fast-scrub renderer for committed transform updates on gpu-effect clips', async () => {
     setSingleVideoTrack()
     useItemsStore.getState().setItems([

@@ -1,15 +1,21 @@
 // @vitest-environment node
 
 import { afterEach, describe, expect, it, vi } from 'vite-plus/test'
-import { resolveScrubbingRamBudgetBytes, ScrubbingCache } from './scrubbing-cache'
+import {
+  resolveDecodedFrameBudgetBytes,
+  resolveScrubbingRamBudgetBytes,
+  ScrubbingCache,
+} from './scrubbing-cache'
 
 type ClosableFrame = ImageBitmap & {
   close: ReturnType<typeof vi.fn>
 }
 
-function createMockFrame(): ClosableFrame {
+function createMockFrame(width = 0, height = 0): ClosableFrame {
   return {
     close: vi.fn(),
+    width,
+    height,
   } as unknown as ClosableFrame
 }
 
@@ -89,6 +95,13 @@ describe('ScrubbingCache memory budget', () => {
     expect(resolveScrubbingRamBudgetBytes(8)).toBe(500_000_000)
     expect(resolveScrubbingRamBudgetBytes(64)).toBe(1_000_000_000)
   })
+
+  it('uses an independent aggregate budget for decoded source frames', () => {
+    expect(resolveDecodedFrameBudgetBytes()).toBe(192_000_000)
+    expect(resolveDecodedFrameBudgetBytes(4)).toBe(128_000_000)
+    expect(resolveDecodedFrameBudgetBytes(8)).toBe(250_000_000)
+    expect(resolveDecodedFrameBudgetBytes(64)).toBe(512_000_000)
+  })
 })
 
 describe('ScrubbingCache asynchronous RAM writes', () => {
@@ -166,6 +179,33 @@ describe('ScrubbingCache GPU lifecycle', () => {
     expect(createBindGroup).toHaveBeenCalledTimes(1)
   })
 
+  it('recycles fixed GPU array layers without allocating or destroying per frame', () => {
+    const { device, texture } = installMockWebGpu()
+    const cache = new ScrubbingCache(2)
+    const source = {} as ImageBitmap
+
+    cache.setGpuDevice(device, 64, 64)
+    cache.putGpuFrame(1, source)
+    cache.putGpuFrame(2, source)
+    cache.putGpuFrame(3, source)
+    cache.invalidate()
+    cache.putGpuFrame(4, source)
+
+    expect(device.createTexture).toHaveBeenCalledTimes(1)
+    expect(texture.destroy).not.toHaveBeenCalled()
+    expect(cache.getStats()).toMatchObject({
+      tier1Size: 1,
+      tier1Capacity: 2,
+      tier1Allocations: 1,
+      tier1Evictions: 1,
+      tier1Uploads: 4,
+      tier1ArrayBacked: true,
+    })
+
+    cache.dispose()
+    expect(texture.destroy).toHaveBeenCalledOnce()
+  })
+
   it('drops differently sized RAM frames when render dimensions change', () => {
     const { device } = installMockWebGpu()
     const cache = new ScrubbingCache()
@@ -205,6 +245,28 @@ describe('ScrubbingCache GPU lifecycle', () => {
 })
 
 describe('ScrubbingCache tier 2 video frames', () => {
+  it('evicts the global least-recently-used frame at the decoded-frame byte budget', () => {
+    const bytesPerFrame = 64 * 64 * 4
+    const cache = new ScrubbingCache(10, 10, bytesPerFrame * 10, bytesPerFrame * 2)
+    const first = createMockFrame(64, 64)
+    const second = createMockFrame(64, 64)
+    const third = createMockFrame(64, 64)
+
+    cache.putVideoFrame('item-1', first, 1)
+    cache.putVideoFrame('item-1', second, 2)
+    cache.putVideoFrame('item-2', third, 3)
+
+    expect(first.close).toHaveBeenCalledOnce()
+    expect(second.close).not.toHaveBeenCalled()
+    expect(third.close).not.toHaveBeenCalled()
+    expect(cache.getStats()).toMatchObject({
+      tier2Size: 2,
+      tier2Bytes: bytesPerFrame * 2,
+      tier2BudgetBytes: bytesPerFrame * 2,
+      tier2Evictions: 1,
+    })
+  })
+
   it('returns an entry when the source time is within tolerance', () => {
     const cache = new ScrubbingCache()
     const frame = createMockFrame()

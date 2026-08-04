@@ -103,6 +103,8 @@ export class VideoFrameExtractor {
    */
   private cachedVideoFrame: VideoFrame | null = null
   private cachedVideoFrameSample: MediabunnySample | null = null
+  private captureCanvas: OffscreenCanvas | null = null
+  private captureContext: OffscreenCanvasRenderingContext2D | null = null
 
   constructor(
     private src: string,
@@ -510,23 +512,60 @@ export class VideoFrameExtractor {
       return null
     }
 
-    const width = Math.round(this.videoTrack?.displayWidth ?? 0)
-    const height = Math.round(this.videoTrack?.displayHeight ?? 0)
-    if (width <= 0 || height <= 0) {
-      return this.cloneCurrentVideoFrame()
-    }
+    return this.captureOrientedSample(sample, () => this.cloneCurrentVideoFrame())
+  }
+
+  private async captureOrientedSample(
+    sample: MediabunnySample,
+    fallback: () => VideoFrame | null = () => this.cloneSampleFrame(sample),
+  ): Promise<ImageBitmap | VideoFrame | null> {
+    const dimensions = this.getCaptureDimensions()
+    if (!dimensions || typeof sample.draw !== 'function') return fallback()
+    const { width, height } = dimensions
 
     try {
-      const canvas = new OffscreenCanvas(width, height)
-      const ctx = canvas.getContext('2d')
-      if (!ctx) return this.cloneCurrentVideoFrame()
-      if (typeof sample.draw !== 'function') return this.cloneCurrentVideoFrame()
-      sample.draw(ctx, 0, 0, width, height)
+      if (!this.ensureCaptureSurface(width, height)) return fallback()
+      const canvas = this.captureCanvas
+      const context = this.captureContext
+      if (!canvas || !context) return fallback()
+      context.clearRect(0, 0, width, height)
+      sample.draw(context, 0, 0, width, height)
+      if (typeof canvas.transferToImageBitmap === 'function') {
+        return canvas.transferToImageBitmap()
+      }
       return await createImageBitmap(canvas)
     } catch (error) {
       this.sampleLoopError = error
-      return this.cloneCurrentVideoFrame()
+      return fallback()
     }
+  }
+
+  private cloneSampleFrame(sample: MediabunnySample): VideoFrame | null {
+    try {
+      const frame = sample.toVideoFrame()
+      if (!frame) return null
+      const clone = frame.clone()
+      frame.close()
+      return clone
+    } catch {
+      return null
+    }
+  }
+
+  private getCaptureDimensions(): { width: number; height: number } | null {
+    const width = Math.round(this.videoTrack?.displayWidth ?? 0)
+    const height = Math.round(this.videoTrack?.displayHeight ?? 0)
+    return width > 0 && height > 0 ? { width, height } : null
+  }
+
+  private ensureCaptureSurface(width: number, height: number): boolean {
+    const dimensionsChanged =
+      this.captureCanvas?.width !== width || this.captureCanvas?.height !== height
+    if (dimensionsChanged) {
+      this.captureCanvas = new OffscreenCanvas(width, height)
+      this.captureContext = this.captureCanvas.getContext('2d')
+    }
+    return Boolean(this.captureCanvas && this.captureContext)
   }
 
   private closeCachedVideoFrame(): void {
@@ -639,18 +678,16 @@ export class VideoFrameExtractor {
     y: number,
     width: number,
     height: number,
+    onCapturedFrame?: (frame: ImageBitmap | VideoFrame, sourceTime: number) => void,
   ): Promise<number> {
-    if (this.batchDisabled || !this.ready || !this.sink || timestamps.length === 0) {
-      return -1
-    }
+    if (!this.canBatchPrewarm(timestamps)) return -1
 
     let decoded = 0
     try {
-      for await (const sample of this.sink.samplesAtTimestamps(timestamps)) {
+      for await (const sample of this.sink!.samplesAtTimestamps(timestamps)) {
         if (!sample) continue
         try {
-          if (typeof sample.draw === 'function') {
-            sample.draw(ctx, x, y, width, height)
+          if (await this.prewarmDecodedSample(sample, ctx, x, y, width, height, onCapturedFrame)) {
             decoded++
           }
         } finally {
@@ -659,20 +696,44 @@ export class VideoFrameExtractor {
       }
       return decoded
     } catch (error) {
-      // "key frame required after flush" or similar decoder error —
-      // disable batch mode for this source permanently.
-      const message = error instanceof Error ? error.message : String(error)
-      const isDecoderFlushError = /key frame|flush|InvalidStateError/i.test(message)
-      if (isDecoderFlushError) {
-        log.warn('Disabling batch prewarm for source (decoder flush error)', {
-          itemId: this.itemId,
-          error: message,
-          decoded,
-        })
-        this.batchDisabled = true
-      }
-      return decoded > 0 ? decoded : -1
+      return this.handleBatchPrewarmFailure(error, decoded)
     }
+  }
+
+  private canBatchPrewarm(timestamps: number[]): boolean {
+    return !this.batchDisabled && this.ready && this.sink !== null && timestamps.length > 0
+  }
+
+  private async prewarmDecodedSample(
+    sample: MediabunnySample,
+    ctx: OffscreenCanvasRenderingContext2D | CanvasRenderingContext2D,
+    x: number,
+    y: number,
+    width: number,
+    height: number,
+    onCapturedFrame?: (frame: ImageBitmap | VideoFrame, sourceTime: number) => void,
+  ): Promise<boolean> {
+    const capturedFrame = onCapturedFrame ? await this.captureOrientedSample(sample) : null
+    if (capturedFrame && onCapturedFrame) {
+      onCapturedFrame(capturedFrame, sample.timestamp)
+      return true
+    }
+    if (typeof sample.draw !== 'function') return false
+    sample.draw(ctx, x, y, width, height)
+    return true
+  }
+
+  private handleBatchPrewarmFailure(error: unknown, decoded: number): number {
+    const message = error instanceof Error ? error.message : String(error)
+    if (/key frame|flush|InvalidStateError/i.test(message)) {
+      log.warn('Disabling batch prewarm for source (decoder flush error)', {
+        itemId: this.itemId,
+        error: message,
+        decoded,
+      })
+      this.batchDisabled = true
+    }
+    return decoded > 0 ? decoded : -1
   }
 
   /**
@@ -733,6 +794,8 @@ export class VideoFrameExtractor {
     this.input = null
     this.videoTrack = null
     this.ready = false
+    this.captureCanvas = null
+    this.captureContext = null
     this.drawFailureCount = 0
     this.lastFailureKind = 'none'
   }

@@ -27,6 +27,7 @@ import {
   mapTimelineFrameToSubCompositionFrame,
   resolvePausedVariableSpeedPrewarmPlan,
   resolveActivePreviewLookaheadTimestamps,
+  resolvePreviewPreseekSource,
   shouldRunJumpPreseek,
 } from './render-pump-preseek'
 
@@ -61,6 +62,28 @@ function makeTrack(items: VideoItem[]): TimelineTrack {
 }
 
 describe('render pump preseek helpers', () => {
+  it('keeps worker preseek on the original source when proxy playback is disabled', () => {
+    expect(
+      resolvePreviewPreseekSource({
+        useProxy: false,
+        proxySource: 'blob:proxy',
+        liveSource: 'blob:original',
+        itemSource: 'blob:stale-item-source',
+      }),
+    ).toBe('blob:original')
+  })
+
+  it('uses the proxy source when proxy playback is enabled', () => {
+    expect(
+      resolvePreviewPreseekSource({
+        useProxy: true,
+        proxySource: 'blob:proxy',
+        liveSource: 'blob:original',
+        itemSource: 'blob:stale-item-source',
+      }),
+    ).toBe('blob:proxy')
+  })
+
   it('computes source time at a timeline frame', () => {
     const item = makeVideoItem({
       from: 10,

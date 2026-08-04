@@ -266,11 +266,10 @@ function resetSampleIterator(state: ExtractorState, startTimestamp: number): voi
   // decoding a range. Starting at the requested presentation timestamp keeps
   // that necessary GOP decode inside the sink without yielding a keyframe-to-
   // target runway that this worker would only close and discard.
-  state.sampleIterator = state.sink.samples(Math.max(0, startTimestamp), Infinity) as AsyncGenerator<
-    WorkerSample,
-    void,
-    unknown
-  >
+  state.sampleIterator = state.sink.samples(
+    Math.max(0, startTimestamp),
+    Infinity,
+  ) as AsyncGenerator<WorkerSample, void, unknown>
   state.iteratorDone = false
   state.lastRequestedTimestamp = null
 }
@@ -488,7 +487,16 @@ async function sparsePreseekWithState(
     // Sink calls are independent, so another generation may decode concurrently;
     // only the shared canvas draw is serialized below.
     sample = await state.sink.getSample(timestamp)
-    if (!sample || !shouldContinue()) return null
+    if (!sample || !shouldContinue()) {
+      if (!sample && shouldContinue()) {
+        self.postMessage({
+          type: 'debug',
+          step: 'active_decode_failed',
+          error: 'no-sample',
+        })
+      }
+      return null
+    }
     const previousDraw = state.drawLock ?? Promise.resolve()
     const draw = previousDraw.then(() =>
       shouldContinue() && sample ? renderSampleToBitmap(state, sample) : null,
@@ -498,7 +506,13 @@ async function sparsePreseekWithState(
       () => undefined,
     )
     return await draw
-  } catch {
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    self.postMessage({
+      type: 'debug',
+      step: 'active_decode_failed',
+      error: message,
+    })
     return null
   } finally {
     closeSample(sample)
@@ -624,10 +638,7 @@ self.onmessage = async (event: MessageEvent) => {
     if (src) {
       activePreviewGenerationBySrc.set(
         src,
-        Math.max(
-          activePreviewGenerationBySrc.get(src) ?? 0,
-          Number(msg.generation) || 0,
-        ),
+        Math.max(activePreviewGenerationBySrc.get(src) ?? 0, Number(msg.generation) || 0),
       )
     }
     return
@@ -687,10 +698,7 @@ self.onmessage = async (event: MessageEvent) => {
   if (isActivePreviewRequest) {
     activePreviewGenerationBySrc.set(
       msg.src,
-      Math.max(
-        activePreviewGenerationBySrc.get(msg.src) ?? 0,
-        Number(msg.generation) || 0,
-      ),
+      Math.max(activePreviewGenerationBySrc.get(msg.src) ?? 0, Number(msg.generation) || 0),
     )
   }
 

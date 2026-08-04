@@ -1,4 +1,4 @@
-export interface MediaPlaybackDiagnosticSnapshot {
+interface MediaPlaybackDiagnosticSnapshot {
   durationMs: number
   rafFps: number
   presentedFps: number
@@ -22,6 +22,30 @@ type DiagnosticVideo = HTMLVideoElement & {
 
 function perSecond(intervals: number, durationMs: number): number {
   return durationMs > 0 ? (intervals * 1000) / durationMs : 0
+}
+
+function elapsedBetween(firstMs: number | null, lastMs: number | null): number {
+  return firstMs === null || lastMs === null ? 0 : Math.max(0, lastMs - firstMs)
+}
+
+function qualityDelta(
+  quality: VideoPlaybackQualityLike | undefined,
+  initialValue: number | null,
+  select: (value: VideoPlaybackQualityLike) => number,
+): number | null {
+  return quality && initialValue !== null ? Math.max(0, select(quality) - initialValue) : null
+}
+
+function displayedFrameCount(totalFrames: number | null, droppedFrames: number | null) {
+  return totalFrames === null || droppedFrames === null
+    ? null
+    : Math.max(0, totalFrames - droppedFrames)
+}
+
+function mediaAdvance(firstMediaTime: number | null, lastMediaTime: number | null): number {
+  return firstMediaTime === null || lastMediaTime === null
+    ? 0
+    : Math.max(0, lastMediaTime - firstMediaTime)
 }
 
 function publishMediaPlaybackDiagnostics(
@@ -68,24 +92,19 @@ export function observeMediaPlaybackDiagnostics(video: HTMLVideoElement): () => 
 
   const snapshot = (nowMs: number): MediaPlaybackDiagnosticSnapshot => {
     const quality = (video as DiagnosticVideo).getVideoPlaybackQuality?.()
-    const rafDurationMs =
-      firstRafAtMs === null || lastRafAtMs === null ? 0 : lastRafAtMs - firstRafAtMs
-    const presentationDurationMs =
-      firstPresentationAtMs === null || lastPresentationAtMs === null
-        ? 0
-        : lastPresentationAtMs - firstPresentationAtMs
-    const droppedFrames =
-      quality && initialDroppedFrames !== null
-        ? Math.max(0, quality.droppedVideoFrames - initialDroppedFrames)
-        : null
-    const totalVideoFrames =
-      quality && initialTotalVideoFrames !== null
-        ? Math.max(0, quality.totalVideoFrames - initialTotalVideoFrames)
-        : null
-    const displayedFrames =
-      totalVideoFrames === null || droppedFrames === null
-        ? null
-        : Math.max(0, totalVideoFrames - droppedFrames)
+    const rafDurationMs = elapsedBetween(firstRafAtMs, lastRafAtMs)
+    const presentationDurationMs = elapsedBetween(firstPresentationAtMs, lastPresentationAtMs)
+    const droppedFrames = qualityDelta(
+      quality,
+      initialDroppedFrames,
+      (value) => value.droppedVideoFrames,
+    )
+    const totalVideoFrames = qualityDelta(
+      quality,
+      initialTotalVideoFrames,
+      (value) => value.totalVideoFrames,
+    )
+    const displayedFrames = displayedFrameCount(totalVideoFrames, droppedFrames)
     const callbackFps = perSecond(Math.max(0, callbackFrames - 1), presentationDurationMs)
     return {
       durationMs: Math.max(0, nowMs - startedAtMs),
@@ -98,10 +117,7 @@ export function observeMediaPlaybackDiagnostics(video: HTMLVideoElement): () => 
       rafTicks,
       presentedFrames: displayedFrames ?? callbackFrames,
       callbackFrames,
-      mediaAdvanceSeconds:
-        firstMediaTime === null || lastMediaTime === null
-          ? 0
-          : Math.max(0, lastMediaTime - firstMediaTime),
+      mediaAdvanceSeconds: mediaAdvance(firstMediaTime, lastMediaTime),
       droppedFrames,
       totalVideoFrames,
     }

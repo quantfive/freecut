@@ -110,14 +110,17 @@ export function resolvePreviewDomVideoDrawDecision(
 export async function waitForPreviewDomVideoDrawDecision(
   options: ResolvePreviewDomVideoDrawDecisionOptions,
   maxWaitMs = PREVIEW_DOM_VIDEO_SEEK_WAIT_MS,
+  shouldContinue: () => boolean = () => true,
 ): Promise<PreviewDomVideoDrawDecision> {
   const initial = resolvePreviewDomVideoDrawDecision(options)
   const video = options.domVideo
-  if (initial.shouldDraw || !video || maxWaitMs <= 0) return initial
+  if (initial.shouldDraw || !video || maxWaitMs <= 0 || !shouldContinue()) return initial
 
   return new Promise((resolve) => {
     let settled = false
     let videoFrameCallbackId: number | null = null
+    let timeoutId: ReturnType<typeof setTimeout> | null = null
+    let cancellationPollId: ReturnType<typeof setInterval> | null = null
     const events = ['seeked', 'loadeddata', 'canplay', 'timeupdate'] as const
 
     const cleanup = () => {
@@ -125,7 +128,8 @@ export async function waitForPreviewDomVideoDrawDecision(
       if (videoFrameCallbackId !== null && 'cancelVideoFrameCallback' in video) {
         video.cancelVideoFrameCallback(videoFrameCallbackId)
       }
-      clearTimeout(timeoutId)
+      if (timeoutId !== null) clearTimeout(timeoutId)
+      if (cancellationPollId !== null) clearInterval(cancellationPollId)
     }
     const finish = (decision: PreviewDomVideoDrawDecision) => {
       if (settled) return
@@ -137,18 +141,20 @@ export async function waitForPreviewDomVideoDrawDecision(
       const decision = resolvePreviewDomVideoDrawDecision(options)
       if (decision.shouldDraw) finish(decision)
     }
+    const checkCancellation = () => {
+      if (!shouldContinue()) finish(resolvePreviewDomVideoDrawDecision(options))
+    }
 
     for (const eventName of events) video.addEventListener(eventName, check)
     if ('requestVideoFrameCallback' in video) {
       videoFrameCallbackId = video.requestVideoFrameCallback(() => check())
     }
-    const timeoutId = setTimeout(
-      () => finish(resolvePreviewDomVideoDrawDecision(options)),
-      maxWaitMs,
-    )
+    timeoutId = setTimeout(() => finish(resolvePreviewDomVideoDrawDecision(options)), maxWaitMs)
+    cancellationPollId = setInterval(checkCancellation, 16)
     // Avoid missing readiness that changed between the initial check and
     // listener registration.
     check()
+    checkCancellation()
   })
 }
 

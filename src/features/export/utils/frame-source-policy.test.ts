@@ -46,6 +46,27 @@ describe('frame-source-policy', () => {
     await expect(waiting).resolves.toMatchObject({ hasReadyDomVideo: true, shouldDraw: true })
   })
 
+  it('cancels an obsolete DOM seek wait before its full timeout', async () => {
+    const target = new EventTarget()
+    const video = Object.assign(target, {
+      currentTime: 0,
+      readyState: 1,
+      videoWidth: 1920,
+      videoHeight: 1080,
+      dataset: {},
+    }) as unknown as HTMLVideoElement
+    let current = true
+    const waiting = waitForPreviewDomVideoDrawDecision(
+      { domVideo: video, sourceTime: 10, speed: 1, isRenderingTransition: false },
+      1_000,
+      () => current,
+    )
+
+    current = false
+
+    await expect(waiting).resolves.toMatchObject({ shouldDraw: false })
+  })
+
   it('accepts a ready DOM video when drift is within threshold', () => {
     const decision = resolvePreviewDomVideoDrawDecision({
       domVideo: makeDomVideo({ currentTime: 10.12 }),

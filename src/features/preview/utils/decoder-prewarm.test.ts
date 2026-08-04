@@ -9,12 +9,15 @@ import {
   disposePrewarmWorker,
   getCachedActivePreviewFallbackBitmap,
   getDecoderPrewarmMetricsSnapshot,
+  hasActivePreviewDecodeFailure,
   isActivePreviewFrameCurrent,
   isActivePreviewFrameDecodeReady,
   isActivePreviewSourceTarget,
   replaceActivePreviewSourceTargets,
+  scheduleActivePreviewRetry,
   setActivePreviewRenderTarget,
   settleActivePreviewRenderTarget,
+  subscribeActivePreviewReady,
   waitForInflightPredecodedBitmap,
   warmDecoderPrewarmWorkerPool,
 } from './decoder-prewarm'
@@ -284,6 +287,54 @@ describe('decoder prewarm', () => {
     )
   })
 
+  it('aborts obsolete speculative lookahead when the active target moves', async () => {
+    autoRespondPreseek = false
+    warmDecoderPrewarmWorkerPool()
+    const generalWorkers = getGeneralWorkers()
+    const activeWorker = createdWorkers[generalWorkers.length]!
+    registerObjectUrl('blob:lookahead-cancel', new Blob(['lookahead']))
+
+    const first = activePreviewPreseek({
+      src: 'blob:lookahead-cancel',
+      timestamp: 1,
+      lookaheadTimestamps: [1.1, 1.2],
+    })
+    const firstPost = activeWorker.postMessage.mock.calls
+      .map(([message]) => message as MockWorkerMessage)
+      .find((message) => message.type === 'active_preseek')!
+    activeWorker.onmessage?.({
+      data: {
+        type: 'preseek_done',
+        id: firstPost.id,
+        success: true,
+        timestamp: 1,
+        bitmap: mockBitmap,
+      },
+    } as MessageEvent)
+    await expect(first).resolves.toBe(mockBitmap)
+
+    const lookaheadPost = await vi.waitFor(() => {
+      const post = generalWorkers
+        .flatMap((worker) => worker.postMessage.mock.calls)
+        .map(([message]) => message as MockWorkerMessage)
+        .find((message) => message.type === 'batch_preseek')
+      expect(post).toBeDefined()
+      return post!
+    })
+
+    void activePreviewPreseek({ src: 'blob:lookahead-cancel', timestamp: 10 })
+
+    expect(
+      generalWorkers.some((worker) =>
+        worker.postMessage.mock.calls.some(
+          ([message]) =>
+            (message as MockWorkerMessage).type === 'batch_cancel' &&
+            (message as MockWorkerMessage).id === lookaheadPost.id,
+        ),
+      ),
+    ).toBe(true)
+  })
+
   it('bounds independent active decodes and retains only the latest held-scrub target', async () => {
     autoRespondPreseek = false
     warmDecoderPrewarmWorkerPool()
@@ -433,6 +484,64 @@ describe('decoder prewarm', () => {
     await new Promise((resolve) => setTimeout(resolve, 180))
     expect(isActivePreviewFrameCurrent(45)).toBe(false)
     expect(getCachedActivePreviewFallbackBitmap('blob:settle', 3)).toBeNull()
+  })
+
+  it('settles an exact original-resolution presentation without a worker bitmap', async () => {
+    setActivePreviewRenderTarget(46)
+    replaceActivePreviewSourceTargets(new Map([['blob:dom-exact', [4]]]))
+
+    settleActivePreviewRenderTarget(46, true)
+    await new Promise((resolve) => setTimeout(resolve, 180))
+
+    expect(isActivePreviewFrameCurrent(46)).toBe(false)
+  })
+
+  it('releases strict preview mode and wakes rendering when the latest exact decode fails', async () => {
+    autoRespondPreseek = false
+    warmDecoderPrewarmWorkerPool()
+    const activeWorker = createdWorkers[getGeneralWorkers().length]!
+    registerObjectUrl('blob:failed-active', new Blob(['failed']))
+    setActivePreviewRenderTarget(47)
+    replaceActivePreviewSourceTargets(new Map([['blob:failed-active', [5]]]))
+    const onReady = vi.fn()
+    const unsubscribe = subscribeActivePreviewReady(onReady)
+
+    const pending = activePreviewPreseek({ src: 'blob:failed-active', timestamp: 5 })
+    const post = activeWorker.postMessage.mock.calls
+      .map(([message]) => message as MockWorkerMessage)
+      .find((message) => message.type === 'active_preseek')!
+    activeWorker.onmessage?.({
+      data: {
+        type: 'preseek_done',
+        id: post.id,
+        success: false,
+        timestamp: 5,
+      },
+    } as MessageEvent)
+
+    await expect(pending).resolves.toBeNull()
+    expect(isActivePreviewFrameCurrent(47)).toBe(true)
+    expect(hasActivePreviewDecodeFailure('blob:failed-active', 5)).toBe(true)
+    expect(onReady).toHaveBeenCalledWith('blob:failed-active', 5)
+    unsubscribe()
+  })
+
+  it('coalesces DOM decoder retries for the current active source target', async () => {
+    vi.useFakeTimers()
+    setActivePreviewRenderTarget(48)
+    replaceActivePreviewSourceTargets(new Map([['blob:dom-retry', [6]]]))
+    const onReady = vi.fn()
+    const unsubscribe = subscribeActivePreviewReady(onReady)
+
+    scheduleActivePreviewRetry('blob:dom-retry', 6, 80)
+    scheduleActivePreviewRetry('blob:dom-retry', 6, 80)
+    setActivePreviewRenderTarget(null)
+    await vi.advanceTimersByTimeAsync(80)
+
+    expect(onReady).toHaveBeenCalledOnce()
+    expect(onReady).toHaveBeenCalledWith('blob:dom-retry', 6)
+    unsubscribe()
+    vi.useRealTimers()
   })
 
   it('gates an active composition until every exact source target is cached', async () => {

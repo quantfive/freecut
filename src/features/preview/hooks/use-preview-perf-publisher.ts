@@ -4,7 +4,11 @@ import { usePlaybackStore } from '@/shared/state/playback'
 import { useTimelineStore } from '@/features/preview/deps/timeline-store'
 import { createLogger } from '@/shared/logging/logger'
 import { getDecoderPrewarmMetricsSnapshot } from '../utils/decoder-prewarm'
-import { recordPreviewDecoderMetrics } from '@/shared/logging/preview-scrub-performance'
+import {
+  recordPreviewDecoderMetrics,
+  recordPreviewFrameCacheMetrics,
+} from '@/shared/logging/preview-scrub-performance'
+import { getActivePreviewScrubbingCache } from '../utils/preview-scrubbing-cache-bridge'
 import { getEffectivePreviewQuality, getFrameBudgetMs } from '../utils/adaptive-preview-quality'
 import {
   PREVIEW_PERF_PUBLISH_INTERVAL_MS,
@@ -131,6 +135,8 @@ export function usePreviewPerfPublisher({
         : 0
       const preseekMetrics = getDecoderPrewarmMetricsSnapshot()
       recordPreviewDecoderMetrics(preseekMetrics)
+      const frameCacheMetrics = getActivePreviewScrubbingCache()?.getStats()
+      if (frameCacheMetrics) recordPreviewFrameCacheMetrics(frameCacheMetrics)
       const snapshot: PreviewPerfSnapshot = {
         ts: Date.now(),
         unresolvedQueue: getUnresolvedQueueSize(),

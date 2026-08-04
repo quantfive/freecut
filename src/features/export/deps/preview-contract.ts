@@ -6,6 +6,8 @@
 export { ScrubbingCache } from '@/features/preview/utils/scrubbing-cache'
 export { getCachedPredecodedBitmap } from '@/features/preview/utils/decoder-prewarm'
 export { getCachedActivePreviewFallbackBitmap } from '@/features/preview/utils/decoder-prewarm'
+export { hasActivePreviewDecodeFailure } from '@/features/preview/utils/decoder-prewarm'
+export { scheduleActivePreviewRetry } from '@/features/preview/utils/decoder-prewarm'
 export { isActivePreviewTargetSuperseded } from '@/features/preview/utils/decoder-prewarm'
 export { isActivePreviewFrameSuperseded } from '@/features/preview/utils/decoder-prewarm'
 export { isActivePreviewFrameCurrent } from '@/features/preview/utils/decoder-prewarm'
