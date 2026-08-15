@@ -8,6 +8,8 @@
     "dev:quiet": "vp dev --host --mode perf",
     "dev:compare": "node scripts/run-dev-and-perf.mjs",
     "build": "vp build",
+    "verify:provenance": "node scripts/package-reproducible.mjs --verify-only",
+    "package:reproducible": "node scripts/package-reproducible.mjs",
     "build:perf": "vp build --mode perf",
     "lint": "vp lint src headless vite.config.ts",
     "lint:fix": "vp lint src headless vite.config.ts --fix",

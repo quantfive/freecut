@@ -1,0 +1,42 @@
+{
+  "schema": "freecut-pr2-asset-inventory/v1",
+  "hashAlgorithm": "sha256",
+  "hashInput": "Sorted tracked file records encoded as path\\0byteCount\\0fileSha256\\n; the path is repository-relative and uses POSIX separators.",
+  "roots": [
+    {
+      "path": "public",
+      "kind": "public static assets and vendored runtime files",
+      "fileCount": 29,
+      "byteCount": 21860045,
+      "sha256": "6b1ad3214755ed907957f379982188a5e19faf29aa267564f21ed94552f29e94"
+    },
+    {
+      "path": "src/features/editor/components/transition-preview/frame-a.svg",
+      "kind": "transition preview asset",
+      "fileCount": 1,
+      "byteCount": 706,
+      "sha256": "cae3704ccb0193cfc4974dbf59107927e7694080e9c413d84059ab6572abcc5e"
+    },
+    {
+      "path": "src/features/editor/components/transition-preview/frame-b.svg",
+      "kind": "transition preview asset",
+      "fileCount": 1,
+      "byteCount": 898,
+      "sha256": "c6ee514594706fca2f4dc35e3cd24a562714dd45d7844a0a867d4552e375e221"
+    },
+    {
+      "path": "src/features/effects/components/effect-thumbnail/sample.svg",
+      "kind": "effect thumbnail asset",
+      "fileCount": 1,
+      "byteCount": 1166,
+      "sha256": "9d93be5689130f439b447f14294683a0af321b0cb9cc2c12850f6b0b181b49f9"
+    },
+    {
+      "path": "src/infrastructure/upscale/models",
+      "kind": "bundled Anime4K weights and retained notice/source",
+      "fileCount": 5,
+      "byteCount": 47322,
+      "sha256": "e3a2c4bbe898303f3ff1a4dd7d69b12aaacdd078d8a6a76a66971258155864d0"
+    }
+  ]
+}

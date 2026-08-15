@@ -1,0 +1,101 @@
+{
+  "schema": "freecut-pr2-provenance-baseline/v1",
+  "issue": "https://github.com/quantfive/codepress/issues/5319",
+  "scope": "PR 2 — FreeCut fork provenance and reproducible package baseline",
+  "upstream": {
+    "repository": "https://github.com/walterlow/freecut",
+    "fork": "https://github.com/quantfive/freecut",
+    "requestedRepository": "https://github.com/FreeCutEditor/freecut",
+    "requestedRepositoryStatus": "unavailable at baseline creation",
+    "selectionReason": "Issue #5319 identifies walterlow/freecut as the selected FreeCut source; the requested FreeCutEditor/freecut path was not resolvable.",
+    "revision": "4d62e8082c5eb387a96275bcbd323d28f6e41a62",
+    "revisionType": "git commit",
+    "tree": "54bf2dcc81213ba6669a6ecbed307e78dd552810",
+    "archive": {
+      "format": "tar",
+      "prefix": "freecut-4d62e8082c5eb387a96275bcbd323d28f6e41a62",
+      "sha256": "6429d2a2441502e923469332d997f3ddcb36bcfd968626e578a06b2cf9cbc7ad"
+    }
+  },
+  "license": {
+    "spdx": "MIT",
+    "path": "LICENSE",
+    "sha256": "af5b32e70d6c471cfb5f02b72dc289fd82622b7fb155c5a0332d1cc751533373"
+  },
+  "retainedNotices": [
+    {
+      "path": "src/infrastructure/audio/THIRD_PARTY_LICENSE",
+      "sha256": "a1a33180d02960ab1c5de36cf20b1a2f0fe9888d83826ad263da5db52f1b183b"
+    },
+    {
+      "path": "src/infrastructure/upscale/models/NOTICE.md",
+      "sha256": "0f82ace9b56ee97027c91838ece69c073fb2f4e58db441d23b80baab0c5a78fd"
+    }
+  ],
+  "dependencies": {
+    "packageJson": "package.json",
+    "packageJsonSha256": "b1b55899c8b54d0bea585df254ed9934e4b74f30fbc362b0ce1bcf8f29aab05e",
+    "lockfile": "package-lock.json",
+    "lockfileVersion": 3,
+    "lockfileSha256": "b4a86741ce7891da1f63df01b6fdd4ed507e8887d5097c6a0f93fc2ea6f3420e",
+    "inventory": "provenance/dependency-inventory.json"
+  },
+  "assets": {
+    "inventory": "provenance/asset-inventory.json",
+    "hashAlgorithm": "sha256"
+  },
+  "excludedOptionalModels": [
+    "Olicorne/parakeet-tdt-0.6b-v3-smoothquant-onnx",
+    "onnx-community/whisper-tiny_timestamped",
+    "onnx-community/whisper-base_timestamped",
+    "onnx-community/whisper-small_timestamped",
+    "onnx-community/whisper-large-v3-turbo_timestamped",
+    "onnx-community/gemma-4-E4B-it-ONNX",
+    "LiquidAI/LFM2.5-VL-450M-ONNX",
+    "Xenova/all-MiniLM-L6-v2",
+    "Xenova/clip-vit-base-patch32",
+    "Xenova/musicgen-small",
+    "onnx-community/Kokoro-82M-v1.0-ONNX",
+    "Supertone/supertonic-3",
+    "OpenMOSS-Team/MOSS-TTS-Nano-100M-ONNX",
+    "OpenMOSS-Team/MOSS-Audio-Tokenizer-Nano-ONNX",
+    "walterlow/RIFE_fp32_timestep"
+  ],
+  "excludedOptionalServices": [
+    "FreeCut headless loopback render service and its unauthenticated /v1 API",
+    "Hugging Face model APIs and model/CDN downloads",
+    "jsDelivr and esm.sh runtime CDN downloads",
+    "Google Fonts CSS API and remote font downloads",
+    "LottieFiles public GraphQL API and asset CDN",
+    "CodePress backend, command contract, adapters, and UI",
+    "Remotion and any procedural renderer integration"
+  ],
+  "packaging": {
+    "nodeMajor": 22,
+    "ciNodeVersion": "22.14.0",
+    "packageManager": "npm@11.8.0",
+    "installCommand": "npm ci --ignore-scripts",
+    "buildCommand": "npm run build",
+    "packageCommand": "npm run package:reproducible",
+    "artifactPattern": "artifacts/freecut-<source-revision>.tar.gz",
+    "archiveFormat": "deterministic tar.gz with sorted paths, zeroed mtimes, and uid/gid 0",
+    "contents": [
+      "dist/",
+      "LICENSE",
+      "notices/",
+      "package.json",
+      "package-lock.json",
+      "provenance/"
+    ]
+  },
+  "ciVerification": {
+    "workflow": ".github/workflows/reproducible-package.yml",
+    "checks": [
+      "source revision ancestry, tree, and archive checksum",
+      "MIT license and retained notice checksums",
+      "package and lockfile checksum plus direct dependency inventory",
+      "tracked asset counts, byte totals, and checksums",
+      "two package runs compare byte-for-byte"
+    ]
+  }
+}

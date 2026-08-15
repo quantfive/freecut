@@ -1,0 +1,49 @@
+name: Reproducible Package Baseline
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - staging
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    name: Verify and package baseline
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.14.0'
+          cache: npm
+
+      - name: Select pinned npm
+        run: npm install --global npm@11.8.0
+
+      - name: Install locked dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Verify provenance, dependency, and asset inventories
+        run: npm run verify:provenance
+
+      - name: Build and package
+        run: npm run package:reproducible
+
+      - name: Rebuild and compare package bytes
+        shell: bash
+        run: |
+          artifact="$(find artifacts -maxdepth 1 -type f -name 'freecut-*.tar.gz' -print -quit)"
+          test -n "$artifact"
+          cp "$artifact" "$RUNNER_TEMP/freecut-first.tar.gz"
+          npm run package:reproducible
+          cmp --silent "$RUNNER_TEMP/freecut-first.tar.gz" "$artifact"
