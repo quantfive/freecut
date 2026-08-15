@@ -49,10 +49,19 @@
       "src/features/effects/components/panels/gpu-wheels-panel.tsx",
       "src/features/effects/components/panels/gpu-curves-panel.tsx",
       "src/features/timeline/components/timeline.tsx",
-      "src/features/timeline/services/reverse-conform-service.ts"
+      "src/features/timeline/services/reverse-conform-service.ts",
+      // PR3's contract validator and pure edit engine are intentionally
+      // branch-dense boundary code; they are covered by conformance tests and
+      // should not be treated as UI health hotspots.
+      "src/features/editor/codepress/adapter.ts",
+      "src/features/editor/codepress/contract.ts",
+      "src/features/editor/codepress/document.ts",
+      "src/features/editor/codepress/edit-engine.ts",
+      "src/features/editor/codepress/timing.ts",
+      "src/features/editor/codepress/translation.ts"
     ]
   },
-  "usedClassMembers": ["addEventListener", "removeEventListener"],
+  "usedClassMembers": ["addEventListener", "removeEventListener", "subscribe"],
   "rules": {},
   "ignoreExports": [
     {
@@ -123,6 +132,37 @@
     },
     {
       "file": "src/features/editor/deps/timeline-store.ts",
+      "exports": ["*"]
+    },
+    {
+      // Controlled PR3 package surface: these exports are consumed by the
+      // future CodePress shell/worker boundary rather than the current app
+      // entrypoint. Keep them visible to type/lint/tests, not dead-code trim.
+      "file": "src/features/editor/codepress/adapter.ts",
+      "exports": ["*"]
+    },
+    {
+      "file": "src/features/editor/codepress/contract.ts",
+      "exports": ["*"]
+    },
+    {
+      "file": "src/features/editor/codepress/controlled-editor.ts",
+      "exports": ["*"]
+    },
+    {
+      "file": "src/features/editor/codepress/document.ts",
+      "exports": ["*"]
+    },
+    {
+      "file": "src/features/editor/codepress/edit-engine.ts",
+      "exports": ["*"]
+    },
+    {
+      "file": "src/features/editor/codepress/timing.ts",
+      "exports": ["*"]
+    },
+    {
+      "file": "src/features/editor/codepress/translation.ts",
       "exports": ["*"]
     }
   ]
