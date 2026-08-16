@@ -48,7 +48,13 @@ function stableSerialize(value: unknown): string {
 }
 
 function copyResult<T>(value: T): T {
-  return JSON.parse(JSON.stringify(value)) as T
+  const clone = (entry: unknown): unknown => {
+    if (entry === null || (typeof entry !== 'object' && typeof entry !== 'bigint')) return entry
+    if (typeof entry === 'bigint') return entry
+    if (Array.isArray(entry)) return entry.map(clone)
+    return Object.fromEntries(Object.entries(entry).map(([key, child]) => [key, clone(child)]))
+  }
+  return clone(value) as T
 }
 
 function emptyActual(): Record<string, string | number | boolean | null> {

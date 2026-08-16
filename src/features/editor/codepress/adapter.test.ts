@@ -24,6 +24,7 @@ import type {
   TimelineState,
 } from './contract'
 import type { ControlledEditorDocument } from './interfaces'
+import type { FrameRateLike } from './timing'
 
 function readFixture<T>(relativePath: string): T {
   return JSON.parse(
@@ -111,7 +112,7 @@ function timeline(overrides: Partial<TimelineState> = {}): TimelineState {
   }
 }
 
-function documentFor(next: TimelineState, fps = 30): ControlledEditorDocument {
+function documentFor(next: TimelineState, fps: FrameRateLike = 30): ControlledEditorDocument {
   return { timeline: next, fps, width: 1920, height: 1080 }
 }
 
@@ -238,6 +239,103 @@ describe('controlled command adapter', () => {
       from: 30,
       durationInFrames: 60,
     })
+  })
+
+  it('round-trips nonzero-start clip, text, and caption endpoints at fractional FPS', () => {
+    const rates: readonly FrameRateLike[] = [
+      29.97,
+      { numerator: 30_000n, denominator: 1_001n, value: 30_000 / 1_001 },
+    ]
+    for (const fps of rates) {
+      const frameDocument = {
+        timelineId: 'timeline-fractional',
+        revision: 2,
+        fps,
+        durationInFrames: 180,
+        media: [videoMedia],
+        tracks: [
+          {
+            id: 'track-video',
+            kind: 'video' as const,
+            name: 'Video',
+            locked: false,
+            muted: false,
+            items: [
+              {
+                type: 'video' as const,
+                id: 'clip-fractional',
+                trackId: 'track-video',
+                mediaId: 'media-video',
+                from: 1,
+                durationInFrames: 1,
+                sourceStart: 2,
+                sourceEnd: 3,
+              },
+            ],
+          },
+          {
+            id: 'track-overlay',
+            kind: 'overlay' as const,
+            name: 'Overlay',
+            locked: false,
+            muted: false,
+            items: [
+              {
+                type: 'text' as const,
+                id: 'text-fractional',
+                trackId: 'track-overlay',
+                from: 2,
+                durationInFrames: 1,
+                text: 'Fractional text',
+              },
+            ],
+          },
+          {
+            id: 'track-captions',
+            kind: 'caption' as const,
+            name: 'Captions',
+            language: 'en',
+            locked: false,
+            muted: false,
+            items: [
+              {
+                type: 'caption_cue' as const,
+                id: 'cue-fractional',
+                trackId: 'track-captions',
+                from: 3,
+                durationInFrames: 1,
+                text: 'Fractional cue',
+              },
+            ],
+          },
+        ],
+        width: 1920,
+        height: 1080,
+      }
+      const controlled = freeCutDocumentToControlledDocument(frameDocument)
+      const clipItem = controlled.timeline.tracks[0]?.items[0]
+      const textItem = controlled.timeline.tracks[1]?.items[0]
+      const cueItem = controlled.timeline.tracks[2]?.items[0]
+      expect(clipItem).toMatchObject({
+        timeline_start_us: framesToMicroseconds(1, fps),
+        timeline_end_us: framesToMicroseconds(2, fps),
+        source_start_us: framesToMicroseconds(2, fps),
+        source_end_us: framesToMicroseconds(3, fps),
+      })
+      expect(textItem).toMatchObject({
+        timeline_start_us: framesToMicroseconds(2, fps),
+        timeline_end_us: framesToMicroseconds(3, fps),
+      })
+      expect(cueItem).toMatchObject({
+        start_us: framesToMicroseconds(3, fps),
+        end_us: framesToMicroseconds(4, fps),
+      })
+
+      const roundTrip = controlledDocumentToFreeCutDocument(controlled)
+      expect(roundTrip.tracks[0]?.items[0]).toMatchObject({ from: 1, durationInFrames: 1 })
+      expect(roundTrip.tracks[1]?.items[0]).toMatchObject({ from: 2, durationInFrames: 1 })
+      expect(roundTrip.tracks[2]?.items[0]).toMatchObject({ from: 3, durationInFrames: 1 })
+    }
   })
 
   it('applies the canonical core fixture atomically and reports normalized effects', () => {
@@ -387,6 +485,112 @@ describe('controlled command adapter', () => {
     expect(selected.timeline.duration_us).toBe(10_000_000)
   })
 
+  it('re-encodes NTSC ripple endpoints independently at fractional FPS', () => {
+    const fps: FrameRateLike = {
+      numerator: 30_000n,
+      denominator: 1_001n,
+      value: 30_000 / 1_001,
+    }
+    const frame = (value: number) => framesToMicroseconds(value, fps)
+    const base = timeline({
+      duration_us: frame(12),
+      tracks: [
+        {
+          track_id: 'track-video',
+          kind: 'video',
+          name: 'Video',
+          locked: false,
+          muted: false,
+          items: [
+            clip({
+              item_id: 'before-ntsc',
+              timeline_start_us: frame(0),
+              timeline_end_us: frame(1),
+              source_start_us: frame(0),
+              source_end_us: frame(1),
+            }),
+            clip({
+              item_id: 'after-ntsc',
+              timeline_start_us: frame(2),
+              timeline_end_us: frame(3),
+              source_start_us: frame(2),
+              source_end_us: frame(3),
+            }),
+          ],
+        },
+        {
+          track_id: 'track-captions',
+          kind: 'caption',
+          name: 'Captions',
+          language: 'en',
+          locked: false,
+          muted: false,
+          items: [
+            {
+              item_type: 'caption_cue',
+              cue_id: 'cue-after-ntsc',
+              track_id: 'track-captions',
+              start_us: frame(2),
+              end_us: frame(3),
+              text: 'After NTSC',
+            },
+          ],
+        },
+      ],
+    })
+    const adapter = new CodePressCommandAdapter({ document: documentFor(base, fps) })
+    const result = applyRequest(adapter, {
+      contract_version: 1,
+      timeline_id: 'timeline-test',
+      operation_id: 'ripple-ntsc',
+      idempotency_key: 'ripple-ntsc:1',
+      base_revision: 0,
+      preconditions: [],
+      commands: [
+        {
+          command_id: 'ripple-ntsc-command',
+          type: 'ripple_delete',
+          start_us: frame(1),
+          end_us: frame(2),
+          track_ids: null,
+        },
+      ],
+    })
+    const videoAfter = result.timeline.tracks[0]?.items.find(
+      (item) => itemIdForTest(item) === 'after-ntsc',
+    )
+    const captionAfter = result.timeline.tracks[1]?.items.find(
+      (item) => itemIdForTest(item) === 'cue-after-ntsc',
+    )
+    expect(videoAfter).toMatchObject({
+      timeline_start_us: frame(1),
+      timeline_end_us: frame(2),
+    })
+    expect(captionAfter).toMatchObject({ start_us: frame(1), end_us: frame(2) })
+    expect(result.timeline.duration_us).toBe(frame(11))
+    expect(validateTimelineState(result.timeline).ok).toBe(true)
+
+    const next = adapter.apply({
+      contract_version: 1,
+      timeline_id: 'timeline-test',
+      operation_id: 'move-after-ntsc',
+      idempotency_key: 'move-after-ntsc:1',
+      base_revision: 1,
+      preconditions: [],
+      commands: [
+        {
+          command_id: 'move-after-ntsc-command',
+          type: 'move_item',
+          item_id: 'after-ntsc',
+          to_track_id: 'track-video',
+          timeline_start_us: frame(1),
+          index: 1,
+        },
+      ],
+    })
+    expect(next.status).toBe('applied')
+  })
+
   it('keeps the left fragment ID and derives a stable right fragment for a crossing item', () => {
     const crossing = new CodePressCommandAdapter({
       document: documentFor(
@@ -476,6 +680,43 @@ describe('controlled command adapter', () => {
     expect(result.status).toBe('rejected')
     expect(adapter.getSnapshot().revision).toBe(0)
     expect(adapter.getSnapshot().document.timeline.tracks[0]?.items).toHaveLength(1)
+  })
+
+  it('rejects request_job until a host dispatch boundary is implemented', () => {
+    let hostCalls = 0
+    const adapter = new CodePressCommandAdapter({
+      document: documentFor(timeline()),
+      hosts: {
+        mediaJobClient: {
+          request: () => {
+            hostCalls += 1
+            return { job_id: 'job-should-not-run' }
+          },
+        },
+      },
+    })
+    const result = adapter.apply({
+      contract_version: 1,
+      timeline_id: 'timeline-test',
+      operation_id: 'request-job',
+      idempotency_key: 'request-job:1',
+      base_revision: 0,
+      preconditions: [],
+      commands: [
+        {
+          command_id: 'request-job-command',
+          type: 'request_job',
+          job_type: 'thumbnail',
+          media_id: 'media-video',
+        },
+      ],
+    })
+    expect(result).toMatchObject({
+      status: 'rejected',
+      error: { code: 'unsupported_command', retryable: false },
+    })
+    expect(hostCalls).toBe(0)
+    expect(adapter.getSnapshot().revision).toBe(0)
   })
 
   it('returns explicit revision and idempotency conflicts', () => {

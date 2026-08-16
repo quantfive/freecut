@@ -14,17 +14,22 @@ export interface FrameRate {
   readonly value: number
 }
 
+/** A numeric rate is convenient for ordinary documents; the rational form
+ * preserves exact NTSC-style rates such as 30000/1001. */
+export type FrameRateLike = number | FrameRate
+
 export type TimingRounding = 'nearest' | 'floor' | 'ceil'
 
 export class FrameTimingError extends Error {
   readonly microseconds: number
   readonly fps: number
 
-  constructor(microseconds: number, fps: number) {
-    super(`${microseconds}µs is not aligned to an integer frame at ${fps}fps`)
+  constructor(microseconds: number, fps: FrameRateLike) {
+    const value = typeof fps === 'number' ? fps : fps.value
+    super(`${microseconds}µs is not aligned to an integer frame at ${value}fps`)
     this.name = 'FrameTimingError'
     this.microseconds = microseconds
-    this.fps = fps
+    this.fps = value
   }
 }
 
@@ -55,9 +60,26 @@ function decimalToRational(value: number): { numerator: bigint; denominator: big
   return { numerator: numerator / divisor, denominator: denominator / divisor }
 }
 
-export function normalizeFrameRate(fps: number): FrameRate {
-  const rational = decimalToRational(fps)
-  return { ...rational, value: fps }
+export function normalizeFrameRate(fps: FrameRateLike): FrameRate {
+  if (typeof fps === 'number') {
+    const rational = decimalToRational(fps)
+    return { ...rational, value: fps }
+  }
+  if (
+    typeof fps.numerator !== 'bigint' ||
+    typeof fps.denominator !== 'bigint' ||
+    fps.numerator <= 0n ||
+    fps.denominator <= 0n ||
+    !Number.isFinite(fps.value) ||
+    fps.value <= 0
+  )
+    throw new RangeError('fps must be a finite positive rational rate')
+  const divisor = gcd(fps.numerator, fps.denominator)
+  return {
+    numerator: fps.numerator / divisor,
+    denominator: fps.denominator / divisor,
+    value: fps.value,
+  }
 }
 
 function assertMicroseconds(value: number): void {
@@ -83,7 +105,7 @@ function divideRounded(numerator: bigint, denominator: bigint, rounding: TimingR
 /** Convert an integer microsecond timestamp to a frame, requiring alignment by default. */
 export function microsecondsToFrames(
   microseconds: number,
-  fps: number | FrameRate,
+  fps: FrameRateLike,
   options: { rounding?: TimingRounding; requireAligned?: boolean } = {},
 ): number {
   assertMicroseconds(microseconds)
@@ -111,7 +133,7 @@ export function microsecondsToFrames(
 /** Convert an integer frame position to the nearest integer microsecond. */
 export function framesToMicroseconds(
   frames: number,
-  fps: number | FrameRate,
+  fps: FrameRateLike,
   rounding: TimingRounding = 'nearest',
 ): number {
   assertFrames(frames)
@@ -123,7 +145,7 @@ export function framesToMicroseconds(
   return result
 }
 
-export function isFrameAligned(microseconds: number, fps: number | FrameRate): boolean {
+export function isFrameAligned(microseconds: number, fps: FrameRateLike): boolean {
   try {
     microsecondsToFrames(microseconds, fps)
     return true
@@ -133,7 +155,7 @@ export function isFrameAligned(microseconds: number, fps: number | FrameRate): b
   }
 }
 
-export function assertFrameAligned(microseconds: number, fps: number | FrameRate): number {
+export function assertFrameAligned(microseconds: number, fps: FrameRateLike): number {
   return microsecondsToFrames(microseconds, fps, { requireAligned: true })
 }
 
@@ -145,7 +167,7 @@ export interface FrameInterval {
 export function microsecondIntervalToFrames(
   start_us: number,
   end_us: number,
-  fps: number | FrameRate,
+  fps: FrameRateLike,
 ): FrameInterval {
   const start = assertFrameAligned(start_us, fps)
   const end = assertFrameAligned(end_us, fps)

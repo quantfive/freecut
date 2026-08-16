@@ -1,4 +1,4 @@
-import { assertFrameAligned } from './timing'
+import { assertFrameAligned, type FrameRateLike } from './timing'
 import type {
   CaptionCue,
   ClipItem,
@@ -117,13 +117,13 @@ export type FrameEditCommand =
   | Extract<EditCommand, { type: 'set_caption_style' | 'request_job' }>
 
 export interface FrameEditCommandBatch extends Omit<EditCommandBatch, 'commands'> {
-  fps: number
+  fps: FrameRateLike
   commands: readonly FrameEditCommand[]
 }
 
 function transitionToFrames(
   transition: Transition | null | undefined,
-  fps: number,
+  fps: FrameRateLike,
 ): FrameTransition | null | undefined {
   if (transition === undefined) return undefined
   if (transition === null) return null
@@ -133,7 +133,7 @@ function transitionToFrames(
   }
 }
 
-function keyframeToFrames(keyframe: Keyframe, fps: number): FrameKeyframe {
+function keyframeToFrames(keyframe: Keyframe, fps: FrameRateLike): FrameKeyframe {
   return {
     property: keyframe.property,
     time_frame: assertFrameAligned(keyframe.time_us, fps),
@@ -142,7 +142,7 @@ function keyframeToFrames(keyframe: Keyframe, fps: number): FrameKeyframe {
   }
 }
 
-function itemToFrames(item: TimelineItem, fps: number): FrameItem {
+function itemToFrames(item: TimelineItem, fps: FrameRateLike): FrameItem {
   if (item.item_type === 'caption_cue') {
     return {
       ...item,
@@ -176,7 +176,7 @@ function itemToFrames(item: TimelineItem, fps: number): FrameItem {
 
 function propertiesToFrames(
   properties: ItemPropertiesPatch,
-  fps: number,
+  fps: FrameRateLike,
 ): FrameItemPropertiesPatch {
   return {
     ...properties,
@@ -198,7 +198,10 @@ function propertiesToFrames(
   }
 }
 
-export function translateCommandToFrames(command: EditCommand, fps: number): FrameEditCommand {
+export function translateCommandToFrames(
+  command: EditCommand,
+  fps: FrameRateLike,
+): FrameEditCommand {
   switch (command.type) {
     case 'add_clip':
       return { ...command, item: itemToFrames(command.item, fps) as FrameClipItem }
@@ -259,7 +262,7 @@ export function translateCommandToFrames(command: EditCommand, fps: number): Fra
 
 export function translateCommandBatchToFrames(
   batch: EditCommandBatch,
-  fps: number,
+  fps: FrameRateLike,
 ): FrameEditCommandBatch {
   return {
     ...batch,

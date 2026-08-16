@@ -1,4 +1,9 @@
-import { assertFrameAligned, framesToMicroseconds } from './timing'
+import {
+  assertFrameAligned,
+  framesToMicroseconds,
+  normalizeFrameRate,
+  type FrameRateLike,
+} from './timing'
 import type {
   AddCaptionTrackCommand,
   AddClipCommand,
@@ -168,21 +173,55 @@ function setItemTrack(item: TimelineItem, track_id: TrackId): TimelineItem {
   return item.item_type === 'caption_cue' ? { ...item, track_id } : { ...item, track_id }
 }
 
-function sourceAtTimeline(item: ClipItem, timeline_us: number): number {
-  const timelineDuration = item.timeline_end_us - item.timeline_start_us
-  const sourceDuration = item.source_end_us - item.source_start_us
-  if (timeline_us <= item.timeline_start_us) return item.source_start_us
-  if (timeline_us >= item.timeline_end_us) return item.source_end_us
-  const numerator = BigInt(timeline_us - item.timeline_start_us) * BigInt(sourceDuration)
-  const denominator = BigInt(timelineDuration)
+function roundedRatio(numerator: bigint, denominator: bigint): bigint {
   const quotient = numerator / denominator
   const remainder = numerator % denominator
-  const rounded = remainder * 2n >= denominator ? quotient + 1n : quotient
-  return item.source_start_us + Number(rounded)
+  return remainder * 2n >= denominator ? quotient + 1n : quotient
 }
 
-function shiftItem(item: TimelineItem, delta_us: number): TimelineItem {
-  return setItemPosition(item, itemStart(item) - delta_us, itemEnd(item) - delta_us)
+function sourceAtTimelineFrame(item: ClipItem, timelineFrame: number, fps: FrameRateLike): number {
+  const timelineStartFrame = assertFrameAligned(item.timeline_start_us, fps)
+  const timelineEndFrame = assertFrameAligned(item.timeline_end_us, fps)
+  const sourceStartFrame = assertFrameAligned(item.source_start_us, fps)
+  const sourceEndFrame = assertFrameAligned(item.source_end_us, fps)
+  const timelineDuration = timelineEndFrame - timelineStartFrame
+  const sourceDuration = sourceEndFrame - sourceStartFrame
+  if (timelineFrame <= timelineStartFrame) return item.source_start_us
+  if (timelineFrame >= timelineEndFrame) return item.source_end_us
+  const sourceOffset = roundedRatio(
+    BigInt(timelineFrame - timelineStartFrame) * BigInt(sourceDuration),
+    BigInt(timelineDuration),
+  )
+  return framesToMicroseconds(sourceStartFrame + Number(sourceOffset), fps)
+}
+
+function frameRangeFor(item: TimelineItem, fps: FrameRateLike): { start: number; end: number } {
+  return {
+    start: assertFrameAligned(itemStart(item), fps),
+    end: assertFrameAligned(itemEnd(item), fps),
+  }
+}
+
+function setItemFramePosition(
+  item: TimelineItem,
+  startFrame: number,
+  endFrame: number,
+  fps: FrameRateLike,
+): TimelineItem {
+  return setItemPosition(
+    item,
+    framesToMicroseconds(startFrame, fps),
+    framesToMicroseconds(endFrame, fps),
+  )
+}
+
+function shiftItemByFrames(
+  item: TimelineItem,
+  deltaFrames: number,
+  fps: FrameRateLike,
+): TimelineItem {
+  const range = frameRangeFor(item, fps)
+  return setItemFramePosition(item, range.start - deltaFrames, range.end - deltaFrames, fps)
 }
 
 function deriveFragmentId(originalId: string, usedIds: Set<string>): string {
@@ -198,16 +237,21 @@ function deriveFragmentId(originalId: string, usedIds: Set<string>): string {
   )
 }
 
-function trimItemToRange(item: TimelineItem, start_us: number, end_us: number): TimelineItem {
+function trimItemToFrameRange(
+  item: TimelineItem,
+  startFrame: number,
+  endFrame: number,
+  fps: FrameRateLike,
+): TimelineItem {
+  const start_us = framesToMicroseconds(startFrame, fps)
+  const end_us = framesToMicroseconds(endFrame, fps)
   if (item.item_type === 'clip') {
-    const sourceStart = sourceAtTimeline(item, start_us)
-    const sourceEnd = sourceAtTimeline(item, end_us)
     return {
       ...item,
       timeline_start_us: start_us,
       timeline_end_us: end_us,
-      source_start_us: sourceStart,
-      source_end_us: sourceEnd,
+      source_start_us: sourceAtTimelineFrame(item, startFrame, fps),
+      source_end_us: sourceAtTimelineFrame(item, endFrame, fps),
     }
   }
   return setItemPosition(item, start_us, end_us)
@@ -215,30 +259,35 @@ function trimItemToRange(item: TimelineItem, start_us: number, end_us: number): 
 
 function expandRippleItem(
   item: TimelineItem,
-  start_us: number,
-  end_us: number,
-  delta_us: number,
+  startFrame: number,
+  endFrame: number,
+  deltaFrames: number,
+  fps: FrameRateLike,
   usedIds: Set<string>,
 ): { items: TimelineItem[]; created: string[]; updated: string[]; deleted: string[] } {
   const id = itemId(item)
-  const start = itemStart(item)
-  const end = itemEnd(item)
-  if (end <= start_us) return { items: [item], created: [], updated: [], deleted: [] }
-  if (start >= end_us)
-    return { items: [shiftItem(item, delta_us)], created: [], updated: [id], deleted: [] }
+  const range = frameRangeFor(item, fps)
+  if (range.end <= startFrame) return { items: [item], created: [], updated: [], deleted: [] }
+  if (range.start >= endFrame)
+    return {
+      items: [shiftItemByFrames(item, deltaFrames, fps)],
+      created: [],
+      updated: [id],
+      deleted: [],
+    }
 
-  const hasLeft = start < start_us
-  const hasRight = end > end_us
+  const hasLeft = range.start < startFrame
+  const hasRight = range.end > endFrame
   if (!hasLeft && !hasRight) return { items: [], created: [], updated: [], deleted: [id] }
 
   const result: TimelineItem[] = []
   const created: string[] = []
   const updated = [id]
   const deleted: string[] = []
-  if (hasLeft) result.push(trimItemToRange(item, start, start_us))
+  if (hasLeft) result.push(trimItemToFrameRange(item, range.start, startFrame, fps))
   if (hasRight) {
-    const right = trimItemToRange(item, end_us, end)
-    const shifted = shiftItem(right, delta_us)
+    const right = trimItemToFrameRange(item, endFrame, range.end, fps)
+    const shifted = shiftItemByFrames(right, deltaFrames, fps)
     if (hasLeft) {
       const fragmentId = deriveFragmentId(id, usedIds)
       usedIds.add(fragmentId)
@@ -468,12 +517,12 @@ function applySplit(
 function applyRippleDelete(
   timeline: MutableTimeline,
   command: Extract<EditCommand, { type: 'ripple_delete' }>,
-  fps: number,
+  fps: FrameRateLike,
 ): CommandEffect {
   const startFrame = assertFrameAligned(command.start_us, fps)
   const endFrame = assertFrameAligned(command.end_us, fps)
   const deltaFrames = endFrame - startFrame
-  const delta_us = framesToMicroseconds(deltaFrames, fps)
+  const previousDuration = timeline.duration_us
   const selected = command.track_ids === null ? null : new Set(command.track_ids)
   for (const trackId of selected ?? []) findTrack(timeline, trackId, command.command_id)
   const usedIds = new Set(allItems(timeline).map(itemId))
@@ -484,7 +533,7 @@ function applyRippleDelete(
     if (selected !== null && !selected.has(track.track_id)) continue
     const nextItems: TimelineItem[] = []
     for (const item of track.items) {
-      const result = expandRippleItem(item, command.start_us, command.end_us, delta_us, usedIds)
+      const result = expandRippleItem(item, startFrame, endFrame, deltaFrames, fps, usedIds)
       nextItems.push(...result.items)
       created.push(...result.created)
       updated.push(...result.updated)
@@ -492,9 +541,15 @@ function applyRippleDelete(
     }
     replaceTrackItems(timeline, trackIndex, nextItems)
   }
-  const durationDelta = selected === null ? -delta_us : 0
-  if (selected === null) timeline.duration_us = Math.max(0, timeline.duration_us + durationDelta)
+  if (selected === null) {
+    const previousDurationFrames = assertFrameAligned(previousDuration, fps)
+    timeline.duration_us = framesToMicroseconds(
+      Math.max(0, previousDurationFrames - deltaFrames),
+      fps,
+    )
+  }
   recomputeDuration(timeline)
+  const durationDelta = selected === null ? timeline.duration_us - previousDuration : 0
   return {
     ...emptyEffect(durationDelta),
     created_item_ids: created,
@@ -754,7 +809,11 @@ function applyCaptionStyle(
   return { ...emptyEffect(), updated_item_ids: updated }
 }
 
-function applyCommand(timeline: MutableTimeline, command: EditCommand, fps: number): CommandEffect {
+function applyCommand(
+  timeline: MutableTimeline,
+  command: EditCommand,
+  fps: FrameRateLike,
+): CommandEffect {
   // All command time fields are public microseconds. Conversion is performed
   // before mutation so a non-frame-aligned batch can never partially apply.
   switch (command.type) {
@@ -816,7 +875,11 @@ function applyCommand(timeline: MutableTimeline, command: EditCommand, fps: numb
     case 'set_caption_style':
       return applyCaptionStyle(timeline, command)
     case 'request_job':
-      return emptyEffect()
+      throw new EditEngineError(
+        'unsupported_command',
+        'request_job must be dispatched through a MediaJobClient host adapter',
+        command.command_id,
+      )
     default:
       return assertNever(command)
   }
@@ -830,8 +893,14 @@ function assertNever(value: never): never {
 }
 
 function validateAndPrepare(timeline: TimelineState, context: EditEngineContext): MutableTimeline {
-  if (!Number.isFinite(context.fps) || context.fps <= 0)
-    throw new EditEngineError('invalid_request', 'fps must be a finite positive number')
+  try {
+    normalizeFrameRate(context.fps)
+  } catch (error) {
+    throw new EditEngineError(
+      'invalid_request',
+      error instanceof Error ? error.message : 'fps must be a finite positive rate',
+    )
+  }
   const valid = validateTimelineState(timeline)
   if (!valid.ok)
     throw new EditEngineError('invalid_request', valid.errors[0]?.message ?? 'timeline is invalid')

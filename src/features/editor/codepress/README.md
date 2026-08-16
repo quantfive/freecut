@@ -20,6 +20,11 @@ revision and preconditions, applies it through the pure edit engine, records
 idempotent replays, and publishes the accepted controlled document. A failed
 command never replaces the document.
 
+`request_job` remains part of the canonical command vocabulary, but the pure
+engine rejects it as `unsupported_command` until a host explicitly owns the
+`MediaJobClient` dispatch. It never reports a media job as applied while doing
+nothing.
+
 The existing `headless/` browser harness and its localhost `/v1` service are
 not imported here and remain development-only implementation seams.
 
@@ -30,12 +35,17 @@ frames, so all mutation timestamps are required to equal the deterministic
 canonical integer-microsecond representation of a frame at the document FPS.
 `timing.ts` uses rational `BigInt` arithmetic for alignment and nearest-frame
 conversion; it does not depend on a browser clock or floating-point remainder.
+The controlled document bridge converts each interval endpoint independently,
+so valid fractional-rate intervals (including 30000/1001) preserve their frame
+indices even when the integer-microsecond duration is not itself a canonical
+frame timestamp.
 
 ## Ripple and captions
 
 `ripple_delete` operates on `[start_us, end_us)` in the selected tracks (or all
 tracks for `track_ids: null`). Downstream items shift left by the exact frame
-delta. An item crossing both boundaries is split deterministically: the
+delta, with each shifted endpoint re-encoded from its resulting frame index.
+An item crossing both boundaries is split deterministically: the
 left-hand fragment keeps the original ID and the right-hand fragment receives a
 stable `:ripple-right` ID. Caption cues use the same interval semantics and
 remain ordinary caption-track items in the controlled document.

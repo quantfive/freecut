@@ -7,11 +7,12 @@ import type {
   TimelineState,
   TimelineRevision,
 } from './contract'
+import type { FrameRateLike } from './timing'
 
 /** Data the controlled editor owns while it is mounted. It is not persistence. */
 export interface ControlledEditorDocument {
   timeline: TimelineState
-  fps: number
+  fps: FrameRateLike
   width: number
   height: number
   background_color?: string
@@ -25,7 +26,7 @@ export interface ControlledEditorPort {
 }
 
 export interface EditEngineContext {
-  fps: number
+  fps: FrameRateLike
 }
 
 export interface EditEngineResult {

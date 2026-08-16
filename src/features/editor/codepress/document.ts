@@ -7,7 +7,12 @@ import type {
   TimelineTrack,
 } from './contract'
 import type { ControlledEditorDocument } from './interfaces'
-import { assertFrameAligned, framesToMicroseconds } from './timing'
+import {
+  assertFrameAligned,
+  framesToMicroseconds,
+  normalizeFrameRate,
+  type FrameRateLike,
+} from './timing'
 
 /** Minimal frame-native document shape expected from a FreeCut host. */
 export interface FreeCutFrameClip {
@@ -62,7 +67,7 @@ export interface FreeCutFrameTrack {
 export interface FreeCutFrameDocument {
   timelineId: string
   revision: number
-  fps: number
+  fps: FrameRateLike
   durationInFrames: number
   media: readonly MediaReference[]
   tracks: readonly FreeCutFrameTrack[]
@@ -78,7 +83,10 @@ export class FreeCutDocumentConversionError extends Error {
   }
 }
 
-function frameRange(item: FreeCutFrameItem, fps: number): { start_us: number; end_us: number } {
+function frameRange(
+  item: FreeCutFrameItem,
+  fps: FrameRateLike,
+): { start_us: number; end_us: number } {
   if (
     !Number.isSafeInteger(item.from) ||
     item.from < 0 ||
@@ -96,7 +104,7 @@ function frameRange(item: FreeCutFrameItem, fps: number): { start_us: number; en
   return { start_us, end_us }
 }
 
-function toContractItem(item: FreeCutFrameItem, fps: number): TimelineItem {
+function toContractItem(item: FreeCutFrameItem, fps: FrameRateLike): TimelineItem {
   const range = frameRange(item, fps)
   if (item.type === 'caption_cue') {
     return {
@@ -193,7 +201,7 @@ function fromTransform(
   }
 }
 
-function toTrack(track: FreeCutFrameTrack, fps: number): TimelineTrack {
+function toTrack(track: FreeCutFrameTrack, fps: FrameRateLike): TimelineTrack {
   return {
     track_id: track.id,
     kind: track.kind,
@@ -208,8 +216,13 @@ function toTrack(track: FreeCutFrameTrack, fps: number): TimelineTrack {
 export function freeCutDocumentToControlledDocument(
   input: FreeCutFrameDocument,
 ): ControlledEditorDocument {
-  if (!Number.isFinite(input.fps) || input.fps <= 0)
-    throw new FreeCutDocumentConversionError('fps must be a finite positive number')
+  try {
+    normalizeFrameRate(input.fps)
+  } catch (error) {
+    throw new FreeCutDocumentConversionError(
+      error instanceof Error ? error.message : 'fps must be a finite positive rate',
+    )
+  }
   if (!Number.isSafeInteger(input.durationInFrames) || input.durationInFrames < 0)
     throw new FreeCutDocumentConversionError('durationInFrames must be a safe non-negative integer')
   const timeline: TimelineState = {
@@ -230,40 +243,76 @@ export function freeCutDocumentToControlledDocument(
   }
 }
 
-function fromContractItem(item: TimelineItem, fps: number): FreeCutFrameItem {
+interface FrameBounds {
+  start: number
+  end: number
+}
+
+function frameBounds(
+  start_us: number,
+  end_us: number,
+  fps: FrameRateLike,
+  label: string,
+): FrameBounds {
+  const start = assertFrameAligned(start_us, fps)
+  const end = assertFrameAligned(end_us, fps)
+  if (end <= start) throw new FreeCutDocumentConversionError(`${label} has an empty frame range`)
+  return { start, end }
+}
+
+function fromContractItem(item: TimelineItem, fps: FrameRateLike): FreeCutFrameItem {
   if (item.item_type === 'caption_cue') {
+    const range = frameBounds(item.start_us, item.end_us, fps, `Caption cue "${item.cue_id}"`)
     return {
       type: 'caption_cue',
       id: item.cue_id,
       trackId: item.track_id,
-      from: assertFrameAligned(item.start_us, fps),
-      durationInFrames: assertFrameAligned(item.end_us - item.start_us, fps),
+      from: range.start,
+      durationInFrames: range.end - range.start,
       text: item.text,
       ...(item.speaker !== undefined ? { speaker: item.speaker } : {}),
     }
   }
   if (item.item_type === 'text') {
+    const range = frameBounds(
+      item.timeline_start_us,
+      item.timeline_end_us,
+      fps,
+      `Text item "${item.item_id}"`,
+    )
     return {
       type: 'text',
       id: item.item_id,
       trackId: item.track_id,
-      from: assertFrameAligned(item.timeline_start_us, fps),
-      durationInFrames: assertFrameAligned(item.timeline_end_us - item.timeline_start_us, fps),
+      from: range.start,
+      durationInFrames: range.end - range.start,
       text: item.text,
       ...(item.style ? { style: { ...item.style } } : {}),
       ...(item.opacity !== undefined ? { opacity: item.opacity } : {}),
       ...(item.transform ? { transform: fromTransform(item.transform) } : {}),
     }
   }
+  const timelineRange = frameBounds(
+    item.timeline_start_us,
+    item.timeline_end_us,
+    fps,
+    `Clip "${item.item_id}"`,
+  )
+  const sourceRange = frameBounds(
+    item.source_start_us,
+    item.source_end_us,
+    fps,
+    `Clip "${item.item_id}" source`,
+  )
   return {
     type: item.media_kind,
     id: item.item_id,
     trackId: item.track_id,
     mediaId: item.media_id,
-    from: assertFrameAligned(item.timeline_start_us, fps),
-    durationInFrames: assertFrameAligned(item.timeline_end_us - item.timeline_start_us, fps),
-    sourceStart: assertFrameAligned(item.source_start_us, fps),
-    sourceEnd: assertFrameAligned(item.source_end_us, fps),
+    from: timelineRange.start,
+    durationInFrames: timelineRange.end - timelineRange.start,
+    sourceStart: sourceRange.start,
+    sourceEnd: sourceRange.end,
     ...(item.volume !== undefined ? { volume: item.volume } : {}),
     ...(item.speed !== undefined ? { speed: item.speed } : {}),
     ...(item.opacity !== undefined ? { opacity: item.opacity } : {}),
