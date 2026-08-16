@@ -14,6 +14,7 @@ import type {
   ControlledEditorDocument,
   ControlledEditorPort,
   ControlledRenderer,
+  EditEngineResult,
   RenderedFrame,
 } from './interfaces'
 import { FrameTimingError, assertFrameAligned } from './timing'
@@ -249,7 +250,6 @@ export class CodePressCommandAdapter implements ControlledEditorPort {
   }
 
   getDocument(): ControlledEditorDocument {
-    if (this.externalEditor) return copyResult(this.externalEditor.getDocument())
     return copyResult(this.document)
   }
 
@@ -258,8 +258,7 @@ export class CodePressCommandAdapter implements ControlledEditorPort {
     if (timelineError) throw new Error(timelineError.message)
     assertFrameAligned(document.timeline.duration_us, document.fps)
     this.document = copyResult(document)
-    this.externalEditor?.replaceDocument(copyResult(document))
-    this.notify()
+    this.publishDocument(this.document)
   }
 
   subscribe(listener: (document: ControlledEditorDocument) => void): () => void {
@@ -368,39 +367,11 @@ export class CodePressCommandAdapter implements ControlledEditorPort {
       }
     }
 
+    let engineResult: EditEngineResult
     try {
-      const engineResult = this.editEngine.apply(current.timeline, batch.commands, {
+      engineResult = this.editEngine.apply(current.timeline, batch.commands, {
         fps: current.fps,
       })
-      const nextTimeline: TimelineState = {
-        ...engineResult.timeline,
-        revision: current.timeline.revision + 1,
-      }
-      const nextDocument = { ...current, timeline: nextTimeline }
-      const result: Exclude<EditApplyResult, { status: 'rejected' }> = {
-        status: 'applied',
-        timeline_id: batch.timeline_id,
-        operation_id: batch.operation_id,
-        idempotency_key: batch.idempotency_key,
-        base_revision: batch.base_revision,
-        previous_revision: current.timeline.revision,
-        resulting_revision: nextTimeline.revision,
-        timeline: nextTimeline,
-        commands: engineResult.commands,
-        rebase: { status: 'not_attempted', automatic: false },
-      }
-      this.document = copyResult(nextDocument)
-      this.externalEditor?.replaceDocument(copyResult(nextDocument))
-      this.operations.set(batch.idempotency_key, { payload, result: copyResult(result) })
-      this.notify()
-      void this.hosts.telemetryClient?.emit({
-        name: 'video.timeline_operation_applied',
-        timeline_id: batch.timeline_id,
-        operation_id: batch.operation_id,
-        revision: nextTimeline.revision,
-        attributes: { command_count: batch.commands.length },
-      })
-      return copyResult(result)
     } catch (caught) {
       const commandError =
         caught instanceof FrameTimingError
@@ -439,6 +410,29 @@ export class CodePressCommandAdapter implements ControlledEditorPort {
               )
       return rejected(batch, commandError)
     }
+
+    const nextTimeline: TimelineState = {
+      ...engineResult.timeline,
+      revision: current.timeline.revision + 1,
+    }
+    const nextDocument = { ...current, timeline: nextTimeline }
+    const result: Exclude<EditApplyResult, { status: 'rejected' }> = {
+      status: 'applied',
+      timeline_id: batch.timeline_id,
+      operation_id: batch.operation_id,
+      idempotency_key: batch.idempotency_key,
+      base_revision: batch.base_revision,
+      previous_revision: current.timeline.revision,
+      resulting_revision: nextTimeline.revision,
+      timeline: nextTimeline,
+      commands: engineResult.commands,
+      rebase: { status: 'not_attempted', automatic: false },
+    }
+    this.document = copyResult(nextDocument)
+    this.operations.set(batch.idempotency_key, { payload, result: copyResult(result) })
+    this.publishDocument(nextDocument)
+    this.publishTelemetry(batch, nextTimeline.revision)
+    return copyResult(result)
   }
 
   async renderFrame(time_us: number): Promise<RenderedFrame> {
@@ -448,9 +442,39 @@ export class CodePressCommandAdapter implements ControlledEditorPort {
     return this.renderer.renderFrame({ document, frame, time_us })
   }
 
-  private notify(): void {
-    const document = this.getDocument()
-    for (const listener of this.listeners) listener(document)
+  private publishDocument(document: ControlledEditorDocument): void {
+    try {
+      this.externalEditor?.replaceDocument(copyResult(document))
+    } catch {
+      // Editor publication is an observer side effect; it cannot reject a committed edit.
+    }
+    this.notify(document)
+  }
+
+  private publishTelemetry(batch: EditCommandBatch, revision: number): void {
+    try {
+      void Promise.resolve(
+        this.hosts.telemetryClient?.emit({
+          name: 'video.timeline_operation_applied',
+          timeline_id: batch.timeline_id,
+          operation_id: batch.operation_id,
+          revision,
+          attributes: { command_count: batch.commands.length },
+        }),
+      ).catch(() => undefined)
+    } catch {
+      // Telemetry is best effort; a host failure cannot change the committed result.
+    }
+  }
+
+  private notify(document: ControlledEditorDocument = this.document): void {
+    for (const listener of this.listeners) {
+      try {
+        listener(copyResult(document))
+      } catch {
+        // Subscribers are observers; one faulty listener must not affect the edit result.
+      }
+    }
   }
 }
 

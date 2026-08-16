@@ -23,7 +23,7 @@ import type {
   TimelineTrack,
   TrackId,
 } from './contract'
-import { validateTimelineState } from './contract'
+import { MAX_ID_LENGTH, validateTimelineState } from './contract'
 import type { ControlledEditEngine, EditEngineContext, EditEngineResult } from './interfaces'
 
 export class EditEngineError extends Error {
@@ -225,11 +225,13 @@ function shiftItemByFrames(
 }
 
 function deriveFragmentId(originalId: string, usedIds: Set<string>): string {
-  const base = `${originalId}:ripple-right`.slice(0, 128)
+  const candidate = (suffix: string): string =>
+    `${originalId.slice(0, Math.max(0, MAX_ID_LENGTH - suffix.length))}${suffix}`
+  const base = candidate(':ripple-right')
   if (!usedIds.has(base)) return base
   for (let suffix = 2; suffix < 10_000; suffix += 1) {
-    const candidate = `${originalId}:ripple-${suffix}`.slice(0, 128)
-    if (!usedIds.has(candidate)) return candidate
+    const collisionSafe = candidate(`:ripple-${suffix}`)
+    if (!usedIds.has(collisionSafe)) return collisionSafe
   }
   throw new EditEngineError(
     'invalid_request',

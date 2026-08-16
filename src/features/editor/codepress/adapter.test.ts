@@ -13,6 +13,7 @@ import {
   isFrameAligned,
   isVideoCommandError,
   translateCommandBatchToFrames,
+  translateCommandToFrames,
   validateCommandBatch,
   validateTimelineState,
 } from './index'
@@ -186,6 +187,139 @@ describe('deterministic microsecond/frame conversion', () => {
     expect(ripple).toMatchObject({ start_frame: 60, end_frame: 75 })
     const split = translated.commands[0]
     expect(split).toMatchObject({ at_timeline_frame: 120, at_source_frame: 120 })
+  })
+
+  it('constructs frame-native items and patches without legacy microsecond fields', () => {
+    const translatedClip = translateCommandToFrames(
+      {
+        command_id: 'add-clip',
+        type: 'add_clip',
+        track_id: 'track-video',
+        item: clip({
+          fade_in_us: 1_000_000,
+          fade_out_us: 1_000_000,
+          transition_in: { transition_type: 'crossfade', duration_us: 1_000_000 },
+          transition_out: { transition_type: 'dip_to_black', duration_us: 1_000_000 },
+          keyframes: [
+            {
+              property: 'opacity',
+              time_us: 0,
+              value: 1,
+              interpolation: 'linear',
+            },
+          ],
+        }),
+      },
+      30,
+    )
+    if (translatedClip.type !== 'add_clip') throw new Error('clip command did not translate')
+    expect(translatedClip.item).toMatchObject({
+      timeline_start_frame: 0,
+      timeline_end_frame: 30,
+      source_start_frame: 0,
+      source_end_frame: 30,
+      fade_in_frame: 30,
+      fade_out_frame: 30,
+      transition_in: { duration_frame: 30 },
+      transition_out: { duration_frame: 30 },
+      keyframes: [{ time_frame: 0 }],
+    })
+    for (const field of [
+      'timeline_start_us',
+      'timeline_end_us',
+      'source_start_us',
+      'source_end_us',
+      'fade_in_us',
+      'fade_out_us',
+    ]) {
+      expect(translatedClip.item).not.toHaveProperty(field)
+    }
+
+    const translatedText = translateCommandToFrames(
+      {
+        command_id: 'add-text',
+        type: 'add_text',
+        track_id: 'track-video',
+        item: text({
+          keyframes: [
+            {
+              property: 'opacity',
+              time_us: 0,
+              value: 1,
+              interpolation: 'linear',
+            },
+          ],
+        }),
+      },
+      30,
+    )
+    if (translatedText.type !== 'add_text') throw new Error('text command did not translate')
+    expect(translatedText.item).toMatchObject({
+      timeline_start_frame: 0,
+      timeline_end_frame: 30,
+      keyframes: [{ time_frame: 0 }],
+    })
+    expect(translatedText.item).not.toHaveProperty('timeline_start_us')
+    expect(translatedText.item).not.toHaveProperty('timeline_end_us')
+
+    const translatedCue = translateCommandToFrames(
+      {
+        command_id: 'upsert-cue',
+        type: 'upsert_caption_cues',
+        track_id: 'track-captions',
+        cues: [
+          {
+            item_type: 'caption_cue',
+            cue_id: 'cue-frame-native',
+            track_id: 'track-captions',
+            start_us: 0,
+            end_us: 1_000_000,
+            text: 'Cue',
+          },
+        ],
+      },
+      30,
+    )
+    if (translatedCue.type !== 'upsert_caption_cues')
+      throw new Error('caption command did not translate')
+    expect(translatedCue.cues[0]).toMatchObject({ start_frame: 0, end_frame: 30 })
+    expect(translatedCue.cues[0]).not.toHaveProperty('start_us')
+    expect(translatedCue.cues[0]).not.toHaveProperty('end_us')
+
+    const translatedProperties = translateCommandToFrames(
+      {
+        command_id: 'set-properties',
+        type: 'set_item_properties',
+        item_id: 'clip-a',
+        properties: {
+          fade_in_us: 1_000_000,
+          fade_out_us: null,
+          transition_in: { transition_type: 'crossfade', duration_us: 1_000_000 },
+          transition_out: null,
+          keyframes: [
+            {
+              property: 'opacity',
+              time_us: 0,
+              value: 1,
+              interpolation: 'linear',
+            },
+          ],
+        },
+      },
+      30,
+    )
+    if (translatedProperties.type !== 'set_item_properties')
+      throw new Error('properties command did not translate')
+    expect(translatedProperties.properties).toMatchObject({
+      fade_in_frame: 30,
+      fade_out_frame: null,
+      transition_in: { duration_frame: 30 },
+      transition_out: null,
+      keyframes: [{ time_frame: 0 }],
+    })
+    for (const field of ['fade_in_us', 'fade_out_us']) {
+      expect(translatedProperties.properties).not.toHaveProperty(field)
+    }
   })
 })
 
@@ -658,6 +792,71 @@ describe('controlled command adapter', () => {
     })
   })
 
+  it('allocates bounded ripple fragment IDs for max-length IDs and collisions', () => {
+    const maxId = 'x'.repeat(128)
+    const baseFragmentId = `${maxId.slice(0, 128 - ':ripple-right'.length)}:ripple-right`
+    const suffixFragmentId = `${maxId.slice(0, 128 - ':ripple-2'.length)}:ripple-2`
+    const base = timeline({
+      duration_us: 8_000_000,
+      tracks: [
+        {
+          track_id: 'track-video',
+          kind: 'video',
+          name: 'Video',
+          locked: false,
+          muted: false,
+          items: [
+            clip({
+              item_id: maxId,
+              timeline_start_us: 0,
+              timeline_end_us: 4_000_000,
+              source_start_us: 0,
+              source_end_us: 4_000_000,
+            }),
+            clip({
+              item_id: baseFragmentId,
+              timeline_start_us: 5_000_000,
+              timeline_end_us: 6_000_000,
+              source_start_us: 5_000_000,
+              source_end_us: 6_000_000,
+            }),
+          ],
+        },
+        {
+          track_id: 'track-captions',
+          kind: 'caption',
+          name: 'Captions',
+          language: 'en',
+          locked: false,
+          muted: false,
+          items: [],
+        },
+      ],
+    })
+    const adapter = new CodePressCommandAdapter({ document: documentFor(base) })
+    const result = applyRequest(adapter, {
+      contract_version: 1,
+      timeline_id: 'timeline-test',
+      operation_id: 'ripple-max-id',
+      idempotency_key: 'ripple-max-id:1',
+      base_revision: 0,
+      preconditions: [],
+      commands: [
+        {
+          command_id: 'ripple-max-id-command',
+          type: 'ripple_delete',
+          start_us: 1_000_000,
+          end_us: 2_000_000,
+          track_ids: ['track-video'],
+        },
+      ],
+    })
+    const ids = result.timeline.tracks[0]?.items.map(itemIdForTest)
+    expect(ids).toEqual([maxId, suffixFragmentId, baseFragmentId])
+    expect(ids?.every((id) => id.length <= 128)).toBe(true)
+    expect(validateTimelineState(result.timeline).ok).toBe(true)
+  })
+
   it('does not mutate the controlled document when a later command fails', () => {
     const adapter = new CodePressCommandAdapter({ document: documentFor(timeline()) })
     const result = adapter.apply({
@@ -680,6 +879,101 @@ describe('controlled command adapter', () => {
     expect(result.status).toBe('rejected')
     expect(adapter.getSnapshot().revision).toBe(0)
     expect(adapter.getSnapshot().document.timeline.tracks[0]?.items).toHaveLength(1)
+  })
+
+  it('commits before editor, subscriber, and synchronous telemetry failures', () => {
+    const initial = documentFor(timeline())
+    const editor = {
+      getDocument: () => initial,
+      replaceDocument: () => {
+        throw new Error('editor observer failed')
+      },
+    }
+    const adapter = new CodePressCommandAdapter({
+      document: initial,
+      editor,
+      hosts: {
+        telemetryClient: {
+          emit: () => {
+            throw new Error('telemetry observer failed')
+          },
+        },
+      },
+    })
+    let subscriberCalls = 0
+    adapter.subscribe(() => {
+      subscriberCalls += 1
+      throw new Error('subscriber observer failed')
+    })
+    adapter.subscribe(() => {
+      subscriberCalls += 1
+    })
+    const request: EditCommandBatch = {
+      contract_version: 1,
+      timeline_id: 'timeline-test',
+      operation_id: 'observer-failures',
+      idempotency_key: 'observer-failures:1',
+      base_revision: 0,
+      preconditions: [],
+      commands: [
+        {
+          command_id: 'move-observer-failures',
+          type: 'move_item',
+          item_id: 'clip-a',
+          to_track_id: 'track-video',
+          timeline_start_us: 1_000_000,
+          index: 0,
+        },
+      ],
+    }
+    const result = adapter.apply(request)
+    expect(result.status).toBe('applied')
+    expect(adapter.getSnapshot().revision).toBe(1)
+    expect(subscriberCalls).toBe(2)
+    const replayed = adapter.apply(request)
+    expect(replayed.status).toBe('replayed')
+  })
+
+  it('handles rejected telemetry without changing the committed result', async () => {
+    let unhandled: unknown
+    const onUnhandled = (reason: unknown) => {
+      unhandled = reason
+    }
+    process.on('unhandledRejection', onUnhandled)
+    try {
+      const adapter = new CodePressCommandAdapter({
+        document: documentFor(timeline()),
+        hosts: {
+          telemetryClient: {
+            emit: () => Promise.reject(new Error('async telemetry failed')),
+          },
+        },
+      })
+      const result = adapter.apply({
+        contract_version: 1,
+        timeline_id: 'timeline-test',
+        operation_id: 'async-telemetry-failure',
+        idempotency_key: 'async-telemetry-failure:1',
+        base_revision: 0,
+        preconditions: [],
+        commands: [
+          {
+            command_id: 'move-async-telemetry',
+            type: 'move_item',
+            item_id: 'clip-a',
+            to_track_id: 'track-video',
+            timeline_start_us: 1_000_000,
+            index: 0,
+          },
+        ],
+      })
+      expect(result.status).toBe('applied')
+      expect(adapter.getSnapshot().revision).toBe(1)
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      expect(unhandled).toBeUndefined()
+    } finally {
+      process.off('unhandledRejection', onUnhandled)
+    }
   })
 
   it('rejects request_job until a host dispatch boundary is implemented', () => {

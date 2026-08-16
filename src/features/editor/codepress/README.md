@@ -20,6 +20,12 @@ revision and preconditions, applies it through the pure edit engine, records
 idempotent replays, and publishes the accepted controlled document. A failed
 command never replaces the document.
 
+The commit boundary is explicit: edit-engine failures return `rejected` before
+the adapter commits its document and idempotency result. Once that internal
+commit succeeds, the adapter returns `applied`; editor publication,
+subscribers, and telemetry are best-effort observers whose synchronous or
+asynchronous failures cannot change the committed result.
+
 `request_job` remains part of the canonical command vocabulary, but the pure
 engine rejects it as `unsupported_command` until a host explicitly owns the
 `MediaJobClient` dispatch. It never reports a media job as applied while doing
@@ -47,5 +53,11 @@ tracks for `track_ids: null`). Downstream items shift left by the exact frame
 delta, with each shifted endpoint re-encoded from its resulting frame index.
 An item crossing both boundaries is split deterministically: the
 left-hand fragment keeps the original ID and the right-hand fragment receives a
-stable `:ripple-right` ID. Caption cues use the same interval semantics and
-remain ordinary caption-track items in the controlled document.
+stable `:ripple-right` ID. Fragment suffix allocation reserves its bounded
+suffix space, so maximum-length source IDs still receive deterministic unique
+fragments. Caption cues use the same interval semantics and remain ordinary
+caption-track items in the controlled document.
+
+Frame translation constructs frame-native objects explicitly; legacy
+microsecond endpoint and property fields are not retained alongside their
+frame equivalents.

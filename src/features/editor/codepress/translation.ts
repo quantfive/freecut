@@ -145,21 +145,41 @@ function keyframeToFrames(keyframe: Keyframe, fps: FrameRateLike): FrameKeyframe
 function itemToFrames(item: TimelineItem, fps: FrameRateLike): FrameItem {
   if (item.item_type === 'caption_cue') {
     return {
-      ...item,
+      item_type: 'caption_cue',
+      cue_id: item.cue_id,
+      track_id: item.track_id,
+      text: item.text,
+      ...(item.speaker !== undefined ? { speaker: item.speaker } : {}),
+      ...(item.style !== undefined ? { style: item.style } : {}),
       start_frame: assertFrameAligned(item.start_us, fps),
       end_frame: assertFrameAligned(item.end_us, fps),
     }
   }
   if (item.item_type === 'text') {
     return {
-      ...item,
+      item_type: 'text',
+      item_id: item.item_id,
+      track_id: item.track_id,
+      text: item.text,
+      ...(item.style !== undefined ? { style: item.style } : {}),
+      ...(item.transform !== undefined ? { transform: item.transform } : {}),
+      ...(item.opacity !== undefined ? { opacity: item.opacity } : {}),
       timeline_start_frame: assertFrameAligned(item.timeline_start_us, fps),
       timeline_end_frame: assertFrameAligned(item.timeline_end_us, fps),
       keyframes: item.keyframes?.map((keyframe) => keyframeToFrames(keyframe, fps)),
     }
   }
   return {
-    ...item,
+    item_type: 'clip',
+    item_id: item.item_id,
+    track_id: item.track_id,
+    media_id: item.media_id,
+    media_kind: item.media_kind,
+    ...(item.transform !== undefined ? { transform: item.transform } : {}),
+    ...(item.opacity !== undefined ? { opacity: item.opacity } : {}),
+    ...(item.volume !== undefined ? { volume: item.volume } : {}),
+    ...(item.speed !== undefined ? { speed: item.speed } : {}),
+    ...(item.effects !== undefined ? { effects: item.effects } : {}),
     timeline_start_frame: assertFrameAligned(item.timeline_start_us, fps),
     timeline_end_frame: assertFrameAligned(item.timeline_end_us, fps),
     source_start_frame: assertFrameAligned(item.source_start_us, fps),
@@ -179,7 +199,13 @@ function propertiesToFrames(
   fps: FrameRateLike,
 ): FrameItemPropertiesPatch {
   return {
-    ...properties,
+    ...(properties.transform !== undefined ? { transform: properties.transform } : {}),
+    ...(properties.opacity !== undefined ? { opacity: properties.opacity } : {}),
+    ...(properties.volume !== undefined ? { volume: properties.volume } : {}),
+    ...(properties.speed !== undefined ? { speed: properties.speed } : {}),
+    ...(properties.text !== undefined ? { text: properties.text } : {}),
+    ...(properties.text_style !== undefined ? { text_style: properties.text_style } : {}),
+    ...(properties.effects !== undefined ? { effects: properties.effects } : {}),
     fade_in_frame:
       properties.fade_in_us === undefined
         ? undefined
