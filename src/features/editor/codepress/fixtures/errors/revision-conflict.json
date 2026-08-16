@@ -1,0 +1,27 @@
+{
+  "fixture_version": 1,
+  "id": "revision-conflict",
+  "kind": "structured_error",
+  "error": {
+    "code": "revision_conflict",
+    "message": "The timeline changed after this operation was prepared.",
+    "retryable": true,
+    "details": {
+      "kind": "revision_conflict",
+      "base_revision": 7,
+      "current_revision": 9,
+      "rebase": {
+        "status": "required",
+        "automatic": false,
+        "strategy": "refresh_then_resubmit",
+        "retry_with_revision": 9
+      }
+    }
+  },
+  "expect": {
+    "code": "revision_conflict",
+    "retryable": true,
+    "automatic_rebase": false,
+    "retry_with_revision": 9
+  }
+}

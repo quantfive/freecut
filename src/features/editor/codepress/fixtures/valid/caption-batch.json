@@ -1,0 +1,71 @@
+{
+  "fixture_version": 1,
+  "id": "caption-batch",
+  "kind": "valid_command_batch",
+  "timeline": {
+    "contract_version": 1,
+    "schema_version": 1,
+    "timeline_id": "timeline-caption",
+    "revision": 2,
+    "duration_us": 8000000,
+    "media": [],
+    "tracks": [
+      {
+        "track_id": "track-captions",
+        "kind": "caption",
+        "name": "English captions",
+        "language": "en",
+        "locked": false,
+        "muted": false,
+        "items": []
+      }
+    ]
+  },
+  "request": {
+    "contract_version": 1,
+    "timeline_id": "timeline-caption",
+    "operation_id": "operation-captions-1",
+    "idempotency_key": "timeline-caption:captions:1",
+    "base_revision": 2,
+    "preconditions": [{ "type": "track_exists", "track_id": "track-captions" }],
+    "commands": [
+      {
+        "command_id": "command-upsert-captions",
+        "type": "upsert_caption_cues",
+        "track_id": "track-captions",
+        "cues": [
+          {
+            "item_type": "caption_cue",
+            "cue_id": "cue-hello",
+            "track_id": "track-captions",
+            "start_us": 1000000,
+            "end_us": 2500000,
+            "text": "Hello, world!"
+          },
+          {
+            "item_type": "caption_cue",
+            "cue_id": "cue-next",
+            "track_id": "track-captions",
+            "start_us": 3000000,
+            "end_us": 4500000,
+            "text": "This is a caption cue."
+          }
+        ]
+      },
+      {
+        "command_id": "command-move-caption",
+        "type": "move_item",
+        "item_id": "cue-hello",
+        "to_track_id": "track-captions",
+        "timeline_start_us": 1200000,
+        "index": 0
+      }
+    ]
+  },
+  "expect": {
+    "timeline_valid": true,
+    "request_valid": true,
+    "command_types": ["upsert_caption_cues", "move_item"],
+    "command_count": 2
+  }
+}
