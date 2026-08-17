@@ -1,4 +1,4 @@
-import { assertFrameAligned, type FrameRateLike } from './timing'
+import { assertFrameAligned, framesToMicroseconds, type FrameRateLike } from './timing'
 import type {
   CaptionCue,
   ClipItem,
@@ -115,6 +115,34 @@ export type FrameEditCommand =
       properties: FrameItemPropertiesPatch
     })
   | Extract<EditCommand, { type: 'set_caption_style' | 'request_job' }>
+
+export type CaptionCommand = Extract<
+  EditCommand,
+  {
+    type:
+      | 'add_caption_track'
+      | 'remove_caption_track'
+      | 'update_caption_track'
+      | 'upsert_caption_cues'
+      | 'remove_caption_cues'
+      | 'set_caption_style'
+      | 'update_track'
+  }
+>
+
+export type FrameCaptionCommand = Extract<
+  FrameEditCommand,
+  {
+    type:
+      | 'add_caption_track'
+      | 'remove_caption_track'
+      | 'update_caption_track'
+      | 'upsert_caption_cues'
+      | 'remove_caption_cues'
+      | 'set_caption_style'
+      | 'update_track'
+  }
+>
 
 export interface FrameEditCommandBatch extends Omit<EditCommandBatch, 'commands'> {
   fps: FrameRateLike
@@ -294,5 +322,26 @@ export function translateCommandBatchToFrames(
     ...batch,
     fps,
     commands: batch.commands.map((command) => translateCommandToFrames(command, fps)),
+  }
+}
+
+/** Translate the frame-only caption surface back to the canonical wire shape. */
+export function translateFrameCaptionCommandToCommand(
+  command: FrameCaptionCommand,
+  fps: FrameRateLike,
+): CaptionCommand {
+  if (command.type !== 'upsert_caption_cues') return command
+  return {
+    ...command,
+    cues: command.cues.map((cue) => ({
+      item_type: 'caption_cue',
+      cue_id: cue.cue_id,
+      track_id: cue.track_id,
+      start_us: framesToMicroseconds(cue.start_frame, fps),
+      end_us: framesToMicroseconds(cue.end_frame, fps),
+      text: cue.text,
+      ...(cue.speaker !== undefined ? { speaker: cue.speaker } : {}),
+      ...(cue.style !== undefined ? { style: { ...cue.style } } : {}),
+    })),
   }
 }

@@ -1,4 +1,5 @@
 import type {
+  CaptionStyle,
   ClipItem,
   MediaReference,
   TextItem,
@@ -50,6 +51,7 @@ export interface FreeCutFrameCaptionCue {
   durationInFrames: number
   text: string
   speaker?: string | null
+  style?: CaptionStyle
 }
 
 export type FreeCutFrameItem = FreeCutFrameClip | FreeCutFrameText | FreeCutFrameCaptionCue
@@ -61,6 +63,7 @@ export interface FreeCutFrameTrack {
   language?: string
   locked: boolean
   muted: boolean
+  defaultStyle?: CaptionStyle | null
   items: readonly FreeCutFrameItem[]
 }
 
@@ -115,6 +118,7 @@ function toContractItem(item: FreeCutFrameItem, fps: FrameRateLike): TimelineIte
       end_us: range.end_us,
       text: item.text,
       ...(item.speaker !== undefined ? { speaker: item.speaker } : {}),
+      ...(item.style !== undefined ? { style: { ...item.style } } : {}),
     }
   }
   if (item.type === 'text') {
@@ -209,6 +213,7 @@ function toTrack(track: FreeCutFrameTrack, fps: FrameRateLike): TimelineTrack {
     ...(track.language !== undefined ? { language: track.language } : {}),
     locked: track.locked,
     muted: track.muted,
+    ...(track.defaultStyle !== undefined ? { default_style: track.defaultStyle } : {}),
     items: track.items.map((item) => toContractItem(item, fps)),
   }
 }
@@ -271,6 +276,7 @@ function fromContractItem(item: TimelineItem, fps: FrameRateLike): FreeCutFrameI
       durationInFrames: range.end - range.start,
       text: item.text,
       ...(item.speaker !== undefined ? { speaker: item.speaker } : {}),
+      ...(item.style !== undefined ? { style: { ...item.style } } : {}),
     }
   }
   if (item.item_type === 'text') {
@@ -336,6 +342,7 @@ export function controlledDocumentToFreeCutDocument(
       ...(track.language !== undefined ? { language: track.language } : {}),
       locked: track.locked,
       muted: track.muted,
+      ...(track.default_style !== undefined ? { defaultStyle: track.default_style } : {}),
       items: track.items.map((item) => fromContractItem(item, document.fps)),
     })),
     width: document.width,

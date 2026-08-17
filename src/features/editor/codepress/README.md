@@ -31,6 +31,19 @@ engine rejects it as `unsupported_command` until a host explicitly owns the
 `MediaJobClient` dispatch. It never reports a media job as applied while doing
 nothing.
 
+## Caption UI
+
+`CaptionEditor` is the FreeCut-side controlled caption surface consumed by an
+editor shell. It reads a frame-native `FreeCutFrameDocument`, but every mutation
+is translated back into the canonical integer-microsecond command contract before
+it reaches `CodePressCommandAdapter`. Track display toggles use the canonical
+track mute field; cue text/timing, track defaults, cue-specific styles, and
+track/cue removal all carry the adapter's revision and precondition checks.
+
+The UI rejects empty, out-of-range, overlapping, duplicate, and over-budget cue
+sets before submitting them. A rejected revision or idempotency result is shown
+as an accessible error and is never automatically rebased.
+
 The existing `headless/` browser harness and its localhost `/v1` service are
 not imported here and remain development-only implementation seams.
 
