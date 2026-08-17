@@ -38,10 +38,37 @@ npm ci --ignore-scripts
 npm run package:editor-surface
 ```
 
-The command writes a deterministic tarball to `artifacts/`. Registry
-publication is intentionally separate from the build and requires the
-publisher's npm credentials:
+The command writes a deterministic tarball to `artifacts/`. The package is
+published to the `quantfive` GitHub Packages npm registry by the
+manual/tagged workflow in `.github/workflows/publish-editor-surface.yml`.
+The first GitHub Packages publication defaults to private; verify that
+visibility remains private and grant `quantfive/codepress` read access under
+**Manage Actions access** before CodePress installs it.
+
+For an authorized local publication, authenticate with a GitHub classic PAT
+that has `write:packages` and run:
 
 ```bash
-npm publish artifacts/freecut-editor-surface-0.1.0.tgz --access public
+NODE_AUTH_TOKEN="$GITHUB_CLASSIC_PAT" npm publish \
+  artifacts/freecut-editor-surface-0.1.0.tgz \
+  --registry=https://npm.pkg.github.com
+```
+
+Do not commit a token. The workflow uses its `GITHUB_TOKEN` with
+`packages: write`; CodePress CI uses its `GITHUB_TOKEN` with `packages: read`
+after the repository has been granted package access.
+
+CodePress should route the `@quantfive` scope to GitHub Packages and provide
+`NODE_AUTH_TOKEN` in CI:
+
+```ini
+@quantfive:registry=https://npm.pkg.github.com
+//npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}
+```
+
+It can then install the exact published version and keep it pinned in its
+lockfile:
+
+```bash
+npm install @quantfive/freecut-editor-surface@0.1.0
 ```

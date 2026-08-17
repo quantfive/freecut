@@ -1,0 +1,70 @@
+name: Publish FreeCut editor surface
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'freecut-editor-surface-v*'
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: publish-freecut-editor-surface
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Publish @quantfive/freecut-editor-surface
+    # Manual runs are intentionally limited to staging; tag pushes are
+    # already constrained by the trigger below and must match the package
+    # version in the validation step.
+    if: github.event_name == 'push' || github.ref_name == 'staging'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.14.0'
+          cache: npm
+          registry-url: https://npm.pkg.github.com
+
+      - name: Select pinned npm
+        run: npm install --global npm@11.8.0
+
+      - name: Install locked dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Verify provenance
+        run: npm run verify:provenance
+
+      - name: Validate release tag
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag_version="${GITHUB_REF_NAME#freecut-editor-surface-v}"
+          package_version="$(node -p "require('./packages/freecut-editor/package.json').version")"
+          if [[ "${GITHUB_REF_NAME}" != freecut-editor-surface-v* || "${tag_version}" != "${package_version}" ]]; then
+            echo "Release tag ${GITHUB_REF_NAME} must match package version ${package_version}." >&2
+            exit 1
+          fi
+
+      - name: Build deterministic package artifact
+        run: npm run package:editor-surface
+
+      - name: Publish private package to GitHub Packages
+        shell: bash
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          package_version="$(node -p "require('./packages/freecut-editor/package.json').version")"
+          artifact="artifacts/freecut-editor-surface-${package_version}.tgz"
+          test -f "${artifact}"
+          npm publish "${artifact}" --registry=https://npm.pkg.github.com
