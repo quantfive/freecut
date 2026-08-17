@@ -88,8 +88,10 @@ describe('published FreeCut browser entry', () => {
     )
 
     expect(screen.getByTestId('properties-clip-panel-host')).toBeInTheDocument()
+    expect(await screen.findByTestId('caption-editor')).toBeInTheDocument()
     expect(host.load).toHaveBeenCalledTimes(1)
     expect(capabilityForCommand('move_item')).toBe('timeline.move')
+    expect(capabilityForCommand('set_caption_style')).toBe('timeline.caption')
     expect(isHostCapabilityEnabled(host.capabilities, 'timeline.add')).toBe(false)
   })
 })

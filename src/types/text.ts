@@ -39,6 +39,8 @@ export type TextStroke = {
 
 export type TextVisualStyleFields = {
   backgroundColor?: string
+  /** Opacity for a caption/text background, kept separate from the color. */
+  backgroundOpacity?: number
   backgroundRadius?: number
   textAlign?: TextHorizontalAlign
   verticalAlign?: TextVerticalAlign

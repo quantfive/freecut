@@ -1,4 +1,7 @@
 export * from './adapter'
+export * from './caption-commands'
+export * from './caption-editor'
+export * from './caption-validation'
 export * from './contract'
 export * from './controlled-editor'
 export * from './document'

@@ -754,6 +754,53 @@ function checkInterval(
   return startOk && endOk
 }
 
+function validateCaptionStyle(
+  value: unknown,
+  path: string,
+  errors: VideoCommandError[],
+): value is CaptionStyle {
+  if (!isRecord(value)) {
+    errors.push(invalidRequest(path, 'must be an object'))
+    return false
+  }
+  if (value.font_family !== undefined)
+    checkString(value.font_family, `${path}.font_family`, errors, MAX_ID_LENGTH)
+  if (value.font_size !== undefined) {
+    if (
+      typeof value.font_size !== 'number' ||
+      !Number.isFinite(value.font_size) ||
+      value.font_size <= 0 ||
+      value.font_size > 512
+    ) {
+      errors.push(invalidRequest(`${path}.font_size`, 'must be a finite number between 0 and 512'))
+    }
+  }
+  if (value.color !== undefined) checkString(value.color, `${path}.color`, errors, 128)
+  if (value.background_color !== undefined)
+    checkString(value.background_color, `${path}.background_color`, errors, 128)
+  if (value.background_opacity !== undefined) {
+    if (
+      typeof value.background_opacity !== 'number' ||
+      !Number.isFinite(value.background_opacity) ||
+      value.background_opacity < 0 ||
+      value.background_opacity > 1
+    ) {
+      errors.push(
+        invalidRequest(`${path}.background_opacity`, 'must be a finite number between 0 and 1'),
+      )
+    }
+  }
+  if (
+    value.alignment !== undefined &&
+    value.alignment !== 'left' &&
+    value.alignment !== 'center' &&
+    value.alignment !== 'right'
+  ) {
+    errors.push(invalidRequest(`${path}.alignment`, 'must be left, center, or right'))
+  }
+  return true
+}
+
 function checkIndex(value: unknown, path: string, errors: VideoCommandError[]): void {
   if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) {
     errors.push(invalidRequest(path, 'must be a non-negative integer'))
@@ -840,6 +887,7 @@ function validateCaptionCue(
   checkString(value.text, `${path}.text`, errors)
   if (value.speaker !== undefined && value.speaker !== null)
     checkString(value.speaker, `${path}.speaker`, errors, MAX_ID_LENGTH)
+  if (value.style !== undefined) validateCaptionStyle(value.style, `${path}.style`, errors)
   return true
 }
 
@@ -889,6 +937,8 @@ function validateTrack(
     errors.push(invalidTimeline(`${path}.locked`, 'must be a boolean'))
   if (typeof value.muted !== 'boolean')
     errors.push(invalidTimeline(`${path}.muted`, 'must be a boolean'))
+  if (value.default_style !== undefined && value.default_style !== null)
+    validateCaptionStyle(value.default_style, `${path}.default_style`, errors)
   if (!Array.isArray(value.items)) {
     errors.push(invalidTimeline(`${path}.items`, 'must be an array'))
     return false
@@ -943,6 +993,7 @@ export function validateTimelineState(input: unknown): ValidationResult<Timeline
       if (trackIds.has(trackId)) errors.push(invalidTimeline(`${path}.track_id`, 'must be unique'))
       trackIds.add(trackId)
       if (!Array.isArray(track.items)) continue
+      const captionRanges: Array<{ index: number; start: number; end: number }> = []
       for (const [itemIndex, item] of track.items.entries()) {
         const itemPath = `${path}.items[${itemIndex}]`
         if (!validateTimelineItem(item, itemPath, errors) || !isRecord(item)) continue
@@ -973,6 +1024,29 @@ export function validateTimelineState(input: unknown): ValidationResult<Timeline
         const end = item.item_type === 'caption_cue' ? item.end_us : item.timeline_end_us
         if (isMicroseconds(end) && isMicroseconds(input.duration_us) && end > input.duration_us)
           errors.push(invalidTimeline(itemPath, 'item must end within timeline duration'))
+        if (
+          track.kind === 'caption' &&
+          item.item_type === 'caption_cue' &&
+          isMicroseconds(item.start_us) &&
+          isMicroseconds(item.end_us)
+        ) {
+          captionRanges.push({ index: itemIndex, start: item.start_us, end: item.end_us })
+        }
+      }
+      if (track.kind === 'caption') {
+        captionRanges.sort((left, right) => left.start - right.start || left.end - right.end)
+        for (let index = 1; index < captionRanges.length; index += 1) {
+          const previous = captionRanges[index - 1]!
+          const current = captionRanges[index]!
+          if (current.start < previous.end) {
+            errors.push(
+              invalidTimeline(
+                `${path}.items[${current.index}]`,
+                'caption cues must not overlap within a track',
+              ),
+            )
+          }
+        }
       }
     }
   }
@@ -1149,6 +1223,8 @@ function validateCommand(value: unknown, path: string, errors: VideoCommandError
       checkIdentifier(value.track_id, `${path}.track_id`, errors)
       if (value.name !== undefined) checkString(value.name, `${path}.name`, errors, MAX_ID_LENGTH)
       if (value.language !== undefined) checkString(value.language, `${path}.language`, errors, 32)
+      if (value.default_style !== undefined && value.default_style !== null)
+        validateCaptionStyle(value.default_style, `${path}.default_style`, errors)
       break
     case 'upsert_caption_cues':
       checkIdentifier(value.track_id, `${path}.track_id`, errors)
@@ -1175,6 +1251,25 @@ function validateCommand(value: unknown, path: string, errors: VideoCommandError
               )
             ids.add(cue.cue_id)
           }
+        }
+        const ranges = value.cues
+          .map((cue, index) =>
+            isRecord(cue) && isMicroseconds(cue.start_us) && isMicroseconds(cue.end_us)
+              ? { index, start: cue.start_us, end: cue.end_us }
+              : null,
+          )
+          .filter((range): range is { index: number; start: number; end: number } => range !== null)
+          .sort((left, right) => left.start - right.start || left.end - right.end)
+        for (let index = 1; index < ranges.length; index += 1) {
+          const previous = ranges[index - 1]!
+          const current = ranges[index]!
+          if (current.start < previous.end)
+            errors.push(
+              invalidRequest(
+                `${path}.cues[${current.index}]`,
+                'caption cues must not overlap within a track',
+              ),
+            )
         }
       }
       break
@@ -1204,7 +1299,7 @@ function validateCommand(value: unknown, path: string, errors: VideoCommandError
         for (const [index, id] of value.cue_ids.entries())
           checkIdentifier(id, `${path}.cue_ids[${index}]`, errors)
       }
-      if (!isRecord(value.style)) errors.push(invalidRequest(`${path}.style`, 'must be an object'))
+      validateCaptionStyle(value.style, `${path}.style`, errors)
       break
     case 'request_job':
       if (

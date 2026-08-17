@@ -14,10 +14,7 @@ bootstrap.
 ## Usage
 
 ```tsx
-import {
-  FreeCutEditorSurface,
-  type EditorHost,
-} from '@quantfive/freecut-editor-surface'
+import { FreeCutEditorSurface, type EditorHost } from '@quantfive/freecut-editor-surface'
 import '@quantfive/freecut-editor-surface/style.css'
 
 export function HostEditor({ host }: { host: EditorHost }) {
@@ -28,7 +25,9 @@ export function HostEditor({ host }: { host: EditorHost }) {
 The `EditorHost` contract carries opaque media locators and authoritative
 snapshots. It never accepts filesystem paths, permanent URLs, provider keys,
 or media bytes. Supported edits are submitted through `submitEdit`; rejected
-or conflicting results return an authoritative snapshot to the surface.
+or conflicting results return an authoritative snapshot to the surface. The
+0.2.0 surface adds host-backed caption tracks, bounded cues, caption styles,
+and display toggles to that same command path.
 
 This package is built from a specific FreeCut commit. To create the local
 consumer artifact from a clean checkout, run:
@@ -50,7 +49,7 @@ that has `write:packages` and run:
 
 ```bash
 NODE_AUTH_TOKEN="$GITHUB_CLASSIC_PAT" npm publish \
-  artifacts/freecut-editor-surface-0.1.0.tgz \
+  artifacts/freecut-editor-surface-0.2.0.tgz \
   --registry=https://npm.pkg.github.com
 ```
 
@@ -70,5 +69,5 @@ It can then install the exact published version and keep it pinned in its
 lockfile:
 
 ```bash
-npm install @quantfive/freecut-editor-surface@0.1.0
+npm install @quantfive/freecut-editor-surface@0.2.0
 ```

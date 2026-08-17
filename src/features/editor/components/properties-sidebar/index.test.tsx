@@ -4,7 +4,16 @@ import {
   useCompositionNavigationStore,
   useCompositionsStore,
   useItemsStore,
+  useTimelineSettingsStore,
 } from '@/features/editor/deps/timeline-store'
+import { HostCaptionEditorProvider } from '@/features/editor/host/caption-editor-context'
+import { EditorHostProvider } from '@/features/editor/host/context-provider'
+import {
+  DEFAULT_HOST_CAPABILITIES,
+  type EditorHost,
+  type EmbeddedEditorSnapshot,
+} from '@/features/editor/host/contract'
+import { EmbeddedEditorHostRuntime } from '@/features/editor/host/runtime'
 import { useEditorStore } from '@/shared/state/editor'
 import { useSelectionStore } from '@/shared/state/selection'
 import type { AudioItem, VideoItem } from '@/types/timeline'
@@ -72,6 +81,27 @@ const CLIP_A_VIDEO_LINKED: VideoItem = {
   linkedGroupId: 'linked-a',
 }
 
+const HOST_CAPTION_SNAPSHOT: EmbeddedEditorSnapshot = {
+  project: {
+    id: 'host-caption-project',
+    name: 'Host captions',
+    width: 1920,
+    height: 1080,
+    fps: 30,
+  },
+  timeline: {
+    timelineId: 'host-caption-timeline',
+    revision: 0,
+    fps: 30,
+    durationInFrames: 180,
+    media: [],
+    tracks: [],
+    width: 1920,
+    height: 1080,
+  },
+  assets: [],
+}
+
 function resetStores(items: Array<VideoItem | AudioItem>, selectedItemIds: string[]) {
   useEditorStore.setState({
     rightSidebarOpen: true,
@@ -108,6 +138,36 @@ describe('PropertiesSidebar', () => {
       expect(panelModuleLoads.clip).toHaveBeenCalledTimes(1)
     })
     expect(screen.getByText('Canvas Panel')).toBeInTheDocument()
+  })
+
+  it('mounts the host-backed caption editor in the properties surface', async () => {
+    resetStores([], [])
+    useTimelineSettingsStore.getState().setTimelineLoading(false)
+    const host: EditorHost = {
+      capabilities: DEFAULT_HOST_CAPABILITIES,
+      load: () => HOST_CAPTION_SNAPSHOT,
+      resolveMedia: () => null,
+      submitEdit: () => {
+        throw new Error('not used by properties mount test')
+      },
+    }
+    const runtime = new EmbeddedEditorHostRuntime(host, HOST_CAPTION_SNAPSHOT)
+
+    render(
+      <EditorHostProvider value={{ mode: 'host', capabilities: DEFAULT_HOST_CAPABILITIES, host }}>
+        <HostCaptionEditorProvider runtime={runtime}>
+          <PropertiesSidebar />
+        </HostCaptionEditorProvider>
+      </EditorHostProvider>,
+    )
+
+    expect(await screen.findByTestId('caption-editor')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Add caption track' })).toBeInTheDocument()
+    expect(
+      screen
+        .getByTestId('properties-clip-panel-host')
+        .closest('[data-host-disabled="local-properties"]'),
+    ).toHaveAttribute('inert')
   })
 
   it('identifies the active composition when Motion has no layer selection', () => {

@@ -15,6 +15,7 @@ export type EditorCapability =
   | 'timeline.split'
   | 'timeline.remove'
   | 'timeline.track'
+  | 'timeline.caption'
   | 'workspace.edit'
   | 'workspace.color'
   | 'workspace.motion'
@@ -67,6 +68,15 @@ export interface MediaReference {
 
 export type FrameRateLike = number | { numerator: bigint; denominator: bigint; value: number }
 
+export interface CaptionStyle {
+  font_family?: string
+  font_size?: number
+  color?: string
+  background_color?: string
+  background_opacity?: number
+  alignment?: 'left' | 'center' | 'right'
+}
+
 export interface FreeCutFrameClip {
   type: 'video' | 'audio' | 'image'
   id: string
@@ -102,6 +112,7 @@ export interface FreeCutFrameCaptionCue {
   durationInFrames: number
   text: string
   speaker?: string | null
+  style?: CaptionStyle
 }
 
 export type FreeCutFrameItem = FreeCutFrameClip | FreeCutFrameText | FreeCutFrameCaptionCue
@@ -113,6 +124,7 @@ export interface FreeCutFrameTrack {
   language?: string
   locked: boolean
   muted: boolean
+  defaultStyle?: CaptionStyle | null
   items: readonly FreeCutFrameItem[]
 }
 
@@ -229,6 +241,13 @@ export declare const SUPPORTED_HOST_COMMANDS: readonly [
   'split_item',
   'remove_item',
   'add_track',
+  'update_track',
+  'add_caption_track',
+  'remove_caption_track',
+  'update_caption_track',
+  'upsert_caption_cues',
+  'remove_caption_cues',
+  'set_caption_style',
 ]
 export declare function capabilityForCommand(command: string): EditorCapability | null
 export declare function isHostCapabilityEnabled(

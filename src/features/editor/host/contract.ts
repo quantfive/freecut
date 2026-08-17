@@ -25,6 +25,7 @@ export type EditorCapability =
   | 'timeline.split'
   | 'timeline.remove'
   | 'timeline.track'
+  | 'timeline.caption'
   | 'workspace.edit'
   | 'workspace.color'
   | 'workspace.motion'
@@ -49,6 +50,7 @@ export const DEFAULT_HOST_CAPABILITIES: EditorCapabilityMap = {
   'timeline.split': true,
   'timeline.remove': true,
   'timeline.track': true,
+  'timeline.caption': true,
   'workspace.edit': true,
   'workspace.color': false,
   'workspace.motion': false,
@@ -147,6 +149,13 @@ export const SUPPORTED_HOST_COMMANDS = [
   'split_item',
   'remove_item',
   'add_track',
+  'update_track',
+  'add_caption_track',
+  'remove_caption_track',
+  'update_caption_track',
+  'upsert_caption_cues',
+  'remove_caption_cues',
+  'set_caption_style',
 ] as const satisfies readonly EditCommand['type'][]
 
 export function capabilityForCommand(command: EditCommand['type']): EditorCapability | null {
@@ -164,6 +173,14 @@ export function capabilityForCommand(command: EditCommand['type']): EditorCapabi
       return 'timeline.remove'
     case 'add_track':
       return 'timeline.track'
+    case 'update_track':
+    case 'add_caption_track':
+    case 'remove_caption_track':
+    case 'update_caption_track':
+    case 'upsert_caption_cues':
+    case 'remove_caption_cues':
+    case 'set_caption_style':
+      return 'timeline.caption'
     default:
       return null
   }
