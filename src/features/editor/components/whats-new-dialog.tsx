@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState, type ComponentType } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Link } from '@tanstack/react-router'
 import { Sparkles, Bug, Zap, ArrowRight } from 'lucide-react'
 import { i18n } from '@/i18n'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
@@ -134,13 +133,15 @@ export function WhatsNewDialog({ open, onOpenChange }: WhatsNewDialogProps) {
               ? t('editor.whatsNew.released', { version: latestReleaseVersion })
               : t('editor.whatsNew.preRelease')}
           </span>
-          <Link
-            to="/changelog"
+          <a
+            href="/changelog"
+            target="_blank"
+            rel="noopener noreferrer"
             className="flex items-center gap-1 hover:text-foreground hover:underline"
           >
             {t('editor.whatsNew.fullChangelog')}
             <ArrowRight className="h-3 w-3" />
-          </Link>
+          </a>
         </div>
       </DialogContent>
     </Dialog>

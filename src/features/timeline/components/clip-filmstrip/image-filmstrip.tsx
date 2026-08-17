@@ -4,6 +4,7 @@ import { useMediaBlobUrl } from '../../hooks/use-media-blob-url'
 import { resolveMediaUrl } from '@/features/timeline/deps/media-library-resolver'
 import { createLogger } from '@/shared/logging/logger'
 import { computeFilmstripRenderWindow } from './render-window'
+import { useEditorStore } from '@/shared/state/editor'
 
 const logger = createLogger('ImageFilmstrip')
 
@@ -112,6 +113,7 @@ export const ImageFilmstrip = memo(function ImageFilmstrip({
 }: ImageFilmstripProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const [height, setHeight] = useState(0)
+  const hostMode = useEditorStore((state) => state.hostMode)
 
   // Measure container height
   useEffect(() => {
@@ -133,7 +135,7 @@ export const ImageFilmstrip = memo(function ImageFilmstrip({
   const { blobUrl, setBlobUrl, hasStartedLoadingRef, blobUrlVersion } = useMediaBlobUrl(mediaId)
 
   useEffect(() => {
-    if (!isVisible || !mediaId || hasStartedLoadingRef.current) return
+    if (hostMode || !isVisible || !mediaId || hasStartedLoadingRef.current) return
     hasStartedLoadingRef.current = true
 
     let mounted = true
@@ -145,13 +147,13 @@ export const ImageFilmstrip = memo(function ImageFilmstrip({
     return () => {
       mounted = false
     }
-  }, [mediaId, isVisible, blobUrlVersion, hasStartedLoadingRef, setBlobUrl])
+  }, [blobUrlVersion, hasStartedLoadingRef, hostMode, isVisible, mediaId, setBlobUrl])
 
   const { frames, durations, totalDuration } = useGifFrames({
     mediaId,
     blobUrl,
     isVisible,
-    enabled: isAnimated && !!blobUrl,
+    enabled: !hostMode && isAnimated && !!blobUrl,
     format: animationFormat,
   })
 

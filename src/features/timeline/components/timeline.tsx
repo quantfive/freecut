@@ -44,6 +44,7 @@ import {
   getTrackSectionLayout,
 } from '../utils/track-resize'
 import { clearMediaDragData } from '@/features/timeline/deps/media-library-resolver'
+import { useEditorCapability } from '../deps/editor'
 import { useNewTrackZonePreviewStore } from '../stores/new-track-zone-preview-store'
 import { useTrackDropPreviewStore } from '../stores/track-drop-preview-store'
 import { clearAllTimelineDropPreviewOwners } from '../utils/drop-preview-owner'
@@ -84,6 +85,8 @@ interface TimelineProps {
  */
 export const Timeline = memo(function Timeline({ duration }: TimelineProps) {
   const { t } = useTranslation()
+  const hostMode = useEditorStore((s) => s.hostMode)
+  const canAddTrack = useEditorCapability('timeline.track')
   const editorDensity = useSettingsStore((s) => s.editorDensity)
   const editorLayout = getEditorLayout(editorDensity)
   const {
@@ -676,6 +679,7 @@ export const Timeline = memo(function Timeline({ duration }: TimelineProps) {
   )
 
   const addVideoTrackToTop = useCallback(() => {
+    if (!canAddTrack) return
     const newTrack = createClassicTrack({ tracks, kind: 'video', order: 0 })
 
     addTrack(newTrack)
@@ -683,9 +687,10 @@ export const Timeline = memo(function Timeline({ duration }: TimelineProps) {
     setTimeout(() => {
       setActiveTrack(newTrack.id)
     }, 0)
-  }, [addTrack, setActiveTrack, tracks])
+  }, [addTrack, canAddTrack, setActiveTrack, tracks])
 
   const appendAudioTrackToSection = useCallback(() => {
+    if (!canAddTrack) return
     const audioAnchorTrack =
       audioTracks[audioTracks.length - 1] ??
       videoTracks[videoTracks.length - 1] ??
@@ -703,7 +708,7 @@ export const Timeline = memo(function Timeline({ duration }: TimelineProps) {
     setTimeout(() => {
       setActiveTrack(newTrack.id)
     }, 0)
-  }, [audioTracks, setActiveTrack, setTimelineTracks, tracks, videoTracks])
+  }, [audioTracks, canAddTrack, setActiveTrack, setTimelineTracks, tracks, videoTracks])
 
   // Trigger reflects the persisted preset (saved as a local editor setting).
   const ActiveTrackSizeIcon =
@@ -720,6 +725,7 @@ export const Timeline = memo(function Timeline({ duration }: TimelineProps) {
 
   const handleDeleteTrack = useCallback(
     (trackId: string) => {
+      if (hostMode) return
       if (tracks.length <= 1) {
         logger.warn('Cannot remove all tracks')
         return
@@ -730,11 +736,12 @@ export const Timeline = memo(function Timeline({ duration }: TimelineProps) {
       const remainingTracks = tracks.filter((track) => track.id !== trackId)
       syncTrackSelectionAfterRemoval([trackId], remainingTracks[0]?.id ?? null)
     },
-    [removeTracks, syncTrackSelectionAfterRemoval, tracks],
+    [hostMode, removeTracks, syncTrackSelectionAfterRemoval, tracks],
   )
 
   const handleDeleteEmptyTracks = useCallback(
     (contextTrackId: string) => {
+      if (hostMode) return
       const emptyTrackIds = getEmptyTrackIdsForRemoval(
         tracks,
         useItemsStore.getState().itemsByTrackId,
@@ -748,7 +755,7 @@ export const Timeline = memo(function Timeline({ duration }: TimelineProps) {
       const remainingTracks = tracks.filter((track) => !removedTrackIdsSet.has(track.id))
       syncTrackSelectionAfterRemoval(emptyTrackIds, remainingTracks[0]?.id ?? null)
     },
-    [removeTracks, syncTrackSelectionAfterRemoval, tracks],
+    [hostMode, removeTracks, syncTrackSelectionAfterRemoval, tracks],
   )
 
   /**
@@ -757,6 +764,7 @@ export const Timeline = memo(function Timeline({ duration }: TimelineProps) {
    * Keeps at least one track in the timeline.
    */
   const handleRemoveTracks = useCallback(() => {
+    if (hostMode) return
     const tracksToRemove =
       selectedTrackIds.length > 0 ? [...selectedTrackIds] : activeTrackId ? [activeTrackId] : []
 
@@ -773,7 +781,14 @@ export const Timeline = memo(function Timeline({ duration }: TimelineProps) {
 
     const remainingTrack = tracks.find((t) => !tracksToRemoveSet.has(t.id))
     syncTrackSelectionAfterRemoval(tracksToRemove, remainingTrack?.id ?? null)
-  }, [activeTrackId, removeTracks, selectedTrackIds, syncTrackSelectionAfterRemoval, tracks])
+  }, [
+    activeTrackId,
+    hostMode,
+    removeTracks,
+    selectedTrackIds,
+    syncTrackSelectionAfterRemoval,
+    tracks,
+  ])
 
   const videoDropIndicatorIndex =
     isTrackDragging && dropIndicatorIndex >= 0 && dropIndicatorIndex <= videoTracks.length
@@ -844,8 +859,9 @@ export const Timeline = memo(function Timeline({ duration }: TimelineProps) {
                   track={track}
                   isActive={activeTrackId === track.id}
                   isSelected={selectedTrackIdsSet.has(track.id)}
-                  canDeleteTrack={tracks.length > 1}
-                  canDeleteEmptyTracks={canDeleteEmptyTracks}
+                  canAddTrack={canAddTrack}
+                  canDeleteTrack={!hostMode && tracks.length > 1}
+                  canDeleteEmptyTracks={!hostMode && canDeleteEmptyTracks}
                   onToggleLock={() => toggleTrackLock(track.id)}
                   onToggleSyncLock={() => toggleTrackSyncLock(track.id)}
                   onToggleDisabled={() => toggleTrackDisabled(track.id)}
@@ -919,10 +935,10 @@ export const Timeline = memo(function Timeline({ duration }: TimelineProps) {
       />
 
       {/* Standalone-timeline (sequence) tabs — Main + top-level sequences */}
-      <SequenceTabs />
+      {!hostMode && <SequenceTabs />}
 
       {/* Composition Breadcrumbs - shown when inside a sub-composition */}
-      <CompositionBreadcrumbs />
+      {!hostMode && <CompositionBreadcrumbs />}
 
       {/* Timeline Content */}
       <div
@@ -976,17 +992,21 @@ export const Timeline = memo(function Timeline({ duration }: TimelineProps) {
                     variant="ghost"
                     size="icon"
                     className="h-6 w-6"
+                    disabled={!canAddTrack}
                     title={t('timeline.addTrack.label')}
                   >
                     <Plus className="w-3 h-3" />
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end" className="min-w-[10rem]">
-                  <DropdownMenuItem onSelect={() => addVideoTrackToTop()}>
+                  <DropdownMenuItem disabled={!canAddTrack} onSelect={() => addVideoTrackToTop()}>
                     <Video className="w-4 h-4" />
                     <span className="flex-1">{t('timeline.addTrack.video')}</span>
                   </DropdownMenuItem>
-                  <DropdownMenuItem onSelect={() => appendAudioTrackToSection()}>
+                  <DropdownMenuItem
+                    disabled={!canAddTrack}
+                    onSelect={() => appendAudioTrackToSection()}
+                  >
                     <AudioLines className="w-4 h-4" />
                     <span className="flex-1">{t('timeline.addTrack.audio')}</span>
                   </DropdownMenuItem>
@@ -998,7 +1018,11 @@ export const Timeline = memo(function Timeline({ duration }: TimelineProps) {
                 size="icon"
                 className="h-6 w-6"
                 onClick={handleRemoveTracks}
-                disabled={tracks.length === 0 || (!activeTrackId && selectedTrackIds.length === 0)}
+                disabled={
+                  hostMode ||
+                  tracks.length === 0 ||
+                  (!activeTrackId && selectedTrackIds.length === 0)
+                }
                 title={
                   tracks.length === 0
                     ? t('timeline.noTracksToRemove')
@@ -1087,7 +1111,7 @@ export const Timeline = memo(function Timeline({ duration }: TimelineProps) {
         </div>
       </div>
       <KeyframeGraphPanel
-        isOpen={keyframePanelOpen}
+        isOpen={!hostMode && keyframePanelOpen}
         placement="bottom"
         surface="edit"
         propertyColumnWidth={editorLayout.timelineSidebarWidth - 1}

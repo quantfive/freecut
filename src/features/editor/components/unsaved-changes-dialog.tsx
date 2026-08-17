@@ -1,5 +1,4 @@
 import { useState } from 'react'
-import { useNavigate } from '@tanstack/react-router'
 import { Trans, useTranslation } from 'react-i18next'
 import {
   AlertDialog,
@@ -21,6 +20,7 @@ interface UnsavedChangesDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   onSave: () => Promise<void>
+  onNavigateBack: () => void
   projectName?: string
 }
 
@@ -28,9 +28,9 @@ export function UnsavedChangesDialog({
   open,
   onOpenChange,
   onSave,
+  onNavigateBack,
   projectName,
 }: UnsavedChangesDialogProps) {
-  const navigate = useNavigate()
   const { t } = useTranslation()
   const [isSaving, setIsSaving] = useState(false)
 
@@ -39,7 +39,7 @@ export function UnsavedChangesDialog({
     try {
       await onSave()
       onOpenChange(false)
-      navigate({ to: '/projects' })
+      onNavigateBack()
     } catch (error) {
       logger.error('Failed to save project:', error)
       // Keep dialog open on error
@@ -50,7 +50,7 @@ export function UnsavedChangesDialog({
 
   const handleDiscard = () => {
     onOpenChange(false)
-    navigate({ to: '/projects' })
+    onNavigateBack()
   }
 
   return (

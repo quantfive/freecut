@@ -7,7 +7,10 @@ export { useMediaLibraryStore } from '@/features/media-library/stores/media-libr
 export { useEmbeddedSubtitlePickerStore } from '@/features/media-library/stores/embedded-subtitle-picker-store'
 export { useSubtitleScanProgressStore } from '@/features/media-library/stores/subtitle-scan-progress-store'
 export { getSharedProxyKey } from '@/features/media-library/utils/proxy-key'
-export { resolveMediaUrl } from '@/features/media-library/utils/media-resolver'
+export {
+  installRuntimeMediaResolver,
+  resolveMediaUrl,
+} from '@/features/media-library/utils/media-resolver'
 export {
   clearMediaDragData,
   getMediaDragData,

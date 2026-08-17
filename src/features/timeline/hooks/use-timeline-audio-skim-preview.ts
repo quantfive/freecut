@@ -7,6 +7,7 @@ import {
   publishAudioSkimMeterLevel,
 } from '@/shared/state/audio-skim-meter'
 import { usePlaybackStore } from '@/shared/state/playback'
+import { useEditorStore } from '@/shared/state/editor'
 import {
   getOrDecodeAudioSliceForPlayback,
   resolvePreviewAudioConformUrl,
@@ -24,6 +25,7 @@ import {
 
 export function useTimelineAudioSkimPreview(): void {
   const audioSkimmingEnabled = useTimelineStore((s) => s.audioSkimmingEnabled)
+  const hostMode = useEditorStore((s) => s.hostMode)
   const requestIdRef = useRef(0)
   const rafRef = useRef<number | null>(null)
   const pendingFrameRef = useRef<number | null>(null)
@@ -102,6 +104,10 @@ export function useTimelineAudioSkimPreview(): void {
 
   const skimPreviewFrame = useCallback(
     async (frame: number) => {
+      if (hostMode) {
+        stopAudioSkim()
+        return
+      }
       if (!useTimelineStore.getState().audioSkimmingEnabled) {
         stopAudioSkim()
         return
@@ -224,12 +230,13 @@ export function useTimelineAudioSkimPreview(): void {
         }
       }
     },
-    [resolveSkimUrl, stopAudioSkim],
+    [hostMode, resolveSkimUrl, stopAudioSkim],
   )
   skimPreviewFrameRef.current = skimPreviewFrame
 
   const scheduleAudioSkim = useCallback(
     (frame: number) => {
+      if (hostMode) return
       pendingFrameRef.current = frame
       if (rafRef.current !== null) return
 
@@ -241,7 +248,7 @@ export function useTimelineAudioSkimPreview(): void {
         latestAudioSkimRunnerRef.current?.schedule(nextFrame)
       })
     },
-    [],
+    [hostMode],
   )
 
   useEffect(() => {
@@ -250,6 +257,10 @@ export function useTimelineAudioSkimPreview(): void {
   }, [audioSkimmingEnabled, stopAudioSkim])
 
   useEffect(() => {
+    if (hostMode) {
+      stopAudioSkim()
+      return
+    }
     return usePlaybackStore.subscribe((state, prev) => {
       if (state.isPlaying) {
         if (!prev.isPlaying || prev.previewFrame !== null) stopAudioSkim()
@@ -262,7 +273,7 @@ export function useTimelineAudioSkimPreview(): void {
       if (state.previewFrameEpoch === prev.previewFrameEpoch) return
       scheduleAudioSkim(state.previewFrame)
     })
-  }, [scheduleAudioSkim, stopAudioSkim])
+  }, [hostMode, scheduleAudioSkim, stopAudioSkim])
 
   useEffect(() => stopAudioSkim, [stopAudioSkim])
 }

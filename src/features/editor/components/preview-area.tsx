@@ -314,6 +314,7 @@ export const PreviewArea = memo(function PreviewArea({
   )
 
   const sourcePreviewMediaId = useEditorStore((s) => s.sourcePreviewMediaId)
+  const hostMode = useEditorStore((s) => s.hostMode)
   const colorScopesOpen = useEditorStore((s) => s.colorScopesOpen)
   const workspace = useEditorStore((s) => s.workspace)
   const scopesPanelOpen = workspace === 'color' && colorScopesOpen
@@ -571,12 +572,18 @@ export const PreviewArea = memo(function PreviewArea({
             className="flex-1 min-h-0 relative overflow-hidden"
             aria-label="Preview canvas region"
           >
-            <ProgramPreviewSurface
-              project={liveProject}
-              containerSize={containerSize}
-              suspendOverlay={isPanelDragging}
-              chrome={previewChrome}
-            />
+            <div
+              className={hostMode ? 'h-full min-h-0 pointer-events-none select-none' : undefined}
+              inert={hostMode}
+              aria-disabled={hostMode || undefined}
+            >
+              <ProgramPreviewSurface
+                project={liveProject}
+                containerSize={containerSize}
+                suspendOverlay={isPanelDragging}
+                chrome={previewChrome}
+              />
+            </div>
           </div>
 
           {isPenModeActive ? (
@@ -687,7 +694,7 @@ export const PreviewArea = memo(function PreviewArea({
           ) : (
             <InteractionLockRegion locked={false} overlayClassName="rounded-none">
               <div className="flex flex-col flex-shrink-0">
-                {previewChrome === 'edit' && (
+                {previewChrome === 'edit' && !hostMode && (
                   <div className="border-t border-border panel-header flex h-7 items-center justify-center overflow-hidden px-3">
                     <div className="flex items-center gap-0">
                       <AlignmentToolbar projectSize={{ width, height }} />

@@ -22,6 +22,7 @@ import { formatBytes } from '@/shared/utils/format-utils'
 import { mediaTranscriptionService } from '../services/media-transcription-service'
 import { getMediaTranscriptionModelLabel } from '../transcription/registry'
 import { hasMediaSource, validateMediaHandle } from '@/infrastructure/storage'
+import { useEditorHostMode } from '../deps/editor'
 
 function formatTimestamp(sec: number): string {
   const m = Math.floor(sec / 60)
@@ -45,8 +46,12 @@ type SourceStatus =
   | 'needs-permission'
   | 'unavailable'
   | 'changed'
+  | 'host'
 
-async function resolveSourceStatus(media: MediaMetadata): Promise<SourceStatus> {
+// fallow-ignore-next-line complexity
+async function resolveSourceStatus(media: MediaMetadata, hostMode: boolean): Promise<SourceStatus> {
+  if (hostMode || media.storageType === 'host') return 'host'
+
   const hasWorkspaceCopy = await hasMediaSource(media.id)
 
   if (media.storageType === 'handle') {
@@ -69,6 +74,7 @@ export function MediaInfoPopover({
   onSeekToCaption,
 }: MediaInfoPopoverProps) {
   const { t } = useTranslation()
+  const hostMode = useEditorHostMode()
   const [open, setOpen] = useState(false)
   const [transcript, setTranscript] = useState<MediaTranscript | null>(null)
   const [transcriptLoading, setTranscriptLoading] = useState(false)
@@ -129,7 +135,10 @@ export function MediaInfoPopover({
   rows.push({
     icon: <Link className="w-3 h-3" />,
     label: t('media.info.source'),
-    value: t(`media.info.sourceStatus.${sourceStatus}`),
+    value:
+      sourceStatus === 'host'
+        ? t('media.info.sourceStatus.host', { defaultValue: 'Host-provided media' })
+        : t(`media.info.sourceStatus.${sourceStatus}`),
   })
 
   if (mediaType === 'video' && media.fps > 0) {
@@ -141,7 +150,7 @@ export function MediaInfoPopover({
   }
 
   useEffect(() => {
-    if (!open || !isTranscribable) {
+    if (!open || hostMode || !isTranscribable) {
       return
     }
 
@@ -164,7 +173,7 @@ export function MediaInfoPopover({
     return () => {
       cancelled = true
     }
-  }, [isTranscribable, media.id, open])
+  }, [hostMode, isTranscribable, media.id, open])
 
   useEffect(() => {
     if (!open) {
@@ -172,9 +181,14 @@ export function MediaInfoPopover({
     }
 
     let cancelled = false
+    if (hostMode || media.storageType === 'host') {
+      setSourceStatus('host')
+      return
+    }
+
     setSourceStatus('checking')
 
-    void resolveSourceStatus(media)
+    void resolveSourceStatus(media, hostMode)
       .then((status) => {
         if (!cancelled) {
           setSourceStatus(status)
@@ -189,7 +203,7 @@ export function MediaInfoPopover({
     return () => {
       cancelled = true
     }
-  }, [media, open])
+  }, [hostMode, media, open])
 
   return (
     <Popover open={open} onOpenChange={setOpen}>

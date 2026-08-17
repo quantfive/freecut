@@ -7,6 +7,7 @@ import {
 } from '@/features/editor/deps/media-library'
 import { useFilmstrip, type FilmstripFrame } from '@/features/editor/deps/timeline-hooks'
 import type { MiniFilmTileClip } from './types'
+import { useEditorHostMode } from '@/features/editor/host/context'
 
 /**
  * Resolve poster thumbnails (the per-media frame captured at import) for clips
@@ -15,6 +16,7 @@ import type { MiniFilmTileClip } from './types'
  * URLs — read only, never revoke here.
  */
 export function useMediaPosterUrls(mediaIds: readonly string[]): Map<string, string> {
+  const hostMode = useEditorHostMode()
   const [posterUrls, setPosterUrls] = useState<Map<string, string>>(() => new Map())
 
   // Reactive snapshot of which media have a poster available, so a clip painted
@@ -30,6 +32,7 @@ export function useMediaPosterUrls(mediaIds: readonly string[]): Map<string, str
   )
 
   useEffect(() => {
+    if (hostMode) return
     const missing = Object.entries(thumbnailIds)
       .filter(([id, thumbnailId]) => thumbnailId && !posterUrls.has(id))
       .map(([id]) => id)
@@ -63,7 +66,7 @@ export function useMediaPosterUrls(mediaIds: readonly string[]): Map<string, str
     return () => {
       cancelled = true
     }
-  }, [thumbnailIds, posterUrls])
+  }, [hostMode, thumbnailIds, posterUrls])
 
   return posterUrls
 }
@@ -75,6 +78,7 @@ export function useMediaPosterUrls(mediaIds: readonly string[]): Map<string, str
  * to the import poster so a tile never flashes black.
  */
 export function useClipStartFrameUrl(clip: MiniFilmTileClip, projectFps: number): string | null {
+  const hostMode = useEditorHostMode()
   const isVideo = clip.type === 'video' && Boolean(clip.mediaId)
   const mediaId = clip.mediaId ?? ''
 
@@ -93,7 +97,7 @@ export function useClipStartFrameUrl(clip: MiniFilmTileClip, projectFps: number)
   const blobUrl = resolved?.mediaId === mediaId ? resolved.url : null
 
   useEffect(() => {
-    if (!isVideo || !mediaId || blobUrl) return
+    if (hostMode || !isVideo || !mediaId || blobUrl) return
     let cancelled = false
     void resolveMediaUrl(mediaId)
       .then((url) => {
@@ -105,7 +109,7 @@ export function useClipStartFrameUrl(clip: MiniFilmTileClip, projectFps: number)
     return () => {
       cancelled = true
     }
-  }, [isVideo, mediaId, blobUrl])
+  }, [blobUrl, hostMode, isVideo, mediaId])
 
   // Source-frame -> seconds, mirroring clip-content's conversion. Prefer the
   // media's real duration (duration-ratio) over source-fps division when known.
@@ -133,7 +137,7 @@ export function useClipStartFrameUrl(clip: MiniFilmTileClip, projectFps: number)
     blobUrl,
     duration: sourceDurationSeconds,
     isVisible: isVideo,
-    enabled: isVideo,
+    enabled: isVideo && !hostMode,
     priorityWindow,
     targetFrameIndices,
   })
