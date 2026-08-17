@@ -11,6 +11,7 @@ const PACKAGE_ROOT = path.join(ROOT, 'packages/freecut-editor')
 const DIST = path.join(PACKAGE_ROOT, 'dist')
 const ARTIFACTS = path.join(ROOT, 'artifacts')
 const packageJson = JSON.parse(fs.readFileSync(path.join(PACKAGE_ROOT, 'package.json'), 'utf8'))
+const publishConfig = packageJson.publishConfig ?? {}
 const artifactName = `freecut-editor-surface-${packageJson.version}.tgz`
 const artifactPath = path.join(ARTIFACTS, artifactName)
 
@@ -86,10 +87,10 @@ function verifyPackageInputs() {
   assertCondition(packageJson.name === '@quantfive/freecut-editor-surface', 'unexpected package name')
   assertCondition(/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(packageJson.version), 'package version must be semver')
   assertCondition(
-    packageJson.publishConfig?.registry === 'https://npm.pkg.github.com',
+    publishConfig.registry === 'https://npm.pkg.github.com',
     'package must target the private GitHub Packages npm registry',
   )
-  assertCondition(packageJson.publishConfig?.access !== 'public', 'package must not enable public npm access')
+  assertCondition(publishConfig.access !== 'public', 'package must not enable public npm access')
   assertCondition(packageJson.exports?.['./style.css'] === './dist/style.css', 'style export must be stable')
   assertCondition(packageJson.peerDependencies?.react, 'React must remain a peer dependency')
   assertCondition(packageJson.peerDependencies?.['react-dom'], 'React DOM must remain a peer dependency')
