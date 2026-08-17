@@ -161,6 +161,9 @@ function nativeItemFromHostItem(
       ...(typeof style?.background_color === 'string'
         ? { backgroundColor: style.background_color }
         : {}),
+      ...(typeof style?.background_opacity === 'number'
+        ? { backgroundOpacity: style.background_opacity }
+        : {}),
       ...(style?.alignment === 'left' ||
       style?.alignment === 'center' ||
       style?.alignment === 'right'
@@ -260,6 +263,9 @@ function frameItemToNativeComparable(
       ...(item.fontSize !== undefined ? { font_size: item.fontSize } : {}),
       ...(item.color && item.color !== '#ffffff' ? { color: item.color } : {}),
       ...(item.backgroundColor ? { background_color: item.backgroundColor } : {}),
+      ...(item.backgroundOpacity !== undefined
+        ? { background_opacity: item.backgroundOpacity }
+        : {}),
       ...(item.textAlign ? { alignment: item.textAlign } : {}),
     }
     return {

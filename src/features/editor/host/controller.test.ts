@@ -200,7 +200,7 @@ describe('embedded FreeCut host controller', () => {
               from: 10,
               durationInFrames: 30,
               text: 'Hello host',
-              style: { font_size: 48, alignment: 'center' },
+              style: { font_size: 48, alignment: 'center', background_opacity: 0.35 },
             },
           ],
         },
@@ -212,6 +212,7 @@ describe('embedded FreeCut host controller', () => {
       textRole: 'caption',
       fontSize: 48,
       textAlign: 'center',
+      backgroundOpacity: 0.35,
     })
 
     const converted = nativeTimelineToFrameDocument(
@@ -229,6 +230,7 @@ describe('embedded FreeCut host controller', () => {
       id: 'caption-cue',
       from: 10,
       durationInFrames: 30,
+      style: { background_opacity: 0.35 },
     })
     expect(capabilityForCommand('set_caption_style')).toBe('timeline.caption')
   })
