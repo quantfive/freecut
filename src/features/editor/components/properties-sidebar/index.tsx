@@ -23,12 +23,25 @@ import { useEditorStore } from '@/shared/state/editor'
 import { useSelectionStore } from '@/shared/state/selection'
 import type { TimelineItem } from '@/types/timeline'
 import { CanvasPanel } from './canvas-panel'
+import { CaptionEditorHost } from '../caption-editor-host'
 import { useSettingsStore } from '@/features/editor/deps/settings'
 import {
   EDITOR_LAYOUT_CSS_VALUES,
   clampRightEditorSidebarWidth,
   getEditorLayout,
 } from '@/config/editor-layout'
+
+interface PropertiesSidebarProject {
+  id: string
+  width: number
+  height: number
+  fps: number
+}
+
+interface PropertiesSidebarProps {
+  projectId?: string
+  project?: PropertiesSidebarProject
+}
 
 function loadClipPropertiesPanel() {
   return import('./clip-panel').then((module) => ({ default: module.ClipPanel }))
@@ -124,7 +137,10 @@ function getClipHeader(items: HeaderItem[]) {
  * Shows TransitionPanel when a transition is selected, MarkerPanel when a marker
  * is selected, ClipPanel when clips are selected, CanvasPanel otherwise.
  */
-export const PropertiesSidebar = memo(function PropertiesSidebar() {
+export const PropertiesSidebar = memo(function PropertiesSidebar({
+  projectId,
+  project,
+}: PropertiesSidebarProps) {
   const { t } = useTranslation()
   const editorDensity = useSettingsStore((s) => s.editorDensity)
   const editorLayout = getEditorLayout(editorDensity)
@@ -303,16 +319,11 @@ export const PropertiesSidebar = memo(function PropertiesSidebar() {
                 </Button>
                 <Settings2 className="w-3 h-3 shrink-0 text-muted-foreground" />
                 <h2 className="min-w-0 flex items-center gap-1.5 text-xs font-semibold text-muted-foreground">
-                  <span className="shrink-0 uppercase tracking-wide">
-                    {headerLabel}
-                  </span>
+                  <span className="shrink-0 uppercase tracking-wide">{headerLabel}</span>
                   {headerContext && (
                     <>
                       <span className="shrink-0">-</span>
-                      <span
-                        className="truncate normal-case tracking-normal"
-                        title={headerTitle}
-                      >
+                      <span className="truncate normal-case tracking-normal" title={headerTitle}>
                         {headerContext}
                       </span>
                     </>
@@ -371,6 +382,14 @@ export const PropertiesSidebar = memo(function PropertiesSidebar() {
                   {!hasClipSelection && (
                     <div>
                       <CanvasPanel />
+                      {projectId && project ? (
+                        <CaptionEditorHost
+                          projectId={projectId}
+                          width={project.width}
+                          height={project.height}
+                          fps={project.fps}
+                        />
+                      ) : null}
                     </div>
                   )}
                 </>

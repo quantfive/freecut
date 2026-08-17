@@ -4,6 +4,7 @@ import {
   useCompositionNavigationStore,
   useCompositionsStore,
   useItemsStore,
+  useTimelineSettingsStore,
 } from '@/features/editor/deps/timeline-store'
 import { useEditorStore } from '@/shared/state/editor'
 import { useSelectionStore } from '@/shared/state/selection'
@@ -108,6 +109,22 @@ describe('PropertiesSidebar', () => {
       expect(panelModuleLoads.clip).toHaveBeenCalledTimes(1)
     })
     expect(screen.getByText('Canvas Panel')).toBeInTheDocument()
+  })
+
+  it('mounts the production caption editor in the editor route context', async () => {
+    resetStores([], [])
+    useTimelineSettingsStore.getState().setTimelineLoading(false)
+
+    render(
+      <PropertiesSidebar
+        projectId="project-caption-ui"
+        project={{ id: 'project-caption-ui', width: 1920, height: 1080, fps: 30 }}
+      />,
+    )
+
+    expect(await screen.findByTestId('caption-editor')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Add track' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Add caption track' })).toBeInTheDocument()
   })
 
   it('identifies the active composition when Motion has no layer selection', () => {
