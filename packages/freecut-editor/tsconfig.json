@@ -1,0 +1,17 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "allowImportingTsExtensions": false,
+    "declaration": false,
+    "declarationMap": false,
+    "emitDeclarationOnly": false,
+    "noCheck": true,
+    "noEmit": true,
+    "rootDir": "../..",
+    "paths": {
+      "@/*": ["../../src/*"]
+    },
+    "types": ["vite/client", "vite-plus/test/globals", "@webgpu/types"]
+  },
+  "include": ["./src/index.ts"]
+}
