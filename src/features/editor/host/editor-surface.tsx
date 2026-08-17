@@ -12,6 +12,7 @@ import {
   type EmbeddedEditorSnapshot,
 } from './contract'
 import { EditorHostProvider } from './context-provider'
+import { HostCaptionEditorProvider } from './caption-editor-context'
 import { EmbeddedEditorHostRuntime } from './runtime'
 import '@/index.css'
 
@@ -77,21 +78,23 @@ export function FreeCutEditorSurface({ host }: { host: EditorHost }) {
     <I18nextProvider i18n={i18n}>
       <TooltipProvider delayDuration={300}>
         <EditorHostProvider value={{ mode: 'host', capabilities, host }}>
-          <ErrorBoundary level="feature">
-            <div data-freecut-editor-surface="host" className="h-screen min-h-0">
-              <LoadedEditor
-                projectId={state.snapshot.project.id}
-                project={state.snapshot.project}
-                migration={{
-                  storedSchemaVersion: 1,
-                  currentSchemaVersion: 1,
-                  requiresUpgrade: false,
-                }}
-                hostRuntime={state.runtime}
-                onNavigateBack={onNavigateBack}
-              />
-            </div>
-          </ErrorBoundary>
+          <HostCaptionEditorProvider runtime={state.runtime}>
+            <ErrorBoundary level="feature">
+              <div data-freecut-editor-surface="host" className="h-screen min-h-0">
+                <LoadedEditor
+                  projectId={state.snapshot.project.id}
+                  project={state.snapshot.project}
+                  migration={{
+                    storedSchemaVersion: 1,
+                    currentSchemaVersion: 1,
+                    requiresUpgrade: false,
+                  }}
+                  hostRuntime={state.runtime}
+                  onNavigateBack={onNavigateBack}
+                />
+              </div>
+            </ErrorBoundary>
+          </HostCaptionEditorProvider>
         </EditorHostProvider>
         <GlobalTooltip />
       </TooltipProvider>

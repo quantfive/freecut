@@ -33,12 +33,15 @@ nothing.
 
 ## Caption UI
 
-`CaptionEditor` is the FreeCut-side controlled caption surface consumed by an
-editor shell. It reads a frame-native `FreeCutFrameDocument`, but every mutation
-is translated back into the canonical integer-microsecond command contract before
-it reaches `CodePressCommandAdapter`. Track display toggles use the canonical
+`CaptionEditor` is the FreeCut-side controlled caption surface mounted by the
+merged host-backed editor surface. It reads the runtime controller's
+authoritative frame-native `FreeCutFrameDocument`, but every mutation is
+translated back into the canonical integer-microsecond command contract before
+it reaches `EditorHost.submitEdit`. Track display toggles use the canonical
 track mute field; cue text/timing, track defaults, cue-specific styles, and
-track/cue removal all carry the adapter's revision and precondition checks.
+track/cue removal all carry the host controller's revision and precondition
+checks. The standalone adapter remains a deterministic unit-test port; the
+production caption panel does not create a project or synthetic duration.
 
 The UI rejects empty, out-of-range, overlapping, duplicate, and over-budget cue
 sets before submitting them. A rejected revision or idempotency result is shown

@@ -145,6 +145,7 @@ function nativeItemFromHostItem(
   }
 
   if (item.type === 'caption_cue') {
+    const style = item.style
     return {
       id: item.id,
       type: 'text',
@@ -154,7 +155,17 @@ function nativeItemFromHostItem(
       label: item.text || 'Caption',
       text: item.text,
       textRole: 'caption',
-      color: '#ffffff',
+      color: style?.color ?? '#ffffff',
+      ...(typeof style?.font_family === 'string' ? { fontFamily: style.font_family } : {}),
+      ...(typeof style?.font_size === 'number' ? { fontSize: style.font_size } : {}),
+      ...(typeof style?.background_color === 'string'
+        ? { backgroundColor: style.background_color }
+        : {}),
+      ...(style?.alignment === 'left' ||
+      style?.alignment === 'center' ||
+      style?.alignment === 'right'
+        ? { textAlign: style.alignment }
+        : {}),
     }
   }
 
@@ -243,6 +254,25 @@ function frameItemToNativeComparable(
     }
   }
 
+  if (item.type === 'text' && item.textRole === 'caption') {
+    const style = {
+      ...(item.fontFamily ? { font_family: item.fontFamily } : {}),
+      ...(item.fontSize !== undefined ? { font_size: item.fontSize } : {}),
+      ...(item.color && item.color !== '#ffffff' ? { color: item.color } : {}),
+      ...(item.backgroundColor ? { background_color: item.backgroundColor } : {}),
+      ...(item.textAlign ? { alignment: item.textAlign } : {}),
+    }
+    return {
+      type: 'caption_cue',
+      id: item.id,
+      trackId: item.trackId,
+      from: item.from,
+      durationInFrames: item.durationInFrames,
+      text: item.text,
+      ...(Object.keys(style).length > 0 ? { style } : {}),
+    }
+  }
+
   if (item.type === 'text') {
     return {
       type: 'text',
@@ -293,14 +323,25 @@ export function nativeTimelineToFrameDocument(
     itemsByTrack.set(item.trackId, list)
   }
 
-  const tracks = state.tracks.map((track) => ({
-    id: track.id,
-    kind: track.kind === 'audio' ? ('audio' as const) : ('video' as const),
-    name: track.name,
-    locked: track.locked,
-    muted: track.muted,
-    items: itemsByTrack.get(track.id) ?? [],
-  }))
+  const tracks = state.tracks.map((track) => {
+    const authoritativeTrack = authoritative.tracks.find((candidate) => candidate.id === track.id)
+    return {
+      id: track.id,
+      kind:
+        authoritativeTrack?.kind ??
+        (track.kind === 'audio' ? ('audio' as const) : ('video' as const)),
+      name: track.name,
+      ...(authoritativeTrack?.language !== undefined
+        ? { language: authoritativeTrack.language }
+        : {}),
+      locked: track.locked,
+      muted: track.muted,
+      ...(authoritativeTrack?.defaultStyle !== undefined
+        ? { defaultStyle: authoritativeTrack.defaultStyle }
+        : {}),
+      items: itemsByTrack.get(track.id) ?? [],
+    }
+  })
 
   const durationInFrames = Math.max(
     authoritative.durationInFrames,

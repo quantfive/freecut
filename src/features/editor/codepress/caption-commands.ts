@@ -16,11 +16,18 @@ import {
 } from './translation'
 import { framesToMicroseconds, type FrameRateLike } from './timing'
 
-export interface CaptionCommandPort {
+export interface CaptionDocumentPort {
   getSnapshot(): AdapterSnapshot
-  apply(input: unknown): EditApplyResult
   subscribe(listener: (document: ControlledEditorDocument) => void): () => void
 }
+
+export interface CaptionCommandPort extends CaptionDocumentPort {
+  apply(input: unknown): EditApplyResult
+}
+
+export type CaptionCommandSubmitter = (
+  batch: EditCommandBatch,
+) => EditApplyResult | Promise<EditApplyResult>
 
 export interface CaptionBatchOptions {
   operationId?: string
@@ -66,7 +73,7 @@ export function captionCuePrecondition(
 }
 
 export function createCaptionCommandBatch(
-  adapter: CaptionCommandPort,
+  adapter: CaptionDocumentPort,
   frameCommands: readonly FrameCaptionCommand[],
   fps: FrameRateLike,
   options: CaptionBatchOptions = {},

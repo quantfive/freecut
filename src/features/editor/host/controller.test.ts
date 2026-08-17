@@ -12,6 +12,7 @@ import {
 import {
   DEFAULT_HOST_CAPABILITIES,
   SUPPORTED_HOST_COMMANDS,
+  capabilityForCommand,
   createLocalEditorHost,
   type EditorHost,
   type EmbeddedEditorSnapshot,
@@ -19,7 +20,7 @@ import {
   type MediaLocator,
 } from './contract'
 import { HostEditorController, deriveSupportedHostEdit } from './controller'
-import { hostSnapshotToNativeTimeline } from './document'
+import { hostSnapshotToNativeTimeline, nativeTimelineToFrameDocument } from './document'
 import { EmbeddedEditorHostRuntime } from './runtime'
 import { useMediaLibraryStore } from '@/features/editor/deps/media-library'
 import { useTimelineStore } from '@/features/editor/deps/timeline-store'
@@ -178,6 +179,58 @@ describe('embedded FreeCut host controller', () => {
       mediaId: 'media-1',
       src: '',
     })
+  })
+
+  it('keeps caption styles and caption-role items on the host-backed native bridge', () => {
+    const initial = snapshot({
+      tracks: [
+        {
+          id: 'caption-track',
+          kind: 'caption',
+          name: 'English',
+          language: 'en',
+          locked: false,
+          muted: false,
+          defaultStyle: { font_family: 'Inter', background_opacity: 0.6 },
+          items: [
+            {
+              type: 'caption_cue',
+              id: 'caption-cue',
+              trackId: 'caption-track',
+              from: 10,
+              durationInFrames: 30,
+              text: 'Hello host',
+              style: { font_size: 48, alignment: 'center' },
+            },
+          ],
+        },
+      ],
+    })
+    const native = hostSnapshotToNativeTimeline(initial)
+    expect(native.items[0]).toMatchObject({
+      type: 'text',
+      textRole: 'caption',
+      fontSize: 48,
+      textAlign: 'center',
+    })
+
+    const converted = nativeTimelineToFrameDocument(
+      { tracks: native.tracks, items: native.items, fps: native.fps },
+      initial.timeline,
+    )
+    expect(converted).toMatchObject({ ok: true })
+    if (!converted.ok) return
+    expect(converted.document.tracks[0]).toMatchObject({
+      kind: 'caption',
+      defaultStyle: { font_family: 'Inter', background_opacity: 0.6 },
+    })
+    expect(converted.document.tracks[0]?.items[0]).toMatchObject({
+      type: 'caption_cue',
+      id: 'caption-cue',
+      from: 10,
+      durationInFrames: 30,
+    })
+    expect(capabilityForCommand('set_caption_style')).toBe('timeline.caption')
   })
 
   it('submits a supported edit and replaces state with the authoritative revision', async () => {
@@ -365,6 +418,13 @@ describe('embedded FreeCut host controller', () => {
       'split_item',
       'remove_item',
       'add_track',
+      'update_track',
+      'add_caption_track',
+      'remove_caption_track',
+      'update_caption_track',
+      'upsert_caption_cues',
+      'remove_caption_cues',
+      'set_caption_style',
     ])
     const adapter = createLocalEditorHost({
       load: () => snapshot(),

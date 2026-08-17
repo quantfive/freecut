@@ -3,9 +3,12 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   applyCaptionCommands,
   captionCuePrecondition,
+  createCaptionCommandBatch,
   frameCueToCommandCue,
   isCaptionApplySuccess,
   makeCaptionOperationId,
+  type CaptionCommandSubmitter,
+  type CaptionDocumentPort,
   type CaptionCommandPort,
 } from './caption-commands'
 import { captionStyleOrDefault, validateFrameCaptionCues } from './caption-validation'
@@ -19,12 +22,14 @@ import {
   type CaptionCueDraft,
   type CaptionTrackDraft,
 } from './caption-editor-view'
-import type { CaptionStyle, Precondition } from './contract'
+import type { CaptionStyle, EditApplyResult, Precondition } from './contract'
 import type { FrameRateLike } from './timing'
 
 export interface CaptionEditorProps {
-  /** The PR3 controlled adapter, or a host implementing the same narrow port. */
-  adapter: CaptionCommandPort
+  /** The frame-document port supplied by the standalone adapter or host surface. */
+  adapter: CaptionDocumentPort
+  /** Optional async host submission path; omitted for the synchronous local adapter. */
+  submit?: CaptionCommandSubmitter
   /** Frame currently shown by the host preview. */
   currentFrame?: number
   /** Host-owned loading state while an authoritative document is being fetched. */
@@ -51,7 +56,7 @@ function makeId(prefix: string, existing: ReadonlySet<string>): string {
   return existing.has(candidate) ? `${prefix}-${Date.now()}` : candidate
 }
 
-function snapshotToFrameDocument(adapter: CaptionCommandPort): FreeCutFrameDocument | null {
+function snapshotToFrameDocument(adapter: CaptionDocumentPort): FreeCutFrameDocument | null {
   try {
     return controlledDocumentToFreeCutDocument(adapter.getSnapshot().document)
   } catch {
@@ -78,13 +83,14 @@ function cueFromDraft(cue: FreeCutFrameCaptionCue, draft: CaptionCueDraft): Free
   }
 }
 
-function resultMessage(result: ReturnType<typeof applyCaptionCommands>): string {
+function resultMessage(result: EditApplyResult): string {
   if (!isCaptionApplySuccess(result)) return result.error.message
   return result.status === 'replayed' ? 'Caption edit replayed safely.' : 'Caption edit applied.'
 }
 
 export function CaptionEditor({
   adapter,
+  submit,
   currentFrame = 0,
   loading = false,
   error = null,
@@ -170,43 +176,47 @@ export function CaptionEditor({
     (
       commands: Parameters<typeof applyCaptionCommands>[1],
       preconditions: readonly Precondition[] = [],
-    ) => {
-      if (busy || !document) return false
+    ): Promise<boolean> => {
+      if (busy || !document) return Promise.resolve(false)
       setBusy(true)
       setAdapterError(null)
       setAnnouncement('Saving caption edit…')
-      try {
-        const result = applyCaptionCommands(adapter, commands, fps, {
-          operationId: makeCaptionOperationId(),
-          preconditions,
-        })
-        const message = resultMessage(result)
-        if (result.status === 'rejected') {
-          setAdapterError(message)
-          setAnnouncement(
-            'Caption edit was rejected. Refresh the authoritative revision before retrying.',
-          )
-          return false
-        }
-        syncDocument()
-        setAnnouncement(message)
-        return true
-      } catch (caught) {
-        const message = caught instanceof Error ? caught.message : 'Caption edit failed.'
-        setAdapterError(message)
-        setAnnouncement('Caption edit failed.')
-        return false
-      } finally {
-        setBusy(false)
+      const options = {
+        operationId: makeCaptionOperationId(),
+        preconditions,
       }
+      const result = submit
+        ? submit(createCaptionCommandBatch(adapter, commands, fps, options))
+        : applyCaptionCommands(adapter as CaptionCommandPort, commands, fps, options)
+      return Promise.resolve(result)
+        .then((applied) => {
+          const message = resultMessage(applied)
+          if (applied.status === 'rejected') {
+            setAdapterError(message)
+            setAnnouncement(
+              'Caption edit was rejected. Refresh the authoritative revision before retrying.',
+            )
+            return false
+          }
+          syncDocument()
+          setAnnouncement(message)
+          return true
+        })
+        .catch((caught) => {
+          const message = caught instanceof Error ? caught.message : 'Caption edit failed.'
+          setAdapterError(message)
+          setAnnouncement('Caption edit failed.')
+          return false
+        })
+        .finally(() => setBusy(false))
     },
-    [adapter, busy, document, fps, syncDocument],
+    [adapter, busy, document, fps, submit, syncDocument],
   )
 
-  const addTrack = useCallback(() => {
+  const addTrack = useCallback(async () => {
     const ids = new Set(tracks.map((track) => track.id))
     const trackId = makeId('caption-track', ids)
-    const applied = runCommands([
+    const applied = await runCommands([
       {
         command_id: makeCaptionOperationId('add-caption-track'),
         type: 'add_caption_track',
@@ -219,9 +229,9 @@ export function CaptionEditor({
     if (applied) setActiveTrackId(trackId)
   }, [document?.tracks.length, runCommands, tracks])
 
-  const removeTrack = useCallback(() => {
+  const removeTrack = useCallback(async () => {
     if (!activeTrack) return
-    runCommands(
+    await runCommands(
       [
         {
           command_id: makeCaptionOperationId('remove-caption-track'),
@@ -233,7 +243,7 @@ export function CaptionEditor({
     )
   }, [activeTrack, runCommands])
 
-  const saveTrack = useCallback(() => {
+  const saveTrack = useCallback(async () => {
     if (!activeTrack || !editingTrackDraft) return
     if (!editingTrackDraft.name.trim() || editingTrackDraft.name.length > 128) {
       setAdapterError('Track name must be non-empty and at most 128 characters.')
@@ -243,7 +253,7 @@ export function CaptionEditor({
       setAdapterError('Track language must be at most 32 characters.')
       return
     }
-    runCommands(
+    await runCommands(
       [
         {
           command_id: makeCaptionOperationId('update-caption-track'),
@@ -257,9 +267,9 @@ export function CaptionEditor({
     )
   }, [activeTrack, editingTrackDraft, runCommands])
 
-  const toggleDisplay = useCallback(() => {
+  const toggleDisplay = useCallback(async () => {
     if (!activeTrack) return
-    runCommands(
+    await runCommands(
       [
         {
           command_id: makeCaptionOperationId('toggle-caption-track'),
@@ -272,7 +282,7 @@ export function CaptionEditor({
     )
   }, [activeTrack, runCommands])
 
-  const addCue = useCallback(() => {
+  const addCue = useCallback(async () => {
     if (!activeTrack || durationInFrames < 2) {
       setAdapterError('The timeline is too short to add a caption cue.')
       return
@@ -305,7 +315,7 @@ export function CaptionEditor({
       setAdapterError('The new caption cue would exceed the bounded track range.')
       return
     }
-    const applied = runCommands(
+    const applied = await runCommands(
       [
         {
           command_id: makeCaptionOperationId('add-caption-cue'),
@@ -332,7 +342,7 @@ export function CaptionEditor({
   }, [])
 
   const saveCue = useCallback(
-    (trackId: string, cue: FreeCutFrameCaptionCue) => {
+    async (trackId: string, cue: FreeCutFrameCaptionCue) => {
       const draft = cueDrafts[cue.id] ?? draftForCue(cue)
       const nextCue = cueFromDraft(cue, draft)
       const cues =
@@ -345,7 +355,7 @@ export function CaptionEditor({
         setAdapterError(issues[0]?.message ?? 'Cue timing is invalid.')
         return
       }
-      const applied = runCommands(
+      const applied = await runCommands(
         [
           {
             command_id: makeCaptionOperationId('update-caption-cue'),
@@ -362,8 +372,8 @@ export function CaptionEditor({
   )
 
   const removeCue = useCallback(
-    (trackId: string, cue: FreeCutFrameCaptionCue) => {
-      runCommands(
+    async (trackId: string, cue: FreeCutFrameCaptionCue) => {
+      await runCommands(
         [
           {
             command_id: makeCaptionOperationId('remove-caption-cue'),
@@ -378,10 +388,10 @@ export function CaptionEditor({
     [fps, runCommands],
   )
 
-  const applyStyle = useCallback(() => {
+  const applyStyle = useCallback(async () => {
     if (!activeTrack) return
     const cue = styleTargetCue
-    runCommands(
+    await runCommands(
       [
         {
           command_id: makeCaptionOperationId('set-caption-style'),

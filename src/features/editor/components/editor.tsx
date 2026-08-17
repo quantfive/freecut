@@ -1,5 +1,4 @@
 import { useEffect, useState, useRef, useCallback, memo, lazy, Suspense } from 'react'
-import type { ReactNode } from 'react'
 import { useRouter } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
 import { createLogger, createOperationId } from '@/shared/logging/logger'
@@ -430,27 +429,6 @@ const TimelineShortcutsController = memo(function TimelineShortcutsController() 
   return null
 })
 
-const HostDisabledRegion = memo(function HostDisabledRegion({
-  disabled,
-  children,
-}: {
-  disabled: boolean
-  children: ReactNode
-}) {
-  if (!disabled) return <>{children}</>
-  return (
-    <div
-      className="relative h-full min-h-0 pointer-events-none select-none opacity-60"
-      aria-disabled="true"
-      data-host-disabled="properties"
-      inert
-      title="Properties editing is unavailable in host mode"
-    >
-      {children}
-    </div>
-  )
-})
-
 // fallow-ignore-next-line complexity
 export const LoadedEditor = memo(function LoadedEditor({
   projectId,
@@ -854,9 +832,7 @@ export const LoadedEditor = memo(function LoadedEditor({
                 {!propertiesFullColumn && (
                   <InteractionLockRegion locked={isMaskEditingActive}>
                     <ErrorBoundary level="feature">
-                      <HostDisabledRegion disabled={Boolean(hostRuntime)}>
-                        <PropertiesSidebar />
-                      </HostDisabledRegion>
+                      <PropertiesSidebar />
                     </ErrorBoundary>
                   </InteractionLockRegion>
                 )}
@@ -899,9 +875,7 @@ export const LoadedEditor = memo(function LoadedEditor({
         {propertiesFullColumn && !hidesDefaultSidebars && (
           <InteractionLockRegion locked={isMaskEditingActive}>
             <ErrorBoundary level="feature">
-              <HostDisabledRegion disabled={Boolean(hostRuntime)}>
-                <PropertiesSidebar />
-              </HostDisabledRegion>
+              <PropertiesSidebar />
             </ErrorBoundary>
           </InteractionLockRegion>
         )}
