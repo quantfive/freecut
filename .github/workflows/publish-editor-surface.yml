@@ -58,6 +58,15 @@ jobs:
       - name: Build deterministic package artifact
         run: npm run package:editor-surface
 
+      - name: Verify packed artifact as an installed consumer
+        shell: bash
+        run: |
+          set -euo pipefail
+          package_version="$(node -p "require('./packages/freecut-editor/package.json').version")"
+          artifact="artifacts/freecut-editor-surface-${package_version}.tgz"
+          test -f "${artifact}"
+          npm run test:editor-surface:consumer -- --artifact "${artifact}"
+
       - name: Publish private package to GitHub Packages
         shell: bash
         env:

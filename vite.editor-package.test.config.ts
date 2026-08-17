@@ -1,15 +1,13 @@
 import { defineConfig, lazyPlugins } from 'vite-plus'
 import react from '@vitejs/plugin-react'
-import tailwindcss from '@tailwindcss/vite'
-import { fileURLToPath } from 'node:url'
 
 export default defineConfig({
-  plugins: lazyPlugins(() => [react(), tailwindcss()]),
+  plugins: lazyPlugins(() => [react()]),
   resolve: {
-    alias: {
-      '@': fileURLToPath(new URL('./src', import.meta.url)),
-    },
     dedupe: ['react', 'react-dom'],
+  },
+  ssr: {
+    noExternal: ['@quantfive/freecut-editor-surface'],
   },
   test: {
     environment: 'jsdom',
@@ -19,7 +17,12 @@ export default defineConfig({
       },
     },
     globals: true,
-    include: ['packages/freecut-editor/consumer-smoke.test.tsx'],
-    setupFiles: ['packages/freecut-editor/consumer-smoke.setup.ts'],
+    include: ['consumer-smoke.test.tsx'],
+    setupFiles: ['consumer-smoke.setup.ts'],
+    server: {
+      deps: {
+        inline: ['@quantfive/freecut-editor-surface'],
+      },
+    },
   },
 })
