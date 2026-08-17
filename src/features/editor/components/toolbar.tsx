@@ -1,5 +1,4 @@
-import { memo, useEffect, useMemo, useRef, useState } from 'react'
-import { useNavigate } from '@tanstack/react-router'
+import { lazy, memo, Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
   ArrowLeft,
@@ -28,7 +27,6 @@ import {
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Separator } from '@/components/ui/separator'
 import { LocalInferenceStatusPill } from './local-inference-status-pill'
-import { ProjectDebugPanel } from './project-debug-panel'
 import { SettingsDialog } from './settings-dialog'
 import { ShortcutsDialog } from './shortcuts-dialog'
 import { UnsavedChangesDialog } from './unsaved-changes-dialog'
@@ -41,8 +39,12 @@ import { LanguageSwitcher } from '@/shared/ui/language-switcher'
 import { useDebugStore } from '@/features/editor/stores/debug-store'
 import { useItemsStore, useTimelineStore } from '@/features/editor/deps/timeline-store'
 import { useMediaLibraryStore } from '@/features/editor/deps/media-library'
+import { useEditorHostMode } from '../host/context'
 
 const SAVE_ANIMATION_MIN_MS = 1800
+const LazyProjectDebugPanel = lazy(() =>
+  import('./project-debug-panel').then((module) => ({ default: module.ProjectDebugPanel })),
+)
 
 const SaveDirtyIndicator = memo(function SaveDirtyIndicator() {
   const isDirty = useTimelineStore((state) => state.isDirty)
@@ -68,6 +70,7 @@ interface ToolbarProps {
     fps: number
   }
   onSave?: () => Promise<void>
+  onBack?: () => void
   onExport?: () => void
   onExportBundle?: () => void
   onOpenRenderQueue?: () => void
@@ -78,14 +81,15 @@ interface ToolbarProps {
 export const Toolbar = memo(function Toolbar({
   projectId,
   project,
+  onBack,
   onSave,
   onExport,
   onExportBundle,
   onOpenRenderQueue,
   renderQueueCount = 0,
 }: ToolbarProps) {
-  const navigate = useNavigate()
   const { t } = useTranslation()
+  const hostMode = useEditorHostMode()
   const [showUnsavedDialog, setShowUnsavedDialog] = useState(false)
   const [showShortcutsDialog, setShowShortcutsDialog] = useState(false)
   const [showSettingsDialog, setShowSettingsDialog] = useState(false)
@@ -98,18 +102,15 @@ export const Toolbar = memo(function Toolbar({
   const maxItemEndFrame = useItemsStore((state) => state.maxItemEndFrame)
   const mediaDependencyIds = useItemsStore((state) => state.mediaDependencyIds)
   const brokenMediaIds = useMediaLibraryStore((state) => state.brokenMediaIds)
-  const projectSummary = useMemo(
-    () => {
-      const projectMediaIds = new Set(mediaDependencyIds)
-      return {
-        durationSeconds: project.fps > 0 ? maxItemEndFrame / project.fps : 0,
-        clipCount: itemCount,
-        mediaCount: mediaDependencyIds.length,
-        brokenMediaCount: brokenMediaIds.filter((mediaId) => projectMediaIds.has(mediaId)).length,
-      }
-    },
-    [brokenMediaIds, itemCount, maxItemEndFrame, mediaDependencyIds, project.fps],
-  )
+  const projectSummary = useMemo(() => {
+    const projectMediaIds = new Set(mediaDependencyIds)
+    return {
+      durationSeconds: project.fps > 0 ? maxItemEndFrame / project.fps : 0,
+      clipCount: itemCount,
+      mediaCount: mediaDependencyIds.length,
+      brokenMediaCount: brokenMediaIds.filter((mediaId) => projectMediaIds.has(mediaId)).length,
+    }
+  }, [brokenMediaIds, itemCount, maxItemEndFrame, mediaDependencyIds, project.fps])
 
   useEffect(() => {
     setHasUnseenWhatsNew(hasUnseenChangelog())
@@ -130,10 +131,10 @@ export const Toolbar = memo(function Toolbar({
 
   const handleBackClick = () => {
     if (useTimelineStore.getState().isDirty) {
-      setShowUnsavedDialog(true)
-    } else {
-      navigate({ to: '/projects' })
+      if (onSave && onBack) setShowUnsavedDialog(true)
+      return
     }
+    onBack?.()
   }
 
   const handleSave = async () => {
@@ -178,6 +179,7 @@ export const Toolbar = memo(function Toolbar({
           size="icon"
           className="h-8 w-8"
           onClick={handleBackClick}
+          disabled={!onBack}
           data-tooltip={t('toolbar.backToProjects')}
           data-tooltip-side="right"
           aria-label={t('toolbar.backToProjectsAria')}
@@ -185,12 +187,15 @@ export const Toolbar = memo(function Toolbar({
           <ArrowLeft className="h-4 w-4" />
         </Button>
 
-        <UnsavedChangesDialog
-          open={showUnsavedDialog}
-          onOpenChange={setShowUnsavedDialog}
-          onSave={handleSave}
-          projectName={project?.name}
-        />
+        {onSave && onBack && (
+          <UnsavedChangesDialog
+            open={showUnsavedDialog}
+            onOpenChange={setShowUnsavedDialog}
+            onSave={handleSave}
+            onNavigateBack={onBack}
+            projectName={project?.name}
+          />
+        )}
 
         <Separator orientation="vertical" className="h-5" />
 
@@ -216,16 +221,18 @@ export const Toolbar = memo(function Toolbar({
         <WorkspaceSwitcher />
       </div>
 
-      <LocalInferenceStatusPill />
+      {!hostMode && <LocalInferenceStatusPill />}
 
       <ShortcutsDialog open={showShortcutsDialog} onOpenChange={setShowShortcutsDialog} />
 
-      <SettingsDialog open={showSettingsDialog} onOpenChange={setShowSettingsDialog} />
+      {!hostMode && (
+        <SettingsDialog open={showSettingsDialog} onOpenChange={setShowSettingsDialog} />
+      )}
 
       <WhatsNewDialog open={showWhatsNewDialog} onOpenChange={setShowWhatsNewDialog} />
 
       <div className="flex items-center gap-1.5">
-        {import.meta.env.DEV && import.meta.env.VITE_SHOW_DEBUG_PANEL !== 'false' && (
+        {!hostMode && import.meta.env.DEV && import.meta.env.VITE_SHOW_DEBUG_PANEL !== 'false' && (
           <DebugPopover projectId={projectId} />
         )}
 
@@ -292,6 +299,7 @@ export const Toolbar = memo(function Toolbar({
           size="icon"
           className="h-7 w-7"
           onClick={() => setShowSettingsDialog(true)}
+          disabled={hostMode}
           data-tooltip={t('toolbar.settings')}
           data-tooltip-side="bottom"
           aria-label={t('toolbar.settings')}
@@ -319,6 +327,7 @@ export const Toolbar = memo(function Toolbar({
           size="sm"
           className="gap-1.5"
           onClick={handleSave}
+          disabled={!onSave}
           aria-label={t('toolbar.saveAria')}
         >
           <div className="relative">
@@ -351,25 +360,31 @@ export const Toolbar = memo(function Toolbar({
           </Button>
         )}
 
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button size="sm" className="gap-1.5 glow-primary-sm">
-              <Download className="h-4 w-4" />
-              {t('toolbar.export')}
-              <ChevronDown className="h-3 w-3" />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end">
-            <DropdownMenuItem onClick={onExport} className="gap-2">
-              <Video className="h-4 w-4" />
-              {t('toolbar.exportVideo')}
-            </DropdownMenuItem>
-            <DropdownMenuItem onClick={onExportBundle} className="gap-2">
-              <FolderArchive className="h-4 w-4" />
-              {t('toolbar.downloadProjectZip')}
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
+        {(onExport || onExportBundle) && (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button size="sm" className="gap-1.5 glow-primary-sm">
+                <Download className="h-4 w-4" />
+                {t('toolbar.export')}
+                <ChevronDown className="h-3 w-3" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem onClick={onExport} disabled={!onExport} className="gap-2">
+                <Video className="h-4 w-4" />
+                {t('toolbar.exportVideo')}
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onClick={onExportBundle}
+                disabled={!onExportBundle}
+                className="gap-2"
+              >
+                <FolderArchive className="h-4 w-4" />
+                {t('toolbar.downloadProjectZip')}
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        )}
       </div>
     </div>
   )
@@ -444,7 +459,9 @@ function DebugPopover({ projectId }: { projectId: string }) {
         sideOffset={8}
         className="w-64 p-0 bg-zinc-900 border-zinc-700 text-zinc-100"
       >
-        <ProjectDebugPanel projectId={projectId} />
+        <Suspense fallback={null}>
+          <LazyProjectDebugPanel projectId={projectId} />
+        </Suspense>
       </PopoverContent>
     </Popover>
   )

@@ -127,6 +127,7 @@ export const useEditorStore = create<EditorState & EditorActions>((set) => ({
   keyframeEditorShortcutScopeActive: false,
   transcriptEditorShortcutScopeActive: false,
   workspace: initialWorkspace,
+  hostMode: false,
   activeTab: initialWorkspaceLayout.activeTab,
   clipInspectorTab: initialWorkspaceLayout.clipInspectorTab,
   sidebarWidth: loadSidebarWidth('editor:sidebarWidth', EDITOR_LAYOUT.leftSidebarDefaultWidth),

@@ -98,6 +98,7 @@ import {
 import { TimelineTrackItems } from './timeline-track-items'
 import { createTimelineTrackContentLayerRef } from '../utils/timeline-live-geometry'
 import { getTimelineTrackItemRangeIndex } from '../utils/timeline-item-range-index'
+import { useEditorStore } from '@/shared/state/editor'
 
 const EMPTY_TRACK_ITEMS: TimelineItemType[] = []
 
@@ -226,6 +227,7 @@ function areTrackPropsEqual(prev: TimelineTrackProps, next: TimelineTrackProps):
 export const TimelineTrack = memo(function TimelineTrack({ track }: TimelineTrackProps) {
   perfMarkRender('TimelineTrack')
   const { t } = useTranslation()
+  const hostMode = useEditorStore((s) => s.hostMode)
   const previewOwnerId = `track:${track.id}`
   const [gapContextMenuRequest, setGapContextMenuRequest] =
     useState<TrackGapContextMenuRequest | null>(null)
@@ -910,6 +912,7 @@ export const TimelineTrack = memo(function TimelineTrack({ track }: TimelineTrac
   // Handle context menu on track (for empty space)
   const handleContextMenu = useCallback(
     (e: React.MouseEvent) => {
+      if (hostMode) return
       // Check if clicking on a clip (has data-item-id ancestor)
       const target = e.target as HTMLElement
       if (target.closest('[data-item-id], [data-item-context-anchor]')) {
@@ -942,7 +945,7 @@ export const TimelineTrack = memo(function TimelineTrack({ track }: TimelineTrac
         setGapContextMenuRequest(null)
       }
     },
-    [isFrameInGap],
+    [hostMode, isFrameInGap],
   )
 
   // Handle closing the gap

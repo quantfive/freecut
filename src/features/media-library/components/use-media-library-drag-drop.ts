@@ -9,6 +9,7 @@ import type { MediaLibraryNotification } from '../types'
 interface UseMediaLibraryDragDropParams {
   showNotification: (notification: MediaLibraryNotification) => void
   importHandles: (handles: FileSystemFileHandle[]) => Promise<void>
+  enabled?: boolean
 }
 
 /**
@@ -20,25 +21,34 @@ interface UseMediaLibraryDragDropParams {
 export function useMediaLibraryDragDrop({
   showNotification,
   importHandles,
+  enabled = true,
 }: UseMediaLibraryDragDropParams) {
   const { t } = useTranslation()
   const [isDragging, setIsDragging] = useState(false)
   const dragCounterRef = useRef(0)
 
-  const handleDragEnter = useCallback((e: React.DragEvent) => {
-    e.preventDefault()
-    e.stopPropagation()
-    dragCounterRef.current++
-    if (dragCounterRef.current === 1 && !e.dataTransfer.types.includes('application/json')) {
-      setIsDragging(true)
-    }
-  }, [])
+  const handleDragEnter = useCallback(
+    (e: React.DragEvent) => {
+      e.preventDefault()
+      e.stopPropagation()
+      if (!enabled) return
+      dragCounterRef.current++
+      if (dragCounterRef.current === 1 && !e.dataTransfer.types.includes('application/json')) {
+        setIsDragging(true)
+      }
+    },
+    [enabled],
+  )
 
-  const handleDragOver = useCallback((e: React.DragEvent) => {
-    e.preventDefault()
-    e.stopPropagation()
-    e.dataTransfer.dropEffect = 'copy'
-  }, [])
+  const handleDragOver = useCallback(
+    (e: React.DragEvent) => {
+      e.preventDefault()
+      e.stopPropagation()
+      if (!enabled) return
+      e.dataTransfer.dropEffect = 'copy'
+    },
+    [enabled],
+  )
 
   const handleDragLeave = useCallback((e: React.DragEvent) => {
     e.preventDefault()
@@ -51,9 +61,11 @@ export function useMediaLibraryDragDrop({
   }, [])
 
   const handleDrop = useCallback(
+    // fallow-ignore-next-line complexity
     async (e: React.DragEvent) => {
       e.preventDefault()
       e.stopPropagation()
+      if (!enabled) return
       dragCounterRef.current = 0
       setIsDragging(false)
 
@@ -95,7 +107,7 @@ export function useMediaLibraryDragDrop({
         await importHandles(entries.map((entry) => entry.handle))
       }
     },
-    [showNotification, importHandles, t],
+    [enabled, showNotification, importHandles, t],
   )
 
   return { isDragging, handleDragEnter, handleDragOver, handleDragLeave, handleDrop }

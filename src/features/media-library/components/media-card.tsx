@@ -43,6 +43,7 @@ import { importMediaLibraryService } from '../services/media-library-service-loa
 import { importMediaAnalysisService } from '../services/media-analysis-service-loader'
 import { getMediaType, formatDuration } from '../utils/validation'
 import { MediaInfoPopover } from './media-info-popover'
+import { useEditorCapability, useEditorHostMode } from '../deps/editor'
 import { getSharedProxyKey } from '../utils/proxy-key'
 import { useMediaLibraryStore } from '../stores/media-library-store'
 import { useMediaPreparationStore } from '../stores/media-preparation-store'
@@ -121,6 +122,7 @@ interface MediaCardActionMenuProps {
   onExtractEmbeddedSubtitles: (event: React.MouseEvent) => void | Promise<void>
   onAnalyzeWithAI: (event: React.MouseEvent) => void
   onDelete: (event: React.MouseEvent) => void
+  canDelete: boolean
 }
 
 type MediaCardMenuGroupProps = {
@@ -314,6 +316,7 @@ function resolveMenuVisibility(props: MediaCardActionMenuProps) {
   }
 }
 
+// fallow-ignore-next-line complexity
 function MediaCardActionMenuItems(props: MediaCardActionMenuProps) {
   const {
     onRelink,
@@ -420,7 +423,9 @@ function MediaCardActionMenuItems(props: MediaCardActionMenuProps) {
     groups.push(<AiActions key="ai" t={t} onAnalyzeWithAI={onAnalyzeWithAI} />)
   }
 
-  groups.push(<DeleteMediaAction key="destructive" t={t} onDelete={onDelete} />)
+  if (props.canDelete) {
+    groups.push(<DeleteMediaAction key="destructive" t={t} onDelete={onDelete} />)
+  }
 
   return (
     <>
@@ -669,6 +674,11 @@ const MediaCardInternal = memo(function MediaCardInternal({
   layout,
 }: MediaCardInternalProps) {
   const { t } = useTranslation()
+  const hostMode = useEditorHostMode()
+  const canDeleteMedia = useEditorCapability('media.delete')
+  const canGenerateProxyCapability = useEditorCapability('media.proxy')
+  const canTranscribeCapability = useEditorCapability('media.transcription')
+  const canRelinkCapability = useEditorCapability('media.relink')
   const [thumbnailUrl, setThumbnailUrl] = useState<string | null>(null)
   const [skimProgress, setSkimProgress] = useState<number | null>(null)
   const isImporting = useMediaLibraryStore(
@@ -699,14 +709,18 @@ const MediaCardInternal = memo(function MediaCardInternal({
   const transcriptProgress = useMediaLibraryStore((s) => s.transcriptProgress.get(media.id))
 
   const mediaType = getMediaType(media.mimeType)
-  const isTranscribable = mediaType === 'video' || mediaType === 'audio'
+  const isTranscribable =
+    canTranscribeCapability && (mediaType === 'video' || mediaType === 'audio')
   const canGenerateProxy =
+    canGenerateProxyCapability &&
+    !hostMode &&
     mediaType === 'video' &&
     !isBroken &&
     !isPreparingMedia &&
     proxyService.canGenerateProxy(media.mimeType)
   const hasProxy = proxyStatus === 'ready'
   const canInterpolate =
+    !hostMode &&
     mediaType === 'video' &&
     !isBroken &&
     !isPreparingMedia &&
@@ -714,6 +728,7 @@ const MediaCardInternal = memo(function MediaCardInternal({
   // Hidden rather than disabled when the 2x output would be too large for any encoder to take:
   // there is nothing the user could do about it from this menu.
   const canUpscaleMedia =
+    !hostMode &&
     mediaType === 'video' &&
     !isBroken &&
     !isPreparingMedia &&
@@ -721,7 +736,7 @@ const MediaCardInternal = memo(function MediaCardInternal({
   const hasTranscript = transcriptStatus === 'ready'
   const isTranscribing = transcriptStatus === 'transcribing' || transcriptStatus === 'queued'
   const isTagging = useMediaLibraryStore((s) => s.taggingMediaIds.has(media.id))
-  const isTaggable = mediaType === 'video' || mediaType === 'image'
+  const isTaggable = !hostMode && (mediaType === 'video' || mediaType === 'image')
   const hasCaptions = (media.aiCaptions?.length ?? 0) > 0
   const thumbnailRef = useRef<HTMLImageElement>(null)
   const thumbnailContainerRef = useRef<HTMLDivElement | null>(null)
@@ -731,13 +746,17 @@ const MediaCardInternal = memo(function MediaCardInternal({
   const isTranscriptionDialogOpen = useEditorStore((s) => s.transcriptionDialogDepth > 0)
   const pauseTimelinePlayback = usePlaybackStore((s) => s.pause)
 
-  const isAudio = mediaType === 'audio' && !isBroken && !isPreparingMedia
+  const isAudio = !hostMode && mediaType === 'audio' && !isBroken && !isPreparingMedia
   const [transcribeDialogOpen, setTranscribeDialogOpen] = useState(false)
   const [transcribeErrorMessage, setTranscribeErrorMessage] = useState<string | null>(null)
   const [isExtractingEmbeddedSubtitles, setIsExtractingEmbeddedSubtitles] = useState(false)
 
   // Load thumbnail on mount and when thumbnailId changes (e.g. after regeneration)
   useEffect(() => {
+    if (hostMode) {
+      setThumbnailUrl(null)
+      return
+    }
     let mounted = true
 
     const loadThumbnail = async () => {
@@ -753,7 +772,7 @@ const MediaCardInternal = memo(function MediaCardInternal({
     return () => {
       mounted = false
     }
-  }, [media.id, media.thumbnailId])
+  }, [hostMode, media.id, media.thumbnailId])
 
   const getTargetMediaItems = useCallback((): MediaMetadata[] => {
     const store = useMediaLibraryStore.getState()
@@ -779,12 +798,14 @@ const MediaCardInternal = memo(function MediaCardInternal({
 
   const handleDelete = (e: React.MouseEvent) => {
     e.stopPropagation()
+    if (!canDeleteMedia) return
     const targets = getTargetMediaItems()
     onDelete?.(targets.map((m) => m.id))
   }
 
   const handleGenerateProxy = (e: React.MouseEvent) => {
     e.stopPropagation()
+    if (!canGenerateProxy) return
     const store = useMediaLibraryStore.getState()
     const targets = getTargetMediaItems().filter(
       (m) =>
@@ -932,6 +953,7 @@ const MediaCardInternal = memo(function MediaCardInternal({
 
   const handleStartTranscription = useCallback(
     (values: TranscribeDialogValues) => {
+      if (!isTranscribable) return
       const store = useMediaLibraryStore.getState()
       const targets = getTargetMediaItems()
 
@@ -1008,7 +1030,7 @@ const MediaCardInternal = memo(function MediaCardInternal({
         }
       })()
     },
-    [getTargetMediaItems],
+    [getTargetMediaItems, isTranscribable],
   )
 
   const handleCancelTranscript = (e?: React.MouseEvent) => {
@@ -1070,6 +1092,7 @@ const MediaCardInternal = memo(function MediaCardInternal({
 
   const handleExtractEmbeddedSubtitles = async (e: React.MouseEvent) => {
     e.stopPropagation()
+    if (hostMode || !canTranscribeCapability) return
     const targets = getTargetMediaItems().filter(canExtractEmbeddedSubtitlesFromMedia)
     const store = useMediaLibraryStore.getState()
     if (targets.length === 0) {
@@ -1175,6 +1198,7 @@ const MediaCardInternal = memo(function MediaCardInternal({
   const handleAnalyzeWithAI = useCallback(
     async (e: React.MouseEvent) => {
       e.stopPropagation()
+      if (hostMode) return
       const store = useMediaLibraryStore.getState()
       const analyzable = getTargetMediaItems().filter((m) => {
         const type = getMediaType(m.mimeType)
@@ -1197,7 +1221,7 @@ const MediaCardInternal = memo(function MediaCardInternal({
         }
       }
     },
-    [media, getTargetMediaItems],
+    [getTargetMediaItems, hostMode, media],
   )
 
   const removeNativeDragCleanupListenersRef = useRef<(() => void) | null>(null)
@@ -1539,7 +1563,7 @@ const MediaCardInternal = memo(function MediaCardInternal({
   const actionMenuItems = (
     <MediaCardActionMenuItems
       isBroken={isBroken}
-      onRelink={onRelink}
+      onRelink={canRelinkCapability ? onRelink : undefined}
       canGenerateProxy={canGenerateProxy}
       hasProxy={hasProxy}
       proxyStatus={proxyStatus}
@@ -1554,7 +1578,11 @@ const MediaCardInternal = memo(function MediaCardInternal({
       isTranscribable={isTranscribable}
       isTranscribing={isTranscribing}
       hasTranscript={hasTranscript}
-      canExtractEmbeddedSubtitles={getTargetMediaItems().some(canExtractEmbeddedSubtitlesFromMedia)}
+      canExtractEmbeddedSubtitles={
+        !hostMode &&
+        canTranscribeCapability &&
+        getTargetMediaItems().some(canExtractEmbeddedSubtitlesFromMedia)
+      }
       isExtractingEmbeddedSubtitles={isExtractingEmbeddedSubtitles}
       isTaggable={isTaggable}
       isTagging={isTagging}
@@ -1565,6 +1593,7 @@ const MediaCardInternal = memo(function MediaCardInternal({
       onExtractEmbeddedSubtitles={handleExtractEmbeddedSubtitles}
       onAnalyzeWithAI={handleAnalyzeWithAI}
       onDelete={handleDelete}
+      canDelete={canDeleteMedia}
     />
   )
 

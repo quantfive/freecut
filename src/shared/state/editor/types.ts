@@ -16,6 +16,8 @@ export interface EditorState {
   /** True while the transcript editor owns Delete/Backspace (pointer or focus within). */
   transcriptEditorShortcutScopeActive: boolean
   workspace: EditorWorkspaceId
+  /** True while the editor is mounted through an injected host surface. */
+  hostMode: boolean
   activeTab: EditorSidebarTab
   clipInspectorTab: ClipInspectorTab
   sidebarWidth: number

@@ -6,6 +6,7 @@ import { useItemsStore } from '../stores/items-store'
 import { useTimelineSettingsStore } from '../stores/timeline-settings-store'
 import { useTimelineViewportStore } from '../stores/timeline-viewport-store'
 import { useZoomStore } from '../stores/zoom-store'
+import { useEditorStore } from '@/shared/state/editor'
 import {
   isPreviewWorkDeferred,
   schedulePreviewWork,
@@ -46,6 +47,7 @@ function loadWaveformCache() {
  * - Defers work while drag/trim/zoom interactions are active
  */
 export function useWaveformPrefetch() {
+  const hostMode = useEditorStore((state) => state.hostMode)
   const prevScrollLeftRef = useRef(useTimelineViewportStore.getState().scrollLeft)
 
   useEffect(() => {
@@ -56,6 +58,7 @@ export function useWaveformPrefetch() {
     }
 
     const prefetchVisibleWaveforms = () => {
+      if (useEditorStore.getState().hostMode) return
       const { scrollLeft, viewportWidth } = useTimelineViewportStore.getState()
       const { pixelsPerSecond } = useZoomStore.getState()
       const { fps } = useTimelineSettingsStore.getState()
@@ -141,5 +144,5 @@ export function useWaveformPrefetch() {
         unsubscribe()
       }
     }
-  }, [])
+  }, [hostMode])
 }
