@@ -78,4 +78,4 @@ jobs:
           package_version="$(node -p "require('./packages/freecut-editor/package.json').version")"
           artifact="artifacts/freecut-editor-surface-${package_version}.tgz"
           test -f "${artifact}"
-          npm publish "${artifact}" --registry=https://npm.pkg.github.com
+          npm publish "./${artifact}" --registry=https://npm.pkg.github.com
