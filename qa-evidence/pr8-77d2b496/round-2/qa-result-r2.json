@@ -1,0 +1,148 @@
+{
+  "steps": [
+    {
+      "name": "b3-pending",
+      "detail": "{\"messageShown\":true,\"retryVisible\":true,\"retryRefreshes\":true,\"sectionsNotFetched\":true}",
+      "at": "2026-08-19T10:08:35.805Z"
+    },
+    {
+      "name": "b3-running",
+      "detail": "{\"messageShown\":true,\"retryVisible\":true,\"retryRefreshes\":true,\"sectionsNotFetched\":true}",
+      "at": "2026-08-19T10:08:44.071Z"
+    },
+    {
+      "name": "b3-failed",
+      "detail": "{\"messageShown\":true,\"retryHidden\":true,\"sectionsNotFetched\":true,\"noApplyPath\":true}",
+      "at": "2026-08-19T10:08:51.166Z"
+    },
+    {
+      "name": "b3-stale",
+      "detail": "{\"messageShown\":true,\"retryHidden\":true,\"sectionsNotFetched\":true,\"noApplyPath\":true}",
+      "at": "2026-08-19T10:09:02.567Z"
+    },
+    {
+      "name": "b3-purged",
+      "detail": "{\"messageShown\":true,\"retryHidden\":true,\"sectionsNotFetched\":true,\"noApplyPath\":true}",
+      "at": "2026-08-19T10:09:09.371Z"
+    },
+    {
+      "name": "b3-malformed",
+      "detail": "{\"messageShown\":true,\"previewNotCalled\":true,\"submitNotCalled\":true}",
+      "at": "2026-08-19T10:09:15.819Z"
+    },
+    {
+      "name": "b3-oversized",
+      "detail": "{\"messageShown\":true,\"previewNotCalled\":true,\"submitNotCalled\":true}",
+      "at": "2026-08-19T10:09:22.361Z"
+    },
+    {
+      "name": "b3-unsupported-ts",
+      "detail": "{\"messageShown\":true,\"submitNotCalled\":true,\"previewCleared\":true}",
+      "at": "2026-08-19T10:09:30.674Z"
+    },
+    {
+      "name": "b5-replay",
+      "detail": "{\"firstPreviewFresh\":true,\"firstApplyStatus\":\"applied\",\"trackCountAfterApply\":1,\"replayReceiptShown\":true,\"noSubmitOnRepreview\":true,\"trackCountUnchanged\":true}",
+      "at": "2026-08-19T10:09:42.814Z"
+    },
+    {
+      "name": "b5-apply-replay",
+      "detail": "{\"applyStatus\":\"replayed\",\"noErrorBanner\":true,\"noDuplicateMutation\":true,\"singleSubmit\":true}",
+      "at": "2026-08-19T10:09:53.071Z"
+    },
+    {
+      "name": "b5-conflict",
+      "detail": "{\"conflictStatus\":\"conflict\",\"conflictNotifiedToHost\":true,\"stateNotAdvanced\":true,\"previewClearedAfterRemount\":true}",
+      "at": "2026-08-19T10:10:02.892Z"
+    },
+    {
+      "name": "redaction-scan",
+      "detail": "clean over 8 payloads",
+      "at": "2026-08-19T10:10:02.904Z"
+    }
+  ],
+  "cases": {
+    "pending": {
+      "messageShown": true,
+      "retryVisible": true,
+      "retryRefreshes": true,
+      "sectionsNotFetched": true
+    },
+    "running": {
+      "messageShown": true,
+      "retryVisible": true,
+      "retryRefreshes": true,
+      "sectionsNotFetched": true
+    },
+    "failed": {
+      "messageShown": true,
+      "retryHidden": true,
+      "sectionsNotFetched": true,
+      "noApplyPath": true
+    },
+    "stale": {
+      "messageShown": true,
+      "retryHidden": true,
+      "sectionsNotFetched": true,
+      "noApplyPath": true
+    },
+    "purged": {
+      "messageShown": true,
+      "retryHidden": true,
+      "sectionsNotFetched": true,
+      "noApplyPath": true
+    },
+    "malformed": {
+      "messageShown": true,
+      "previewNotCalled": true,
+      "submitNotCalled": true
+    },
+    "oversized": {
+      "messageShown": true,
+      "previewNotCalled": true,
+      "submitNotCalled": true
+    },
+    "unsupported-ts": {
+      "messageShown": true,
+      "submitNotCalled": true,
+      "previewCleared": true
+    },
+    "replay": {
+      "firstPreviewFresh": true,
+      "firstApplyStatus": "applied",
+      "trackCountAfterApply": 1,
+      "replayReceiptShown": true,
+      "noSubmitOnRepreview": true,
+      "trackCountUnchanged": true
+    },
+    "apply-replay": {
+      "applyStatus": "replayed",
+      "noErrorBanner": true,
+      "noDuplicateMutation": true,
+      "singleSubmit": true
+    },
+    "conflict": {
+      "conflictStatus": "conflict",
+      "conflictNotifiedToHost": true,
+      "stateNotAdvanced": true,
+      "previewClearedAfterRemount": true
+    }
+  },
+  "screenshots": [
+    "b3-pending-retryable.png",
+    "b3-running-retryable.png",
+    "b3-failed-terminal.png",
+    "b3-stale-terminal.png",
+    "b3-purged-terminal.png",
+    "b3-malformed-rejected.png",
+    "b3-oversized-rejected.png",
+    "b3-unsupported-ts-rejected.png",
+    "b5-replay-preview.png",
+    "b5-replay-applied.png",
+    "b5-replay-receipt.png",
+    "b5-apply-replay.png",
+    "b5-conflict.png"
+  ],
+  "redactionScan": "clean",
+  "verdict": "PASS"
+}

@@ -1,0 +1,66 @@
+{
+  "steps": [
+    {
+      "name": "surface-loaded",
+      "detail": "host editor surface rendered (toolbars, preview region, timeline)",
+      "at": "2026-08-19T08:21:31.362Z"
+    },
+    {
+      "name": "gate-positive",
+      "detail": "Transcript category visible with port + media.transcription capability",
+      "at": "2026-08-19T08:21:33.771Z"
+    },
+    {
+      "name": "sections-rendered",
+      "detail": "status=succeeded, sections visible",
+      "at": "2026-08-19T08:21:38.922Z"
+    },
+    {
+      "name": "preview-non-mutating",
+      "detail": "submitEditCalls=0 after preview",
+      "at": "2026-08-19T08:21:41.006Z"
+    },
+    {
+      "name": "applied",
+      "detail": "submitEdit commands=add_caption_track,upsert_caption_cues",
+      "at": "2026-08-19T08:21:48.230Z"
+    },
+    {
+      "name": "gate-negative",
+      "detail": "transcript tab count without port=0",
+      "at": "2026-08-19T08:22:34.121Z"
+    }
+  ],
+  "assertions": {
+    "transcriptTabVisibleWithPort": true,
+    "status": "succeeded",
+    "previewNonMutating": true,
+    "previewCalls": 1,
+    "previewRequestSummary": {
+      "transcriptId": "transcript-1",
+      "assetId": "asset-1",
+      "timestampCapability": "section",
+      "ranges": [
+        {
+          "startUs": 1000000,
+          "endUs": 2000000,
+          "text": "First bounded caption."
+        }
+      ],
+      "redactionScan": "clean"
+    },
+    "appliedCommandTypes": [
+      "add_caption_track",
+      "upsert_caption_cues"
+    ],
+    "transcriptTabHiddenWithoutPort": true
+  },
+  "screenshots": [
+    "01-host-editor-loaded.png",
+    "02-transcript-sections.png",
+    "03-preview-non-mutating.png",
+    "04-applied.png",
+    "05-capability-gate-off.png"
+  ],
+  "verdict": "PASS"
+}
