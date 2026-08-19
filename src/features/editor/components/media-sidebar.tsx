@@ -60,7 +60,8 @@ import { EffectThumbnail, useGpuEffectPreviewData } from '@/features/editor/deps
 import { createLogger } from '@/shared/logging/logger'
 import { useSettingsStore } from '@/features/editor/deps/settings'
 import { resolveGeneratedLayerCanvasSize } from '../utils/generated-layer-canvas-size'
-import { useEditorCapability, useEditorHostMode } from '../host/context'
+import { useEditorCapability, useEditorHostContext, useEditorHostMode } from '../host/context'
+import { HostTranscriptEditor } from '../host/transcript-editor'
 const LazyAiPanel = lazy(() => import('./ai-tab').then((m) => ({ default: m.AiTab })))
 const LazyTranscriptEditorPanel = lazy(() =>
   importTranscriptEditorPanel().then(({ TranscriptEditorPanel }) => ({
@@ -290,7 +291,9 @@ const ADD_TEXT_TEMPLATE_LABEL = 'Add Text'
 export const MediaSidebar = memo(function MediaSidebar() {
   const { t } = useTranslation()
   const hostMode = useEditorHostMode()
+  const { host } = useEditorHostContext()
   const canAddTimeline = useEditorCapability('timeline.add')
+  const canTranscribe = useEditorCapability('media.transcription')
   const editorDensity = useSettingsStore((s) => s.editorDensity)
   const editorLayout = getEditorLayout(editorDensity)
   // Use granular selectors - Zustand v5 best practice
@@ -557,7 +560,12 @@ export const MediaSidebar = memo(function MediaSidebar() {
     { id: 'ai' as const, icon: WandSparkles, label: t('editor.mediaSidebar.ai') },
   ]
   const visibleCategories = hostMode
-    ? categories.filter(({ id }) => id === 'media' || (id === 'text' && canAddTimeline))
+    ? categories.filter(
+        ({ id }) =>
+          id === 'media' ||
+          (id === 'text' && canAddTimeline) ||
+          (id === 'transcript' && canTranscribe && !!host?.transcript),
+      )
     : categories
 
   const shouldSuppressGeneratedItemClick = useCallback(() => {
@@ -1165,11 +1173,13 @@ export const MediaSidebar = memo(function MediaSidebar() {
             <div
               className={`min-h-0 flex-1 overflow-hidden ${activeTab === 'transcript' ? 'block' : 'hidden'}`}
             >
-              {activeTab === 'transcript' && (
+              {activeTab === 'transcript' && hostMode ? (
+                <HostTranscriptEditor active />
+              ) : activeTab === 'transcript' ? (
                 <Suspense fallback={null}>
                   <LazyTranscriptEditorPanel active />
                 </Suspense>
-              )}
+              ) : null}
             </div>
 
             {/* AI Tab */}
