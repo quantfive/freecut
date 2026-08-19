@@ -1,0 +1,60 @@
+{
+  "steps": [
+    {
+      "name": "apply: preview rendered without submitEdit",
+      "ok": true,
+      "detail": "previewCount=1"
+    },
+    {
+      "name": "apply: transcript tab preserved across snapshot install",
+      "ok": true,
+      "detail": "activeTab=transcript"
+    },
+    {
+      "name": "apply: transcript panel still mounted",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "apply: applied announcement present",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "apply: host timeline gained the captions track",
+      "ok": true,
+      "detail": "[\"Transcript captions\"]"
+    },
+    {
+      "name": "conflict: preview rendered without submitEdit",
+      "ok": true,
+      "detail": "previewCount=1"
+    },
+    {
+      "name": "conflict: transcript tab preserved across snapshot install",
+      "ok": true,
+      "detail": "activeTab=transcript"
+    },
+    {
+      "name": "conflict: transcript panel still mounted",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "conflict: inline revision-conflict error visible",
+      "ok": true,
+      "detail": "The timeline changed before this transcript edit was applied.Retry"
+    },
+    {
+      "name": "conflict: stale preview cleared",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "conflict: host timeline did not advance",
+      "ok": true,
+      "detail": "[]"
+    }
+  ],
+  "verdict": "PASS"
+}
