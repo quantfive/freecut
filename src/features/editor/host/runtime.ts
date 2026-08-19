@@ -15,7 +15,12 @@ import { usePlaybackStore } from '@/shared/state/playback'
 import { useEditorStore } from '@/shared/state/editor'
 import { useSelectionStore } from '@/shared/state/selection'
 import { useGizmoStore, useMaskEditorStore } from '@/features/editor/deps/preview'
-import type { EmbeddedEditorSnapshot, EditorHost, HostNotice } from './contract'
+import {
+  isHostCapabilityEnabled,
+  type EmbeddedEditorSnapshot,
+  type EditorHost,
+  type HostNotice,
+} from './contract'
 import { HostEditorController, deriveSupportedHostEdit } from './controller'
 import {
   hostAssetsToMediaMetadata,
@@ -120,8 +125,22 @@ export class EmbeddedEditorHostRuntime implements EmbeddedEditorHostRuntimeContr
       useProjectStore.getState().setCurrentProject(hostSnapshotToProject(snapshot))
       // The first host slice exposes the normal Edit layout only.  Set this
       // in memory so a local user's persisted Color/Motion preference cannot
-      // activate an unsupported host workspace.
-      useEditorStore.setState({ workspace: 'edit', activeTab: 'media' })
+      // activate an unsupported host workspace.  Preserve the active sidebar
+      // tab when host mode still shows it: resetting it on every authoritative
+      // snapshot would unmount the transcript panel mid-apply, losing its
+      // applied/conflict state before the user can see it.
+      const currentTab = useEditorStore.getState().activeTab
+      const currentTabVisibleInHostMode =
+        currentTab === 'media' ||
+        (currentTab === 'text' &&
+          isHostCapabilityEnabled(this.host.capabilities, 'timeline.add')) ||
+        (currentTab === 'transcript' &&
+          isHostCapabilityEnabled(this.host.capabilities, 'media.transcription') &&
+          this.host.transcript !== undefined)
+      useEditorStore.setState({
+        workspace: 'edit',
+        activeTab: currentTabVisibleInHostMode ? currentTab : 'media',
+      })
 
       const mediaItems = hostAssetsToMediaMetadata(snapshot.assets)
       useMediaLibraryStore.getState().setCurrentProject(snapshot.project.id)

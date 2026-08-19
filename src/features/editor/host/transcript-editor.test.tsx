@@ -1,8 +1,18 @@
 // @vitest-environment jsdom
 
 import { readFileSync } from 'node:fs'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vite-plus/test'
+
+// The transcript tab renders inside the real MediaSidebar; the media library
+// grid is unrelated to the tab lifecycle and stays stubbed out.
+vi.mock('@/features/editor/deps/media-library', async (importOriginal) => {
+  const original = await importOriginal<typeof import('@/features/editor/deps/media-library')>()
+  return {
+    ...original,
+    MediaLibrary: () => <div data-testid="media-library-stub" />,
+  }
+})
 
 import {
   controlledDocumentToFreeCutDocument,
@@ -10,6 +20,8 @@ import {
   freeCutDocumentToControlledDocument,
   type EditCommandBatch,
 } from '@/features/editor/codepress'
+import { useEditorStore } from '@/shared/state/editor'
+import { MediaSidebar } from '../components/media-sidebar'
 import { EditorHostProvider } from './context-provider'
 import {
   DEFAULT_HOST_CAPABILITIES,
@@ -421,5 +433,85 @@ describe('host-backed transcript consumer', () => {
     expect(source).not.toMatch(
       /mediaTranscriptionService|useTranscriptIgnoreStore|loadTimeline|saveTimeline/,
     )
+  })
+})
+
+describe('transcript tab across authoritative snapshots (real MediaSidebar path)', () => {
+  function renderRealSidebar(harness: ReturnType<typeof createHarness>) {
+    harness.runtime.mountStores()
+    return render(
+      <EditorHostProvider
+        value={{ mode: 'host', capabilities: harness.host.capabilities, host: harness.host }}
+      >
+        <HostTranscriptEditorProvider runtime={harness.runtime}>
+          <MediaSidebar />
+        </HostTranscriptEditorProvider>
+      </EditorHostProvider>,
+    )
+  }
+
+  async function drivePreviewAndApply() {
+    act(() => {
+      useEditorStore.getState().setActiveTab('transcript')
+    })
+    expect(
+      await screen.findByTestId('host-transcript-section-transcript-section-1'),
+    ).toBeInTheDocument()
+    fireEvent.click(screen.getByTestId('host-transcript-section-transcript-section-1'))
+    fireEvent.click(screen.getByTestId('host-transcript-preview-button'))
+    await waitFor(() => expect(screen.getByTestId('host-transcript-preview')).toBeInTheDocument())
+    fireEvent.click(screen.getByTestId('host-transcript-apply'))
+  }
+
+  afterEach(() => {
+    useEditorStore.setState({ activeTab: 'media' })
+  })
+
+  it('keeps the transcript panel mounted with its applied state after apply', async () => {
+    const harness = createHarness(snapshot())
+    try {
+      renderRealSidebar(harness)
+      await drivePreviewAndApply()
+      await waitFor(() => expect(harness.submitEdit).toHaveBeenCalledTimes(1))
+      // Installing the authoritative snapshot must not unmount the panel.
+      expect(useEditorStore.getState().activeTab).toBe('transcript')
+      expect(screen.getByTestId('host-transcript-editor')).toBeInTheDocument()
+      await waitFor(() =>
+        expect(screen.getByText('Transcript captions applied.')).toBeInTheDocument(),
+      )
+    } finally {
+      harness.runtime.unmountStores()
+    }
+  })
+
+  it('keeps the transcript panel mounted with the inline revision-conflict error', async () => {
+    const harness = createHarness(snapshot(), 'succeeded', 'preview', true)
+    try {
+      renderRealSidebar(harness)
+      await drivePreviewAndApply()
+      await waitFor(() =>
+        expect(screen.getByTestId('host-transcript-error')).toHaveTextContent(
+          'timeline changed before this transcript edit was applied',
+        ),
+      )
+      expect(useEditorStore.getState().activeTab).toBe('transcript')
+      expect(screen.getByTestId('host-transcript-editor')).toBeInTheDocument()
+      expect(screen.queryByTestId('host-transcript-preview')).not.toBeInTheDocument()
+    } finally {
+      harness.runtime.unmountStores()
+    }
+  })
+
+  it('still resets a sidebar tab that host mode does not show', () => {
+    const harness = createHarness(snapshot())
+    try {
+      act(() => {
+        useEditorStore.getState().setActiveTab('effects')
+      })
+      harness.runtime.mountStores()
+      expect(useEditorStore.getState().activeTab).toBe('media')
+    } finally {
+      harness.runtime.unmountStores()
+    }
   })
 })
