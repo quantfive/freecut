@@ -185,9 +185,10 @@ async function runPageChecks(browser, server, outDir) {
 
 // Generic absolute local path (same contract as qa-redaction-check): any Unix
 // absolute path of 2+ segments not embedded in a URL, or any Windows drive
-// path. Sanitization must not depend on knowing the specific roots in advance.
+// path with either separator. Sanitization must not depend on knowing the
+// specific roots in advance.
 const ABSOLUTE_PATH =
-  /(?<![\w:/+.~>-])(?:[A-Za-z]:\\[^\s'"<>|]+|\/(?:[A-Za-z0-9._~-]+\/)+[A-Za-z0-9._~-]*)/g
+  /(?<![\w:/+.~>-])(?:[A-Za-z]:[\\/][^\s'"<>|]*|\/(?:[A-Za-z0-9._~-]+\/)+[A-Za-z0-9._~-]*)/g
 
 function sanitizeLogText(text) {
   return text.replace(ABSOLUTE_PATH, '<path>')

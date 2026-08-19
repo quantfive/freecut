@@ -20,6 +20,7 @@ const NEGATIVE_FIXTURES = [
   'negative-generic-path.txt',
   'negative-short-data-uri.txt',
   'negative-windows-path.txt',
+  'negative-windows-forward-slash.txt',
 ]
 
 for (const name of NEGATIVE_FIXTURES) {

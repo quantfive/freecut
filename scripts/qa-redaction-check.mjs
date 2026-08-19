@@ -27,10 +27,11 @@ const ALLOW_MARKER = 'qa-redaction:allow'
 
 // Generic absolute local path: any Unix absolute path of 2+ segments that is
 // not part of a URL (lookbehind rejects matches preceded by a scheme or host
-// character), or any Windows drive path. Covers /Users, /home, /tmp, /var,
-// /opt, /mnt, /private, and every other root — there is no exhaustive list.
+// character), or any Windows drive path with either separator. Covers /Users,
+// /home, /tmp, /var, /opt, /mnt, /private, and every other root — there is no
+// exhaustive list.
 const ABSOLUTE_PATH =
-  /(?<![\w:/+.~>-])(?:[A-Za-z]:\\[^\s'"<>|]+|\/(?:[A-Za-z0-9._~-]+\/)+[A-Za-z0-9._~-]*)/
+  /(?<![\w:/+.~>-])(?:[A-Za-z]:[\\/][^\s'"<>|]*|\/(?:[A-Za-z0-9._~-]+\/)+[A-Za-z0-9._~-]*)/
 
 const SECRET_PATTERNS = [
   { name: 'GitHub token', regex: /\b(ghp|gho|ghs|ghr)_[A-Za-z0-9]{20,}\b|github_pat_[A-Za-z0-9_]{20,}\b/ },
