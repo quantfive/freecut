@@ -82,6 +82,20 @@ function sha256File(filePath) {
   return crypto.createHash('sha256').update(fs.readFileSync(filePath)).digest('hex')
 }
 
+function describeLaunchError(label, error) {
+  return `${label}: ${String(error?.message ?? error).split('\n')[0]}`
+}
+
+async function tryLaunch({ label, options }) {
+  const browser = await chromium.launch({
+    ...options,
+    headless: true,
+    args: chromeLaunchArgs(),
+  })
+  console.log(`[qa-browser] browser session: ${label} (${browser.version()})`)
+  return { browser, label }
+}
+
 async function launchBrowser() {
   const attempts = [
     { label: 'system Chrome (channel: chrome)', options: { channel: 'chrome' } },
@@ -89,110 +103,138 @@ async function launchBrowser() {
   ]
   const errors = []
   for (const attempt of attempts) {
-    try {
-      const browser = await chromium.launch({
-        ...attempt.options,
-        headless: true,
-        args: chromeLaunchArgs(),
-      })
-      console.log(`[qa-browser] browser session: ${attempt.label} (${browser.version()})`)
-      return { browser, label: attempt.label }
-    } catch (error) {
-      errors.push(`${attempt.label}: ${String(error?.message ?? error).split('\n')[0]}`)
-    }
+    const launched = await tryLaunch(attempt).catch((error) => {
+      errors.push(describeLaunchError(attempt.label, error))
+      return null
+    })
+    if (launched) return launched
   }
   blocked(`browser discovery found no available browser session — ${errors.join(' | ')}`)
 }
 
-async function main() {
-  if (process.argv.includes('--skip-build')) {
-    if (!fs.existsSync(path.join(ROOT, 'dist', 'headless.html'))) {
-      throw new Error('dist/headless.html missing — run npm run build first or drop --skip-build')
-    }
-  } else {
+async function ensureBuild() {
+  if (!process.argv.includes('--skip-build')) {
     execSync('npm run build', { cwd: ROOT, stdio: 'inherit' })
+    return
   }
+  if (!fs.existsSync(path.join(ROOT, 'dist', 'headless.html'))) {
+    throw new Error('dist/headless.html missing — run npm run build first or drop --skip-build')
+  }
+}
 
-  const head = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: ROOT, encoding: 'utf8' }).trim()
+function prepareOutDir(head) {
   const outDir = path.join(ROOT, 'artifacts', 'qa', `browser-${head.slice(0, 12)}`)
   fs.rmSync(outDir, { recursive: true, force: true })
   fs.mkdirSync(outDir, { recursive: true })
+  return outDir
+}
+
+function report(failures, name, condition, detail) {
+  if (condition) {
+    console.log(`  PASS  ${name}`)
+    return
+  }
+  failures.push(name)
+  console.error(`  FAIL  ${name}${detail ? ` — ${detail}` : ''}`)
+}
+
+function pngSize(filePath) {
+  if (!fs.existsSync(filePath)) return 0
+  return fs.statSync(filePath).size
+}
+
+async function grabFrame(page, outDir, failures) {
+  const frameDownloadPromise = page.waitForEvent('download', { timeout: 60_000 })
+  frameDownloadPromise.catch(() => {})
+  const frameSummary = await page.evaluate((input) => window.freecut.renderFrame(input), {
+    project: FRAME_PROJECT,
+    atSeconds: 0.5,
+  })
+  const framePath = path.join(outDir, 'frame.png')
+  const frameDownload = await frameDownloadPromise
+  await frameDownload.saveAs(framePath)
+  report(failures, 'renderFrame returns ok', frameSummary.ok === true)
+  report(failures, 'frame matches project width', frameSummary.width === 640, `got ${frameSummary.width}`)
+  report(
+    failures,
+    'frame PNG has real pixels (>1KB)',
+    pngSize(framePath) > 1000,
+    `${pngSize(framePath)} bytes`,
+  )
+}
+
+async function runPageChecks(browser, server, outDir) {
+  const failures = []
+  const consoleLines = []
+  const context = await browser.newContext({ acceptDownloads: true })
+  const page = await context.newPage()
+  page.on('console', (message) => consoleLines.push(`[console:${message.type()}] ${message.text()}`))
+  page.on('pageerror', (error) => {
+    failures.push('page error')
+    consoleLines.push(`[pageerror] ${error.message}`)
+    console.error('  FAIL  page error —', error.message)
+  })
+
+  await page.goto(server.harnessUrl, { waitUntil: 'load', timeout: 60_000 })
+  await page.waitForFunction(() => Boolean(window.freecut?.ready), { timeout: 30_000 })
+  report(failures, 'harness reports ready', true)
+
+  await grabFrame(page, outDir, failures)
+  await page.screenshot({ path: path.join(outDir, 'harness.png') })
+  return { failures, consoleLines }
+}
+
+function writeConsoleLog(outDir, consoleLines) {
+  // Defensive redaction: never let absolute local paths reach the log artifact.
+  const logText = consoleLines.join('\n').split(ROOT).join('<repo>').split(os.homedir()).join('<home>')
+  fs.writeFileSync(path.join(outDir, 'console.log'), `${logText}\n`)
+}
+
+function writeManifest(outDir, { head, label, version, failures }) {
+  const artifacts = ['frame.png', 'harness.png', 'console.log']
+  const manifest = {
+    schema: 'freecut-qa-browser/v1',
+    head,
+    browser: { label, version },
+    generatedAt: new Date().toISOString(),
+    artifacts: Object.fromEntries(
+      artifacts.map((name) => [
+        name,
+        { bytes: fs.statSync(path.join(outDir, name)).size, sha256: sha256File(path.join(outDir, name)) },
+      ]),
+    ),
+    result: failures.length === 0 ? 'PASS' : 'FAIL',
+  }
+  fs.writeFileSync(path.join(outDir, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`)
+  console.log(
+    `[qa-browser] artifacts: artifacts/qa/browser-${head.slice(0, 12)}/ (${artifacts.join(', ')}, manifest.json)`,
+  )
+}
+
+function reportOutcome(failures) {
+  if (failures.length > 0) {
+    console.error(`[qa-browser] ${failures.length} check(s) FAILED`)
+    process.exit(1)
+  }
+  console.log('[qa-browser] PASS')
+}
+
+async function main() {
+  await ensureBuild()
+  const head = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: ROOT, encoding: 'utf8' }).trim()
+  const outDir = prepareOutDir(head)
 
   const { browser, label } = await launchBrowser()
   const server = await createHarnessServer({ distDir: path.join(ROOT, 'dist'), resolveMedia: () => null })
-  const consoleLines = []
-  let failures = 0
-  const check = (name, condition, detail) => {
-    if (condition) console.log(`  PASS  ${name}`)
-    else {
-      failures++
-      console.error(`  FAIL  ${name}${detail ? ` — ${detail}` : ''}`)
-    }
-  }
-
   try {
-    const context = await browser.newContext({ acceptDownloads: true })
-    const page = await context.newPage()
-    page.on('console', (message) => consoleLines.push(`[console:${message.type()}] ${message.text()}`))
-    page.on('pageerror', (error) => {
-      failures++
-      consoleLines.push(`[pageerror] ${error.message}`)
-      console.error('  FAIL  page error —', error.message)
-    })
-
-    await page.goto(server.harnessUrl, { waitUntil: 'load', timeout: 60_000 })
-    await page.waitForFunction(() => Boolean(window.freecut?.ready), { timeout: 30_000 })
-    check('harness reports ready', true)
-
-    const frameDownloadPromise = page.waitForEvent('download', { timeout: 60_000 })
-    frameDownloadPromise.catch(() => {})
-    const frameSummary = await page.evaluate((input) => window.freecut.renderFrame(input), {
-      project: FRAME_PROJECT,
-      atSeconds: 0.5,
-    })
-    const framePath = path.join(outDir, 'frame.png')
-    const frameDownload = await frameDownloadPromise
-    await frameDownload.saveAs(framePath)
-    check('renderFrame returns ok', frameSummary.ok === true)
-    check('frame matches project width', frameSummary.width === 640, `got ${frameSummary.width}`)
-    check(
-      'frame PNG has real pixels (>1KB)',
-      fs.existsSync(framePath) && fs.statSync(framePath).size > 1000,
-      `${fs.existsSync(framePath) ? fs.statSync(framePath).size : 0} bytes`,
-    )
-
-    await page.screenshot({ path: path.join(outDir, 'harness.png') })
-
-    // Defensive redaction: never let absolute local paths reach the log artifact.
-    const logText = consoleLines.join('\n').split(ROOT).join('<repo>').split(os.homedir()).join('<home>')
-    fs.writeFileSync(path.join(outDir, 'console.log'), `${logText}\n`)
-
-    const artifacts = ['frame.png', 'harness.png', 'console.log']
-    const manifest = {
-      schema: 'freecut-qa-browser/v1',
-      head,
-      browser: { label, version: browser.version() },
-      generatedAt: new Date().toISOString(),
-      artifacts: Object.fromEntries(
-        artifacts.map((name) => [
-          name,
-          { bytes: fs.statSync(path.join(outDir, name)).size, sha256: sha256File(path.join(outDir, name)) },
-        ]),
-      ),
-      result: failures === 0 ? 'PASS' : 'FAIL',
-    }
-    fs.writeFileSync(path.join(outDir, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`)
-    console.log(`[qa-browser] artifacts: artifacts/qa/browser-${head.slice(0, 12)}/ (${artifacts.join(', ')}, manifest.json)`)
+    const { failures, consoleLines } = await runPageChecks(browser, server, outDir)
+    writeConsoleLog(outDir, consoleLines)
+    writeManifest(outDir, { head, label, version: browser.version(), failures })
+    reportOutcome(failures)
   } finally {
     await browser.close()
     await server.close()
   }
-
-  if (failures > 0) {
-    console.error(`[qa-browser] ${failures} check(s) FAILED`)
-    process.exit(1)
-  }
-  console.log('[qa-browser] PASS')
 }
 
 main().catch((error) => {

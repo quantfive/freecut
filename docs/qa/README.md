@@ -23,7 +23,7 @@ Run everything at the PR head, from a clean tree, in this order:
 |---|------|---------|-------|
 | 1 | Head binding | `npm run qa:binding -- --check` | Emits/validates the exact base/head + dirty-tree block for the report |
 | 2 | Type check | `npm run check` | Focused: `npx vp check --no-fmt <paths>` |
-| 3 | Lint | `npm run lint` | Focused: `npx vp lint <paths>` |
+| 3 | Lint | `npm run lint` | Focused: `npx vp lint <paths>`. Needs `packages/freecut-editor/dist` — run `npm run build:editor-surface` first on a fresh tree, else a pre-existing TS2307 on the self-referencing `@quantfive/freecut-editor-surface` import (present at base too) |
 | 4 | Unit tests | `npm run test:run` | Selective: `npx vp test run <file>` |
 | 5 | Build | `npm run build` | |
 | 6 | Feature boundaries | `npm run check:boundaries` | |
@@ -42,9 +42,10 @@ Run everything at the PR head, from a clean tree, in this order:
 | 19 | Full headless browser suite | `npm run headless:test:chrome` | Render/edit/frame/layout contract checks in a real browser |
 | 20 | Redaction | `npm run check:qa-redaction` | QA docs + artifacts must carry no secrets, tokens, absolute local paths, or embedded media bytes |
 
-`npm run verify` aggregates gates 2–13 plus unit tests, build, and the
-portable headless suite (`headless:test:portable` = gates 17 + 19 plus the
-media harness tests). The remaining gates run on demand.
+`npm run verify` aggregates gates 2 and 4–13 (type check, unit tests, build,
+and all boundary/deps/fallow/edge gates) plus the portable headless suite
+(`headless:test:portable` = gates 17 + 19 plus the media harness tests). Lint
+(gate 3) and the remaining gates run on demand.
 
 ## Browser QA and the BLOCKED rule
 

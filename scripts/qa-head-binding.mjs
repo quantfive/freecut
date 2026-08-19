@@ -47,26 +47,38 @@ function resolveSha(ref, label) {
   return sha
 }
 
+function emitBindingBlock({ base, baseRef, head, porcelain, clean }) {
+  console.log('### Verifier revision binding')
+  console.log(`base: ${base} (${baseRef})`)
+  console.log(`head: ${head}`)
+  console.log(`git rev-parse HEAD -> ${head}`)
+  console.log(`git status --porcelain -> ${clean ? '(empty)' : '\n' + porcelain}`)
+}
+
+function validateBinding({ check, clean, descendant, base, head }) {
+  if (!check) return
+  if (!clean) fail('working tree is dirty — QA evidence must come from a clean tree')
+  if (!descendant) fail(`head ${head} is not a descendant of base ${base}`)
+  console.log('[qa-head-binding] OK: clean tree, head descends from base')
+}
+
+function resolveBase(baseRef) {
+  if (/^[0-9a-f]{40}$/.test(baseRef)) return baseRef
+  return resolveSha(baseRef, 'base')
+}
+
 function main() {
   const check = process.argv.includes('--check')
   const baseRef = readFlag('--base') ?? DEFAULT_BASE_REF
-  const base = /^[0-9a-f]{40}$/.test(baseRef) ? baseRef : resolveSha(baseRef, 'base')
+  const base = resolveBase(baseRef)
   const head = git(['rev-parse', 'HEAD'])
   const porcelain = git(['status', '--porcelain'])
   const clean = porcelain.length === 0
   const descendant =
     spawnSync('git', ['merge-base', '--is-ancestor', base, head], { cwd: ROOT }).status === 0
 
-  console.log('### Verifier revision binding')
-  console.log(`base: ${base} (${baseRef})`)
-  console.log(`head: ${head}`)
-  console.log(`git rev-parse HEAD -> ${head}`)
-  console.log(`git status --porcelain -> ${clean ? '(empty)' : '\n' + porcelain}`)
-
-  if (!check) return
-  if (!clean) fail('working tree is dirty — QA evidence must come from a clean tree')
-  if (!descendant) fail(`head ${head} is not a descendant of base ${base}`)
-  console.log('[qa-head-binding] OK: clean tree, head descends from base')
+  emitBindingBlock({ base, baseRef, head, porcelain, clean })
+  validateBinding({ check, clean, descendant, base, head })
 }
 
 main()

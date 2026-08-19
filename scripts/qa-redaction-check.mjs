@@ -37,8 +37,7 @@ function collectFiles(target, files) {
   files.push(target)
 }
 
-function main() {
-  const args = process.argv.slice(2).filter((arg) => !arg.startsWith('--'))
+function collectTargetFiles(args) {
   const targets = args.length > 0 ? args : ['docs/qa', 'artifacts/qa']
   const files = []
   for (const target of targets) {
@@ -49,34 +48,50 @@ function main() {
     }
     collectFiles(absolute, files)
   }
+  return files
+}
 
-  let findings = 0
-  for (const file of files) {
-    const relative = path.relative(ROOT, file)
-    const extension = path.extname(file).toLowerCase()
-    if (!TEXT_EXTENSIONS.has(extension)) {
-      if (!ALLOWED_BINARY_EXTENSIONS.has(extension)) {
-        findings++
-        console.error(`[qa-redaction] FAIL ${relative}: unexpected binary artifact type "${extension}"`)
-      }
-      continue
-    }
-    const text = fs.readFileSync(file, 'utf8')
-    for (const { name, regex } of PATTERNS) {
-      const match = regex.exec(text)
-      if (match) {
-        findings++
-        const line = text.slice(0, match.index).split('\n').length
-        console.error(`[qa-redaction] FAIL ${relative}:${line}: ${name}`)
-      }
+function scanBinaryArtifact(relative, extension) {
+  if (ALLOWED_BINARY_EXTENSIONS.has(extension)) return []
+  return [`${relative}: unexpected binary artifact type "${extension}"`]
+}
+
+function scanTextFile(file, relative) {
+  const text = fs.readFileSync(file, 'utf8')
+  const findings = []
+  for (const { name, regex } of PATTERNS) {
+    const match = regex.exec(text)
+    if (match) {
+      const line = text.slice(0, match.index).split('\n').length
+      findings.push(`${relative}:${line}: ${name}`)
     }
   }
+  return findings
+}
 
-  if (findings > 0) {
-    console.error(`[qa-redaction] ${findings} finding(s) — remove secrets, local paths, and embedded media before publishing`)
+function scanFile(file) {
+  const relative = path.relative(ROOT, file)
+  const extension = path.extname(file).toLowerCase()
+  if (!TEXT_EXTENSIONS.has(extension)) return scanBinaryArtifact(relative, extension)
+  return scanTextFile(file, relative)
+}
+
+function reportFindings(findings, fileCount) {
+  if (findings.length > 0) {
+    for (const finding of findings) console.error(`[qa-redaction] FAIL ${finding}`)
+    console.error(
+      `[qa-redaction] ${findings.length} finding(s) — remove secrets, local paths, and embedded media before publishing`,
+    )
     process.exit(1)
   }
-  console.log(`[qa-redaction] OK: ${files.length} file(s) scanned, no findings`)
+  console.log(`[qa-redaction] OK: ${fileCount} file(s) scanned, no findings`)
+}
+
+function main() {
+  const args = process.argv.slice(2).filter((arg) => !arg.startsWith('--'))
+  const files = collectTargetFiles(args)
+  const findings = files.flatMap(scanFile)
+  reportFindings(findings, files.length)
 }
 
 main()
