@@ -1,0 +1,1 @@
+QA scratch log was written to /tmp/freecut-qa-run-9f2c/output.log before cleanup.

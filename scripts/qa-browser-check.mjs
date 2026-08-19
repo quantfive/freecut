@@ -17,7 +17,6 @@ import crypto from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import fs from 'node:fs'
 import path from 'node:path'
-import os from 'node:os'
 import { createHarnessServer } from '../headless/server.mjs'
 import { chromeLaunchArgs } from '../headless/lib/cli.mjs'
 
@@ -184,9 +183,20 @@ async function runPageChecks(browser, server, outDir) {
   return { failures, consoleLines }
 }
 
+// Generic absolute local path (same contract as qa-redaction-check): any Unix
+// absolute path of 2+ segments not embedded in a URL, or any Windows drive
+// path. Sanitization must not depend on knowing the specific roots in advance.
+const ABSOLUTE_PATH =
+  /(?<![\w:/+.~>-])(?:[A-Za-z]:\\[^\s'"<>|]+|\/(?:[A-Za-z0-9._~-]+\/)+[A-Za-z0-9._~-]*)/g
+
+function sanitizeLogText(text) {
+  return text.replace(ABSOLUTE_PATH, '<path>')
+}
+
 function writeConsoleLog(outDir, consoleLines) {
-  // Defensive redaction: never let absolute local paths reach the log artifact.
-  const logText = consoleLines.join('\n').split(ROOT).join('<repo>').split(os.homedir()).join('<home>')
+  // Defensive redaction: no absolute local path may reach the log artifact,
+  // regardless of which root it lives under.
+  const logText = sanitizeLogText(consoleLines.join('\n'))
   fs.writeFileSync(path.join(outDir, 'console.log'), `${logText}\n`)
 }
 

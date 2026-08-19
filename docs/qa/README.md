@@ -40,7 +40,7 @@ Run everything at the PR head, from a clean tree, in this order:
 | 17 | Headless contract tests (Node) | `npm run headless:test:node` | |
 | 18 | Browser QA | `npm run qa:browser -- --skip-build` | Discovers a browser session (system Chrome, then Playwright chromium), renders a frame, writes screenshot/log artifacts + manifest to `artifacts/qa/`. Exit 3 = BLOCKED (no browser) — see below |
 | 19 | Full headless browser suite | `npm run headless:test:chrome` | Render/edit/frame/layout contract checks in a real browser |
-| 20 | Redaction | `npm run check:qa-redaction` | QA docs + artifacts must carry no secrets, tokens, absolute local paths, or embedded media bytes |
+| 20 | Redaction | `npm run check:qa-redaction` | QA docs + artifacts must carry no secrets, tokens, absolute local paths, or embedded media bytes; the command also runs the fail-closed self-test (`scripts/qa-redaction-check.test.mjs`) proving the gate rejects the negative fixtures |
 
 `npm run verify` aggregates gates 2 and 4–13 (type check, unit tests, build,
 and all boundary/deps/fallow/edge gates) plus the portable headless suite
@@ -85,4 +85,13 @@ QA artifacts and reports contain no secrets, tokens, cookies, raw absolute
 local paths (use repo-relative paths), or embedded media bytes. Screenshots
 and logs live in gitignored `artifacts/qa/` and are referenced by
 repo-relative path or uploaded to a durable URL before being cited.
-`npm run check:qa-redaction` enforces this over `docs/qa` and `artifacts/qa`.
+`npm run check:qa-redaction` enforces this over `docs/qa` and `artifacts/qa`:
+a generic absolute-path pattern (any Unix root or Windows drive, not a list of
+known roots), any media data URI regardless of payload length, and the secret
+patterns. Browser logs are sanitized with the same generic path pattern before
+being written. Intentional examples in docs may carry the per-line marker
+`qa-redaction:allow` (secrets are never allowlisted). The gate is proven
+fail-closed by `scripts/qa-redaction-check.test.mjs`: the negative fixtures in
+`scripts/fixtures/qa-redaction/` (a tmp path, a generic absolute path, a short
+media data URI, a Windows path) must each fail the gate, and the clean fixture
+set must pass.
