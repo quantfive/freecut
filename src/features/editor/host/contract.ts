@@ -2,6 +2,9 @@ import type {
   EditApplyResult,
   EditCommandBatch,
   EditCommand,
+  Microseconds,
+  Precondition,
+  TimelineRevision,
 } from '@/features/editor/codepress/contract'
 import type { FreeCutFrameDocument } from '@/features/editor/codepress/document'
 
@@ -111,6 +114,159 @@ export interface HostNotice {
   operationId?: string
 }
 
+/** Maximum section/range selection accepted by the PR9B transcript adapter. */
+export const MAX_TRANSCRIPT_SELECTIONS = 64
+/** The backend exposes at most this many sections per bounded page. */
+export const MAX_TRANSCRIPT_SECTION_PAGE_SIZE = 50
+/** Maximum UTF-8 bytes accepted for one bounded transcript section. */
+export const MAX_TRANSCRIPT_SECTION_TEXT_BYTES = 4_000
+/** Maximum UTF-8 bytes accepted for one generated transcript command. */
+export const MAX_TRANSCRIPT_COMMAND_TEXT_BYTES = 64 * 1024
+/** Maximum source duration representable by a transcript command selection. */
+export const MAX_TRANSCRIPT_DURATION_US = 3_600_000_000
+/** Maximum cursor/query payload size accepted by the browser port. */
+export const MAX_TRANSCRIPT_CURSOR_LENGTH = 256
+export const MAX_TRANSCRIPT_QUERY_LENGTH = 256
+
+export type HostTranscriptStatus =
+  | 'pending'
+  | 'running'
+  | 'succeeded'
+  | 'failed'
+  | 'stale'
+  | 'purged'
+
+/** Safe, structured transcript failure information from the application host. */
+export interface HostTranscriptError {
+  code: string
+  message: string
+  retryable: boolean
+  details?: Readonly<Record<string, unknown>>
+}
+
+/**
+ * Compact source-bound transcript receipt.  The host owns authorization and
+ * transport; FreeCut receives only opaque IDs, a source hash, status, and
+ * bounded recovery information.
+ */
+export interface HostTranscriptStatusReceipt {
+  transcriptId: string
+  assetId: string | null
+  sourceAssetHash: string
+  status: HostTranscriptStatus
+  language?: string | null
+  durationUs: Microseconds | null
+  sectionCount: number
+  error?: HostTranscriptError | null
+}
+
+/** One bounded, source-addressable transcript section. */
+export interface HostTranscriptSection {
+  id: string
+  transcriptId: string
+  ordinal: number
+  startUs: Microseconds
+  endUs: Microseconds
+  text: string
+  speaker?: string | null
+}
+
+export interface HostTranscriptSectionsRequest {
+  transcriptId: string
+  cursor?: string | null
+  limit?: number
+  startUs?: Microseconds
+  endUs?: Microseconds
+}
+
+export interface HostTranscriptSectionsPage {
+  transcriptId: string
+  sections: readonly HostTranscriptSection[]
+  nextCursor?: string | null
+  hasMore: boolean
+}
+
+export interface HostTranscriptSearchRequest {
+  transcriptId: string
+  query: string
+  cursor?: string | null
+  limit?: number
+}
+
+export interface HostTranscriptSearchPage {
+  transcriptId: string
+  query: string
+  sections: readonly HostTranscriptSection[]
+  nextCursor?: string | null
+  hasMore: boolean
+}
+
+/** A positive integer-microsecond source range selected for preview. */
+export interface HostTranscriptRange {
+  startUs: Microseconds
+  endUs: Microseconds
+  text?: string
+}
+
+export type HostTranscriptCommandAction = 'cut' | 'captions' | 'ripple_cut' | 'caption'
+
+/** PR9B request shape.  It previews only; it never mutates the host timeline. */
+export interface HostTranscriptCommandPreviewRequest {
+  transcriptId: string
+  assetId: string
+  sourceAssetHash: string
+  operationId: string
+  idempotencyKey: string
+  baseRevision: TimelineRevision
+  action: HostTranscriptCommandAction
+  timestampCapability: 'section' | 'word' | 'frame'
+  sectionIds?: readonly string[]
+  ranges?: readonly HostTranscriptRange[]
+  captionTrackId?: string
+  captionTrackName?: string
+  captionLanguage?: string | null
+  preconditions?: readonly Precondition[]
+}
+
+export interface HostTranscriptCommandPreview {
+  status: 'preview' | 'replayed'
+  receiptId: string
+  transcriptId: string
+  assetId: string
+  sourceAssetHash: string
+  timestampCapability: 'section'
+  timelineId: string
+  operationId: string
+  idempotencyKey: string
+  baseRevision: TimelineRevision
+  commandBatch: EditCommandBatch
+  preview: Readonly<{
+    action?: string
+    sectionCount?: number
+    captionCount?: number
+    willMutateTimeline: false
+    [key: string]: unknown
+  }>
+}
+
+/**
+ * Optional host-backed transcript consumer port.  Implementations may use an
+ * authenticated API, desktop bridge, or another application-owned transport;
+ * those details never enter the FreeCut surface.
+ */
+export interface EditorTranscriptPort {
+  getStatus(): Promise<HostTranscriptStatusReceipt | null> | HostTranscriptStatusReceipt | null
+  getSections(
+    request: HostTranscriptSectionsRequest,
+  ): Promise<HostTranscriptSectionsPage> | HostTranscriptSectionsPage
+  search?(
+    request: HostTranscriptSearchRequest,
+  ): Promise<HostTranscriptSearchPage> | HostTranscriptSearchPage
+  previewCommands(
+    request: HostTranscriptCommandPreviewRequest,
+  ): Promise<HostTranscriptCommandPreview> | HostTranscriptCommandPreview
+}
+
 export interface HostAppliedEditResult {
   status: 'applied' | 'replayed'
   snapshot: EmbeddedEditorSnapshot
@@ -136,6 +292,8 @@ export interface EditorHost {
     locator: MediaLocator,
   ): Promise<ResolvedMediaLocator | null> | ResolvedMediaLocator | null
   submitEdit(batch: EditCommandBatch): Promise<HostEditResult> | HostEditResult
+  /** Optional application-issued transcript read/preview boundary. */
+  transcript?: EditorTranscriptPort
   navigation?: EditorHostNavigation
   notify?(notice: HostNotice): void
 }

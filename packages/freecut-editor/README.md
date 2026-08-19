@@ -26,8 +26,17 @@ The `EditorHost` contract carries opaque media locators and authoritative
 snapshots. It never accepts filesystem paths, permanent URLs, provider keys,
 or media bytes. Supported edits are submitted through `submitEdit`; rejected
 or conflicting results return an authoritative snapshot to the surface. The
-0.2.0 surface adds host-backed caption tracks, bounded cues, caption styles,
-and display toggles to that same command path.
+0.3.0 surface adds an optional host-backed transcript consumer. Hosts opt into the
+transcript tab by providing `EditorHost.transcript` and explicitly enabling
+`media.transcription`. The port returns a compact status receipt and bounded
+microsecond sections, and previews source-bound caption commands with
+`willMutateTimeline: false`; only an explicit user action submits that returned
+batch through `submitEdit`. Transcript IDs, asset IDs, source hashes, cursors,
+and structured errors are opaque browser data—authentication, transport,
+provider details, URLs, paths, and media bytes remain host-owned.
+
+The same 0.3.0 surface retains the host-backed caption tracks, bounded cues,
+caption styles, and display toggles from 0.2.0.
 
 This package is built from a specific FreeCut commit. To create the local
 consumer artifact from a clean checkout, run:
@@ -49,7 +58,7 @@ that has `write:packages` and run:
 
 ```bash
 NODE_AUTH_TOKEN="$GITHUB_CLASSIC_PAT" npm publish \
-  artifacts/freecut-editor-surface-0.2.0.tgz \
+  artifacts/freecut-editor-surface-0.3.0.tgz \
   --registry=https://npm.pkg.github.com
 ```
 
@@ -69,5 +78,5 @@ It can then install the exact published version and keep it pinned in its
 lockfile:
 
 ```bash
-npm install @quantfive/freecut-editor-surface@0.2.0
+npm install @quantfive/freecut-editor-surface@0.3.0
 ```

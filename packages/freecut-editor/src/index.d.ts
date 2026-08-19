@@ -166,6 +166,139 @@ export interface HostNotice {
   operationId?: string
 }
 
+export declare const MAX_TRANSCRIPT_SELECTIONS: number
+export declare const MAX_TRANSCRIPT_SECTION_PAGE_SIZE: number
+export declare const MAX_TRANSCRIPT_SECTION_TEXT_BYTES: number
+export declare const MAX_TRANSCRIPT_COMMAND_TEXT_BYTES: number
+export declare const MAX_TRANSCRIPT_DURATION_US: number
+export declare const MAX_TRANSCRIPT_CURSOR_LENGTH: number
+export declare const MAX_TRANSCRIPT_QUERY_LENGTH: number
+
+export type HostTranscriptStatus =
+  | 'pending'
+  | 'running'
+  | 'succeeded'
+  | 'failed'
+  | 'stale'
+  | 'purged'
+
+export interface HostTranscriptError {
+  code: string
+  message: string
+  retryable: boolean
+  details?: Readonly<Record<string, unknown>>
+}
+
+export interface HostTranscriptStatusReceipt {
+  transcriptId: string
+  assetId: string | null
+  sourceAssetHash: string
+  status: HostTranscriptStatus
+  language?: string | null
+  durationUs: number | null
+  sectionCount: number
+  error?: HostTranscriptError | null
+}
+
+export interface HostTranscriptSection {
+  id: string
+  transcriptId: string
+  ordinal: number
+  startUs: number
+  endUs: number
+  text: string
+  speaker?: string | null
+}
+
+export interface HostTranscriptSectionsRequest {
+  transcriptId: string
+  cursor?: string | null
+  limit?: number
+  startUs?: number
+  endUs?: number
+}
+
+export interface HostTranscriptSectionsPage {
+  transcriptId: string
+  sections: readonly HostTranscriptSection[]
+  nextCursor?: string | null
+  hasMore: boolean
+}
+
+export interface HostTranscriptSearchRequest {
+  transcriptId: string
+  query: string
+  cursor?: string | null
+  limit?: number
+}
+
+export interface HostTranscriptSearchPage {
+  transcriptId: string
+  query: string
+  sections: readonly HostTranscriptSection[]
+  nextCursor?: string | null
+  hasMore: boolean
+}
+
+export interface HostTranscriptRange {
+  startUs: number
+  endUs: number
+  text?: string
+}
+
+export type HostTranscriptCommandAction = 'cut' | 'captions' | 'ripple_cut' | 'caption'
+
+export interface HostTranscriptCommandPreviewRequest {
+  transcriptId: string
+  assetId: string
+  sourceAssetHash: string
+  operationId: string
+  idempotencyKey: string
+  baseRevision: number
+  action: HostTranscriptCommandAction
+  timestampCapability: 'section' | 'word' | 'frame'
+  sectionIds?: readonly string[]
+  ranges?: readonly HostTranscriptRange[]
+  captionTrackId?: string
+  captionTrackName?: string
+  captionLanguage?: string | null
+  preconditions?: readonly object[]
+}
+
+export interface HostTranscriptCommandPreview {
+  status: 'preview' | 'replayed'
+  receiptId: string
+  transcriptId: string
+  assetId: string
+  sourceAssetHash: string
+  timestampCapability: 'section'
+  timelineId: string
+  operationId: string
+  idempotencyKey: string
+  baseRevision: number
+  commandBatch: EditCommandBatch
+  preview: Readonly<{
+    action?: string
+    sectionCount?: number
+    captionCount?: number
+    willMutateTimeline: false
+    [key: string]: unknown
+  }>
+}
+
+export interface EditorTranscriptPort {
+  getStatus(): Promise<HostTranscriptStatusReceipt | null> | HostTranscriptStatusReceipt | null
+  getSections(
+    request: HostTranscriptSectionsRequest,
+  ): Promise<HostTranscriptSectionsPage> | HostTranscriptSectionsPage
+  search?(
+    request: HostTranscriptSearchRequest,
+  ): Promise<HostTranscriptSearchPage> | HostTranscriptSearchPage
+  previewCommands(
+    request: HostTranscriptCommandPreviewRequest,
+  ): Promise<HostTranscriptCommandPreview> | HostTranscriptCommandPreview
+}
+
 export interface HostAppliedEditResult {
   status: 'applied' | 'replayed'
   snapshot: EmbeddedEditorSnapshot
@@ -207,6 +340,7 @@ export interface EditorHost {
     locator: MediaLocator,
   ): Promise<ResolvedMediaLocator | null> | ResolvedMediaLocator | null
   submitEdit(batch: EditCommandBatch): Promise<HostEditResult> | HostEditResult
+  transcript?: EditorTranscriptPort
   navigation?: EditorHostNavigation
   notify?(notice: HostNotice): void
 }

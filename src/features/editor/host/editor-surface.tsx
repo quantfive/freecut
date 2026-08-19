@@ -13,6 +13,7 @@ import {
 } from './contract'
 import { EditorHostProvider } from './context-provider'
 import { HostCaptionEditorProvider } from './caption-editor-context'
+import { HostTranscriptEditorProvider } from './transcript-editor-context'
 import { EmbeddedEditorHostRuntime } from './runtime'
 import '@/index.css'
 
@@ -79,21 +80,23 @@ export function FreeCutEditorSurface({ host }: { host: EditorHost }) {
       <TooltipProvider delayDuration={300}>
         <EditorHostProvider value={{ mode: 'host', capabilities, host }}>
           <HostCaptionEditorProvider runtime={state.runtime}>
-            <ErrorBoundary level="feature">
-              <div data-freecut-editor-surface="host" className="h-screen min-h-0">
-                <LoadedEditor
-                  projectId={state.snapshot.project.id}
-                  project={state.snapshot.project}
-                  migration={{
-                    storedSchemaVersion: 1,
-                    currentSchemaVersion: 1,
-                    requiresUpgrade: false,
-                  }}
-                  hostRuntime={state.runtime}
-                  onNavigateBack={onNavigateBack}
-                />
-              </div>
-            </ErrorBoundary>
+            <HostTranscriptEditorProvider runtime={state.runtime}>
+              <ErrorBoundary level="feature">
+                <div data-freecut-editor-surface="host" className="h-screen min-h-0">
+                  <LoadedEditor
+                    projectId={state.snapshot.project.id}
+                    project={state.snapshot.project}
+                    migration={{
+                      storedSchemaVersion: 1,
+                      currentSchemaVersion: 1,
+                      requiresUpgrade: false,
+                    }}
+                    hostRuntime={state.runtime}
+                    onNavigateBack={onNavigateBack}
+                  />
+                </div>
+              </ErrorBoundary>
+            </HostTranscriptEditorProvider>
           </HostCaptionEditorProvider>
         </EditorHostProvider>
         <GlobalTooltip />
