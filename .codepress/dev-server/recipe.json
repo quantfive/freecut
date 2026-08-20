@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "bootstrapped_at": "2026-08-20T00:32:15Z",
+  "discovery_branch": "codepress/bootstrap/dev-server/723bb63eb27b4e2a",
+  "frontends": [
+    {
+      "label": "web",
+      "working_dir": "",
+      "description": "FreeCut browser-based multi-track video editor",
+      "dockerfile_path": ".codepress/dev-server/Dockerfile.web",
+      "dev_command": "npm run dev",
+      "prebuild_command": "",
+      "prebuild_inputs": [],
+      "framework": "vite",
+      "package_manager": "npm",
+      "install_command": "npm install",
+      "dependency_manifests": ["package-lock.json"],
+      "dev_port": 5173,
+      "system_packages": ["procps"],
+      "size": "large"
+    }
+  ]
+}
