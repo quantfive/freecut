@@ -46,9 +46,9 @@ npm ci --ignore-scripts
 npm run package:editor-surface
 ```
 
-The command writes a deterministic tarball to `artifacts/`. The package is
-published to the `quantfive` GitHub Packages npm registry by the
-manual/tagged workflow in `.github/workflows/publish-editor-surface.yml`.
+The command writes a deterministic tarball to `artifacts/`, which the
+workflow in `.github/workflows/publish-editor-surface.yml` then publishes.
+
 The package is published to the **public npm registry**. It is MIT licensed
 and built from a public repository, so there is no credential to distribute
 and no per-consumer access to grant.
