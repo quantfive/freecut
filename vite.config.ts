@@ -55,8 +55,19 @@ const toolIgnorePatterns = [
   'scripts/**',
 ]
 
+// CodePress Live Dev Server managed: keep preview bind, base-path, and HMR
+// settings configurable without changing the production defaults.
+const codePressBindHost = process.env.CODEPRESS_BIND_HOST ?? '0.0.0.0'
+const codePressPort = Number(process.env.PORT ?? 5173)
+const codePressBasePath = process.env.CODEPRESS_BASE_PATH
+  ? `${process.env.CODEPRESS_BASE_PATH.replace(/\/+$/, '')}/`
+  : '/'
+const codePressHmrClientPort = Number(process.env.CODEPRESS_HMR_CLIENT_PORT ?? 443)
+const codePressHmrProtocol = process.env.CODEPRESS_HMR_PROTOCOL === 'ws' ? 'ws' : 'wss'
+
 // https://vite.dev/config/
 export default defineConfig({
+  base: codePressBasePath,
   lint: {
     ...oxlintConfig,
     ignorePatterns: toolIgnorePatterns,
@@ -104,8 +115,14 @@ export default defineConfig({
     dedupe: ['react', 'react-dom'],
   },
   server: {
-    port: 5173,
+    host: codePressBindHost,
+    port: codePressPort,
     strictPort: true,
+    allowedHosts: true,
+    hmr: {
+      clientPort: codePressHmrClientPort,
+      protocol: codePressHmrProtocol,
+    },
     headers: {
       'Cross-Origin-Embedder-Policy': 'require-corp',
       'Cross-Origin-Opener-Policy': 'same-origin',
