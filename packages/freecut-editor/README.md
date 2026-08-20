@@ -49,29 +49,21 @@ npm run package:editor-surface
 The command writes a deterministic tarball to `artifacts/`. The package is
 published to the `quantfive` GitHub Packages npm registry by the
 manual/tagged workflow in `.github/workflows/publish-editor-surface.yml`.
-The first GitHub Packages publication defaults to private; verify that
-visibility remains private and grant `quantfive/codepress` read access under
-**Manage Actions access** before CodePress installs it.
+The package is published to the **public npm registry**. It is MIT licensed
+and built from a public repository, so there is no credential to distribute
+and no per-consumer access to grant.
 
-For an authorized local publication, authenticate with a GitHub classic PAT
-that has `write:packages` and run:
+Releases publish from CI using npm trusted publishing (OIDC): the workflow
+exchanges its GitHub Actions identity token for a short-lived npm credential.
+There is no `NPM_TOKEN` secret in this repository, and none should be added.
+The trusted publisher is configured on npmjs.com against this repository and
+`.github/workflows/publish-editor-surface.yml`; changing that filename breaks
+publishing until the publisher entry is updated to match.
+
+Consumers need no registry configuration at all:
 
 ```bash
-NODE_AUTH_TOKEN="$GITHUB_CLASSIC_PAT" npm publish \
-  artifacts/freecut-editor-surface-0.3.0.tgz \
-  --registry=https://npm.pkg.github.com
-```
-
-Do not commit a token. The workflow uses its `GITHUB_TOKEN` with
-`packages: write`; CodePress CI uses its `GITHUB_TOKEN` with `packages: read`
-after the repository has been granted package access.
-
-CodePress should route the `@quantfive` scope to GitHub Packages and provide
-`NODE_AUTH_TOKEN` in CI:
-
-```ini
-@quantfive:registry=https://npm.pkg.github.com
-//npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}
+npm install @quantfive/freecut-editor-surface
 ```
 
 It can then install the exact published version and keep it pinned in its

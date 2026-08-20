@@ -3,12 +3,18 @@ name: Publish FreeCut editor surface
 on:
   workflow_dispatch:
   push:
+    branches:
+      - codepress
     tags:
       - 'freecut-editor-surface-v*'
 
 permissions:
   contents: read
-  packages: write
+  # npm trusted publishing (OIDC): the job exchanges the GitHub Actions
+  # identity token for a short-lived npm credential, so there is no NPM_TOKEN
+  # to store or rotate. Requires a trusted publisher configured on npmjs.com
+  # for this repository and this workflow filename.
+  id-token: write
 
 concurrency:
   group: publish-freecut-editor-surface
@@ -21,6 +27,9 @@ jobs:
     # already constrained by the trigger below and must match the package
     # version in the validation step.
     if: github.event_name == 'push' || github.ref_name == 'staging'
+    # A merge that does not bump the version is a no-op, not a failure: npm
+    # rejects republishing an existing version, and the branch trigger fires
+    # on every qualifying merge.
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -34,7 +43,7 @@ jobs:
         with:
           node-version: '22.14.0'
           cache: npm
-          registry-url: https://npm.pkg.github.com
+          registry-url: https://registry.npmjs.org
 
       - name: Select pinned npm
         run: npm install --global npm@11.8.0
@@ -69,13 +78,15 @@ jobs:
           test -f "${artifact}"
           npm run test:editor-surface:consumer -- --artifact "${artifact}"
 
-      - name: Publish private package to GitHub Packages
+      - name: Publish to the public npm registry
         shell: bash
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           package_version="$(node -p "require('./packages/freecut-editor/package.json').version")"
           artifact="artifacts/freecut-editor-surface-${package_version}.tgz"
           test -f "${artifact}"
-          npm publish "./${artifact}" --registry=https://npm.pkg.github.com
+          if npm view "@quantfive/freecut-editor-surface@${package_version}" version >/dev/null 2>&1; then
+            echo "::notice::@quantfive/freecut-editor-surface@${package_version} is already published; nothing to do."
+            exit 0
+          fi
+          npm publish "./${artifact}" --provenance --access public

@@ -87,10 +87,10 @@ function verifyPackageInputs() {
   assertCondition(packageJson.name === '@quantfive/freecut-editor-surface', 'unexpected package name')
   assertCondition(/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(packageJson.version), 'package version must be semver')
   assertCondition(
-    publishConfig.registry === 'https://npm.pkg.github.com',
-    'package must target the private GitHub Packages npm registry',
+    publishConfig.registry === 'https://registry.npmjs.org',
+    'package must target the public npm registry',
   )
-  assertCondition(publishConfig.access !== 'public', 'package must not enable public npm access')
+  assertCondition(publishConfig.access === 'public', 'package must publish with public npm access')
   assertCondition(packageJson.exports?.['./style.css'] === './dist/style.css', 'style export must be stable')
   assertCondition(packageJson.peerDependencies?.react, 'React must remain a peer dependency')
   assertCondition(packageJson.peerDependencies?.['react-dom'], 'React DOM must remain a peer dependency')
