@@ -36,6 +36,8 @@ interface MediaGridProps {
   itemSize?: number
   /** When provided, renders these items instead of pulling from the store */
   items?: MediaMetadata[]
+  /** Disable the local file-picker empty state for host-backed surfaces. */
+  canImportMedia?: boolean
 }
 
 interface MediaGridBaseProps extends MediaGridProps {
@@ -55,6 +57,7 @@ const MediaGridBase = memo(function MediaGridBase({
   layout,
   itemSize = 3,
   items,
+  canImportMedia = true,
 }: MediaGridBaseProps) {
   const { t } = useTranslation()
   const [showDeleteDialog, setShowDeleteDialog] = useState(false)
@@ -195,12 +198,13 @@ const MediaGridBase = memo(function MediaGridBase({
 
   // Handle click on empty state to open file picker
   const handleEmptyStateClick = useCallback(async () => {
+    if (!canImportMedia) return
     try {
       await importMedia()
     } catch (error) {
       logger.error('Import failed:', error)
     }
-  }, [importMedia])
+  }, [canImportMedia, importMedia])
 
   const cardHandlersById = useMemo(
     () =>
@@ -247,6 +251,7 @@ const MediaGridBase = memo(function MediaGridBase({
             type="button"
             className="text-center max-w-md rounded-xl border border-dashed border-border/80 p-6 transition-colors hover:border-primary/60 hover:bg-secondary/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
             onClick={handleEmptyStateClick}
+            disabled={!canImportMedia}
           >
             <div className="w-20 h-20 mx-auto mb-6 rounded-full border-2 border-dashed border-border flex items-center justify-center bg-secondary transition-colors">
               <Upload className="w-10 h-10 text-muted-foreground" />

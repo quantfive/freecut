@@ -168,6 +168,11 @@ function preloadBundleExportDialog() {
 }
 
 /** Project metadata passed from route loader (timeline loaded separately via loadTimeline) */
+interface LoadedEditorHostRuntime {
+  mountStores(): void
+  unmountStores(): void
+}
+
 interface EditorProps {
   projectId: string
   project: {
@@ -183,6 +188,9 @@ interface EditorProps {
     currentSchemaVersion: number
     requiresUpgrade: boolean
   }
+  hostRuntime?: LoadedEditorHostRuntime
+  onNavigateBack?: () => void
+  onRefreshMigration?: () => Promise<void>
 }
 
 /**
@@ -203,6 +211,7 @@ const startedUpgradeBackups = new Map<string, Promise<void>>()
  */
 export const Editor = memo(function Editor({ projectId, project, migration }: EditorProps) {
   const { t } = useTranslation()
+  const router = useRouter()
   const [upgradeApproved, setUpgradeApproved] = useState(!migration.requiresUpgrade)
   const backupName = formatProjectUpgradeBackupName(
     project.name,
@@ -278,6 +287,18 @@ export const Editor = memo(function Editor({ projectId, project, migration }: Ed
     t,
   ])
 
+  const onNavigateBack = useCallback(() => {
+    void router.navigate({ to: '/projects' })
+  }, [router])
+  const onRefreshMigration = useCallback(
+    () =>
+      router.invalidate({
+        filter: (match) =>
+          match.routeId === EDITOR_PROJECT_ROUTE_ID && match.params.projectId === projectId,
+      }),
+    [projectId, router],
+  )
+
   if (!upgradeApproved) {
     return (
       <div className="min-h-screen bg-background flex items-center justify-center">
@@ -288,7 +309,15 @@ export const Editor = memo(function Editor({ projectId, project, migration }: Ed
     )
   }
 
-  return <LoadedEditor projectId={projectId} project={project} migration={migration} />
+  return (
+    <LoadedEditor
+      projectId={projectId}
+      project={project}
+      migration={migration}
+      onNavigateBack={onNavigateBack}
+      onRefreshMigration={onRefreshMigration}
+    />
+  )
 })
 
 const EditorDialogHost = memo(function EditorDialogHost({ projectId }: { projectId: string }) {
@@ -363,6 +392,28 @@ const TimelineDialogHost = memo(function TimelineDialogHost() {
   )
 })
 
+const LocalRouterBridge = memo(function LocalRouterBridge({
+  projectId,
+  onReady,
+}: {
+  projectId: string
+  onReady: (invalidate: () => Promise<void>) => void
+}) {
+  const router = useRouter()
+  const invalidate = useCallback(
+    () =>
+      router.invalidate({
+        filter: (match) =>
+          match.routeId === EDITOR_PROJECT_ROUTE_ID && match.params.projectId === projectId,
+      }),
+    [projectId, router],
+  )
+
+  onReady(invalidate)
+
+  return null
+})
+
 const AutoSaveController = memo(function AutoSaveController({
   onSave,
 }: {
@@ -378,13 +429,16 @@ const TimelineShortcutsController = memo(function TimelineShortcutsController() 
   return null
 })
 
+// fallow-ignore-next-line complexity
 export const LoadedEditor = memo(function LoadedEditor({
   projectId,
   project,
   migration,
+  hostRuntime,
+  onNavigateBack,
+  onRefreshMigration,
 }: EditorProps) {
   const { t } = useTranslation()
-  const router = useRouter()
   const [exportDialogOpen, setExportDialogOpen] = useState(false)
   const [bundleExportDialogOpen, setBundleExportDialogOpen] = useState(false)
   const [renderQueueOpen, setRenderQueueOpen] = useState(false)
@@ -402,6 +456,7 @@ export const LoadedEditor = memo(function LoadedEditor({
   const workspace = useEditorStore((s) => s.workspace)
   const isMaskEditingActive = useMaskEditorStore((s) => s.isEditing)
   const hasRefreshedMigrationStateRef = useRef(false)
+  const localRefreshMigrationRef = useRef<(() => Promise<void>) | null>(null)
   const timelinePanelRef = useRef<ImperativePanelHandle>(null)
   const previousWorkspaceRef = useRef(workspace)
 
@@ -412,9 +467,13 @@ export const LoadedEditor = memo(function LoadedEditor({
     hasRefreshedMigrationStateRef.current = false
   }, [projectId])
 
+  const setLocalRefreshMigration = useCallback((invalidate: () => Promise<void>) => {
+    localRefreshMigrationRef.current = invalidate
+  }, [])
+
   useEffect(() => {
-    rememberLastEditorProjectId(projectId)
-  }, [projectId])
+    if (!hostRuntime) rememberLastEditorProjectId(projectId)
+  }, [hostRuntime, projectId])
 
   // Initialize transition chain subscription (pre-computes chains from timeline data)
   // This subscription recomputes chains when items/transitions change - deferred to idle
@@ -432,6 +491,7 @@ export const LoadedEditor = memo(function LoadedEditor({
 
   // Preload export dialogs during idle time so they open instantly.
   useEffect(() => {
+    if (hostRuntime) return
     const id = requestIdleCallback(() => {
       // Best-effort idle preloads: swallow rejections (offline chunk load, or
       // the dynamic import racing test-environment teardown). The real load
@@ -440,11 +500,12 @@ export const LoadedEditor = memo(function LoadedEditor({
       void preloadBundleExportDialog().catch(() => {})
     })
     return () => cancelIdleCallback(id)
-  }, [])
+  }, [hostRuntime])
 
   // Prewarm effect preview thumbnails during idle time without making the
   // effects feature part of the initial editor route chunk.
   useEffect(() => {
+    if (hostRuntime) return
     const id = requestIdleCallback(() => {
       // Best-effort prewarm — ignore failures, including the import() promise
       // rejecting when it resolves after the test environment is torn down.
@@ -453,10 +514,20 @@ export const LoadedEditor = memo(function LoadedEditor({
         .catch(() => {})
     })
     return () => cancelIdleCallback(id)
-  }, [])
+  }, [hostRuntime])
 
   // Initialize timeline from project data (or create default tracks for new projects).
   useEffect(() => {
+    if (hostRuntime) {
+      hostRuntime.mountStores()
+      return () => {
+        hostRuntime.unmountStores()
+        usePlaybackStore.getState().setPreviewFrame(null)
+        usePlaybackStore.getState().pause()
+        clearPreviewAudioCache()
+      }
+    }
+
     const { setCurrentProject: setMediaProject, loadMediaItems } = useMediaLibraryStore.getState()
     const { setCurrentProject } = useProjectStore.getState()
     const playbackStore = usePlaybackStore.getState()
@@ -505,10 +576,8 @@ export const LoadedEditor = memo(function LoadedEditor({
 
         // Refresh the editor route metadata once the approved legacy project has
         // opened successfully so future reopens do not briefly show the upgrade prompt.
-        await router.invalidate({
-          filter: (match) =>
-            match.routeId === EDITOR_PROJECT_ROUTE_ID && match.params.projectId === projectId,
-        })
+        const refreshMigration = onRefreshMigration ?? localRefreshMigrationRef.current
+        await refreshMigration?.()
       } catch (error) {
         logger.error('Failed to load timeline:', error)
       }
@@ -534,7 +603,8 @@ export const LoadedEditor = memo(function LoadedEditor({
     project.name,
     project.width,
     projectId,
-    router,
+    hostRuntime,
+    onRefreshMigration,
   ])
 
   useEffect(() => {
@@ -557,7 +627,7 @@ export const LoadedEditor = memo(function LoadedEditor({
     const timelinePanel = timelinePanelRef.current
     if (!timelinePanel) return
 
-    saveWorkspaceTimelineSize(previousWorkspace, timelinePanel.getSize())
+    if (!hostRuntime) saveWorkspaceTimelineSize(previousWorkspace, timelinePanel.getSize())
 
     const targetSize =
       loadWorkspaceTimelineSize(workspace) ??
@@ -566,7 +636,7 @@ export const LoadedEditor = memo(function LoadedEditor({
     timelinePanel.resize(
       Math.min(editorLayout.timelineMaxSize, Math.max(editorLayout.timelineMinSize, targetSize)),
     )
-  }, [workspace, editorLayout])
+  }, [editorLayout, hostRuntime, workspace])
 
   useEffect(() => {
     const timelineState = useTimelineStore.getState()
@@ -652,8 +722,9 @@ export const LoadedEditor = memo(function LoadedEditor({
 
   // Enable keyboard shortcuts
   useEditorHotkeys({
-    onSave: handleSave,
-    onExport: handleExport,
+    onSave: hostRuntime ? undefined : handleSave,
+    onExport: hostRuntime ? undefined : handleExport,
+    enableLocalUi: !hostRuntime,
   })
 
   // Enable transition breakage notifications
@@ -673,19 +744,23 @@ export const LoadedEditor = memo(function LoadedEditor({
       role="application"
       aria-label={t('editor.editor.appLabel')}
     >
-      <AutoSaveController onSave={handleSave} />
-      <TimelineShortcutsController />
+      {!hostRuntime && <AutoSaveController onSave={handleSave} />}
+      {!hostRuntime && <TimelineShortcutsController />}
+      {!hostRuntime && (
+        <LocalRouterBridge projectId={projectId} onReady={setLocalRefreshMigration} />
+      )}
 
       {/* Top Toolbar */}
       <InteractionLockRegion locked={isMaskEditingActive}>
         <Toolbar
           projectId={projectId}
           project={project}
-          onSave={handleSave}
-          onExport={handleExport}
-          onExportBundle={handleExportBundle}
-          onOpenRenderQueue={handleOpenRenderQueue}
-          renderQueueCount={renderQueueActiveCount}
+          onBack={onNavigateBack}
+          onSave={hostRuntime ? undefined : handleSave}
+          onExport={hostRuntime ? undefined : handleExport}
+          onExportBundle={hostRuntime ? undefined : handleExportBundle}
+          onOpenRenderQueue={hostRuntime ? undefined : handleOpenRenderQueue}
+          renderQueueCount={hostRuntime ? 0 : renderQueueActiveCount}
         />
       </InteractionLockRegion>
 
@@ -806,46 +881,48 @@ export const LoadedEditor = memo(function LoadedEditor({
         )}
       </div>
 
-      <Suspense fallback={null}>
-        {/* Export Dialog */}
-        {exportDialogOpen && (
-          <LazyExportDialog
-            open={exportDialogOpen}
-            onClose={() => setExportDialogOpen(false)}
-            onOpenRenderQueue={handleOpenRenderQueue}
-          />
-        )}
+      {!hostRuntime && (
+        <Suspense fallback={null}>
+          {/* Export Dialog */}
+          {exportDialogOpen && (
+            <LazyExportDialog
+              open={exportDialogOpen}
+              onClose={() => setExportDialogOpen(false)}
+              onOpenRenderQueue={handleOpenRenderQueue}
+            />
+          )}
 
-        {/* Exports + render queue dialog */}
-        {renderQueueOpen && (
-          <LazyExportsDialog
-            open={renderQueueOpen}
-            onClose={() => setRenderQueueOpen(false)}
-            projectId={projectId}
-          />
-        )}
+          {/* Exports + render queue dialog */}
+          {renderQueueOpen && (
+            <LazyExportsDialog
+              open={renderQueueOpen}
+              onClose={() => setRenderQueueOpen(false)}
+              projectId={projectId}
+            />
+          )}
 
-        {/* Bundle Export Dialog */}
-        {bundleExportDialogOpen && (
-          <LazyBundleExportDialog
-            open={bundleExportDialogOpen}
-            onClose={() => {
-              setBundleExportDialogOpen(false)
-              setBundleFileHandle(undefined)
-            }}
-            projectId={projectId}
-            onBeforeExport={handleSave}
-            fileHandle={bundleFileHandle}
-          />
-        )}
-      </Suspense>
+          {/* Bundle Export Dialog */}
+          {bundleExportDialogOpen && (
+            <LazyBundleExportDialog
+              open={bundleExportDialogOpen}
+              onClose={() => {
+                setBundleExportDialogOpen(false)
+                setBundleFileHandle(undefined)
+              }}
+              projectId={projectId}
+              onBeforeExport={handleSave}
+              fileHandle={bundleFileHandle}
+            />
+          )}
+        </Suspense>
+      )}
 
       {/* Restores/persists the per-project queue, and drains it serially. */}
-      <RenderQueuePersistence projectId={projectId} />
-      <RenderQueueRunner />
+      {!hostRuntime && <RenderQueuePersistence projectId={projectId} />}
+      {!hostRuntime && <RenderQueueRunner />}
 
-      <EditorDialogHost projectId={projectId} />
-      <TimelineDialogHost />
+      {!hostRuntime && <EditorDialogHost projectId={projectId} />}
+      {!hostRuntime && <TimelineDialogHost />}
 
       {/* Single global cursor-readout for IO (in/out) drags across all surfaces. */}
       <IoDragReadout />

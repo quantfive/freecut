@@ -16,11 +16,13 @@ import { EDITOR_LAYOUT_CSS_VALUES } from '@/config/editor-layout'
 import { useItemsStore } from '../stores/items-store'
 import { isTrackDisabled } from '@/features/timeline/utils/classic-tracks'
 import { isTrackSyncLockActive } from '../utils/track-sync-lock'
+import { useEditorStore } from '@/shared/state/editor'
 
 interface TrackHeaderProps {
   track: TimelineTrack
   isActive: boolean
   isSelected: boolean
+  canAddTrack?: boolean
   canDeleteTrack: boolean
   canDeleteEmptyTracks: boolean
   onToggleLock: () => void
@@ -43,6 +45,7 @@ function areTrackHeaderPropsEqual(prev: TrackHeaderProps, next: TrackHeaderProps
     prev.track === next.track &&
     prev.isActive === next.isActive &&
     prev.isSelected === next.isSelected &&
+    prev.canAddTrack === next.canAddTrack &&
     prev.canDeleteTrack === next.canDeleteTrack &&
     prev.canDeleteEmptyTracks === next.canDeleteEmptyTracks
   )
@@ -58,10 +61,12 @@ function areTrackHeaderPropsEqual(prev: TrackHeaderProps, next: TrackHeaderProps
  * Right-click context menu for track actions.
  * Memoized to prevent re-renders when props haven't changed.
  */
+// fallow-ignore-next-line complexity
 export const TrackHeader = memo(function TrackHeader({
   track,
   isActive,
   isSelected,
+  canAddTrack = true,
   canDeleteTrack,
   canDeleteEmptyTracks,
   onToggleLock,
@@ -76,6 +81,7 @@ export const TrackHeader = memo(function TrackHeader({
   onDeleteEmptyTracks,
 }: TrackHeaderProps) {
   const { t } = useTranslation()
+  const hostMode = useEditorStore((s) => s.hostMode)
   const itemCount = useItemsStore((s) => s.itemsByTrackId[track.id]?.length ?? 0)
   const syncLockEnabled = isTrackSyncLockActive(track)
   const trackDisabled = isTrackDisabled(track)
@@ -108,7 +114,7 @@ export const TrackHeader = memo(function TrackHeader({
             `}
             style={{ height: `${track.height}px` }}
             onClick={onSelect}
-            onMouseDown={handleDragStart}
+            onMouseDown={hostMode ? undefined : handleDragStart}
           >
             <div className="flex h-6 shrink-0 items-center gap-0.5 overflow-hidden border-b border-border/60">
               <div className="flex h-5 w-4 shrink-0 items-center justify-center">
@@ -128,6 +134,7 @@ export const TrackHeader = memo(function TrackHeader({
                   onToggleDisabled()
                 }}
                 onMouseDown={(e) => e.stopPropagation()}
+                disabled={hostMode}
                 aria-label={
                   trackDisabled
                     ? t('timeline.trackHeader.enableTrack')
@@ -160,6 +167,7 @@ export const TrackHeader = memo(function TrackHeader({
                   onToggleSolo()
                 }}
                 onMouseDown={(e) => e.stopPropagation()}
+                disabled={hostMode}
                 aria-label={
                   track.solo
                     ? t('timeline.trackHeader.unsoloTrack')
@@ -188,6 +196,7 @@ export const TrackHeader = memo(function TrackHeader({
                   onToggleLock()
                 }}
                 onMouseDown={(e) => e.stopPropagation()}
+                disabled={hostMode}
                 aria-label={
                   track.locked
                     ? t('timeline.trackHeader.unlockTrack')
@@ -215,6 +224,7 @@ export const TrackHeader = memo(function TrackHeader({
                   onToggleSyncLock()
                 }}
                 onMouseDown={(e) => e.stopPropagation()}
+                disabled={hostMode}
                 aria-label={
                   syncLockEnabled
                     ? t('timeline.trackHeader.disableSyncLock')
@@ -242,6 +252,7 @@ export const TrackHeader = memo(function TrackHeader({
                   onCloseGaps?.()
                 }}
                 onMouseDown={(e) => e.stopPropagation()}
+                disabled={hostMode}
                 aria-label={t('timeline.trackHeader.closeAllGaps')}
                 data-tooltip={t('timeline.trackHeader.closeAllGaps')}
               >
@@ -262,22 +273,22 @@ export const TrackHeader = memo(function TrackHeader({
       </ContextMenuTrigger>
 
       <ContextMenuContent className="w-52">
-        <ContextMenuItem onClick={onCloseGaps}>
+        <ContextMenuItem disabled={hostMode} onClick={onCloseGaps}>
           {t('timeline.trackHeader.closeAllGaps')}
         </ContextMenuItem>
 
         <ContextMenuSeparator />
-        <ContextMenuItem onClick={onAddVideoTrack}>
+        <ContextMenuItem disabled={!canAddTrack} onClick={onAddVideoTrack}>
           {t('timeline.trackHeader.addVideoTrack')}
         </ContextMenuItem>
-        <ContextMenuItem onClick={onAddAudioTrack}>
+        <ContextMenuItem disabled={!canAddTrack} onClick={onAddAudioTrack}>
           {t('timeline.trackHeader.addAudioTrack')}
         </ContextMenuItem>
         <ContextMenuSeparator />
-        <ContextMenuItem disabled={!canDeleteTrack} onClick={onDeleteTrack}>
+        <ContextMenuItem disabled={hostMode || !canDeleteTrack} onClick={onDeleteTrack}>
           {t('timeline.trackHeader.deleteTrack')}
         </ContextMenuItem>
-        <ContextMenuItem disabled={!canDeleteEmptyTracks} onClick={onDeleteEmptyTracks}>
+        <ContextMenuItem disabled={hostMode || !canDeleteEmptyTracks} onClick={onDeleteEmptyTracks}>
           {t('timeline.trackHeader.deleteEmptyTracks')}
         </ContextMenuItem>
       </ContextMenuContent>

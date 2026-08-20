@@ -1,0 +1,10 @@
+{
+  "fixture_version": 1,
+  "fixtures": [
+    "valid/core-edit-batch.json",
+    "valid/caption-batch.json",
+    "invalid/invalid-caption-cue.json",
+    "errors/revision-conflict.json",
+    "errors/idempotency-conflict.json"
+  ]
+}

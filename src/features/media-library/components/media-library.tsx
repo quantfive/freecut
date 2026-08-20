@@ -101,6 +101,7 @@ import { getSupportedMediaFormatLabels } from '../utils/media-file-picker'
 import { getSharedProxyKey } from '../utils/proxy-key'
 import { getMediaType } from '../utils/validation'
 import { getProjectBrokenMediaIds } from '@/features/media-library/utils/broken-media'
+import { useEditorCapability, useEditorHostMode } from '../deps/editor'
 import type { MediaMetadata } from '@/types/storage'
 import { isMarqueeJustFinished } from '@/shared/marquee/use-marquee-selection'
 import { useMediaLibraryMarquee } from './use-media-library-marquee'
@@ -234,6 +235,10 @@ function renderTaskDetailRows(
 
 export const MediaLibrary = memo(function MediaLibrary({ onMediaSelect }: MediaLibraryProps) {
   const { t } = useTranslation()
+  const hostMode = useEditorHostMode()
+  const canImportMedia = useEditorCapability('media.import')
+  const canDeleteMedia = useEditorCapability('media.delete')
+  const canGenerateProxy = useEditorCapability('media.proxy')
   const containerRef = useRef<HTMLDivElement>(null)
   const headerToolbarRef = useRef<HTMLDivElement>(null)
   const headerToolbarWidthRef = useRef(0)
@@ -343,6 +348,10 @@ export const MediaLibrary = memo(function MediaLibrary({ onMediaSelect }: MediaL
   const MediaTypeGroupView = viewMode === 'grid' ? GridMediaTypeGroup : ListMediaTypeGroup
   const EmptyMediaGrid = viewMode === 'grid' ? GridMediaGrid : ListMediaGrid
 
+  useEffect(() => {
+    if (hostMode && sceneBrowserOpen) closeSceneBrowser()
+  }, [closeSceneBrowser, hostMode, sceneBrowserOpen])
+
   // Composition navigation — show banner when inside a sub-comp
   const activeCompositionId = useCompositionNavigationStore((s) => s.activeCompositionId)
   const breadcrumbs = useCompositionNavigationStore((s) => s.breadcrumbs)
@@ -356,13 +365,13 @@ export const MediaLibrary = memo(function MediaLibrary({ onMediaSelect }: MediaL
 
   // HMR recovery: if media store lost project context, rehydrate it from project store.
   useEffect(() => {
-    if (!currentProjectId && projectStoreProjectId) {
+    if (!hostMode && !currentProjectId && projectStoreProjectId) {
       setCurrentProject(projectStoreProjectId)
       void loadMediaItems().catch((error) => {
         logger.error('Failed to load media library during store recovery:', error)
       })
     }
-  }, [currentProjectId, loadMediaItems, projectStoreProjectId, setCurrentProject])
+  }, [currentProjectId, hostMode, loadMediaItems, projectStoreProjectId, setCurrentProject])
 
   const selectedAssetCount = selectedMediaIds.length + selectedCompositionIds.length
   const { marquee } = useMediaLibraryMarquee({
@@ -393,10 +402,12 @@ export const MediaLibrary = memo(function MediaLibrary({ onMediaSelect }: MediaL
     currentProjectId,
     clearSelection,
     deleteMediaBatch,
+    enabled: canDeleteMedia,
   })
 
   // Import files by copying them into the workspace-backed media store.
   const handleImport = async () => {
+    if (!canImportMedia) return
     try {
       await importMedia({ storageMode: 'copy' })
     } catch (error) {
@@ -405,6 +416,7 @@ export const MediaLibrary = memo(function MediaLibrary({ onMediaSelect }: MediaL
   }
 
   const handleLinkImport = async () => {
+    if (!canImportMedia) return
     try {
       await importMedia({ storageMode: 'link' })
     } catch (error) {
@@ -415,7 +427,7 @@ export const MediaLibrary = memo(function MediaLibrary({ onMediaSelect }: MediaL
   const handleImportUrl = useCallback(
     async (event: React.FormEvent<HTMLFormElement>) => {
       event.preventDefault()
-      if (isImportUrlSubmitting) {
+      if (isImportUrlSubmitting || !canImportMedia) {
         return
       }
 
@@ -432,24 +444,29 @@ export const MediaLibrary = memo(function MediaLibrary({ onMediaSelect }: MediaL
         setIsImportUrlSubmitting(false)
       }
     },
-    [importMediaFromUrl, importUrlValue, isImportUrlSubmitting],
+    [canImportMedia, importMediaFromUrl, importUrlValue, isImportUrlSubmitting],
   )
 
   // Import files from drag-drop handles - memoized to prevent MediaGrid re-renders
   const handleImportHandles = useCallback(
     async (handles: FileSystemFileHandle[]) => {
+      if (!canImportMedia) return
       try {
         await importHandles(handles)
       } catch (error) {
         logger.error('Import failed:', error)
       }
     },
-    [importHandles],
+    [canImportMedia, importHandles],
   )
 
   // Panel-level drag/drop handling so the drop zone covers the full panel height.
   const { isDragging, handleDragEnter, handleDragOver, handleDragLeave, handleDrop } =
-    useMediaLibraryDragDrop({ showNotification, importHandles: handleImportHandles })
+    useMediaLibraryDragDrop({
+      showNotification,
+      importHandles: handleImportHandles,
+      enabled: canImportMedia,
+    })
 
   // Count of items currently generating proxies
   const currentProjectBrokenMediaIds = useMemo(
@@ -485,6 +502,7 @@ export const MediaLibrary = memo(function MediaLibrary({ onMediaSelect }: MediaL
   } = useMediaTaskProgress()
 
   const handleGenerateSelectedProxies = async () => {
+    if (!canGenerateProxy) return
     const selectedItems = selectedMediaIds
       .map((id) => mediaById[id])
       .filter(
@@ -514,6 +532,7 @@ export const MediaLibrary = memo(function MediaLibrary({ onMediaSelect }: MediaL
   }
 
   const handleCancelAllProxies = () => {
+    if (!canGenerateProxy) return
     for (const [mediaId, status] of proxyStatus.entries()) {
       if (status !== 'generating') {
         continue
@@ -640,7 +659,7 @@ export const MediaLibrary = memo(function MediaLibrary({ onMediaSelect }: MediaL
               <HeaderActionTooltip label={t('media.library.importMediaFiles')}>
                 <button
                   onClick={handleImport}
-                  disabled={!currentProjectId}
+                  disabled={!currentProjectId || !canImportMedia}
                   className="flex items-center gap-1.5 h-7 px-2.5 rounded-l-md
                     bg-primary text-primary-foreground
                     hover:bg-primary/90
@@ -656,7 +675,7 @@ export const MediaLibrary = memo(function MediaLibrary({ onMediaSelect }: MediaL
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <button
-                    disabled={!currentProjectId}
+                    disabled={!currentProjectId || !canImportMedia}
                     className="flex h-7 w-7 items-center justify-center rounded-r-md border-l border-primary-foreground/20
                       bg-primary text-primary-foreground
                       hover:bg-primary/90
@@ -684,7 +703,7 @@ export const MediaLibrary = memo(function MediaLibrary({ onMediaSelect }: MediaL
             <HeaderActionTooltip label={t('media.library.importMediaFromUrl')}>
               <button
                 onClick={() => setShowImportUrlDialog(true)}
-                disabled={!currentProjectId}
+                disabled={!currentProjectId || !canImportMedia}
                 className="flex items-center gap-1.5 h-7 px-2.5 rounded-md shrink-0 border
                   bg-secondary border-border text-muted-foreground
                   hover:text-primary hover:bg-primary/10 hover:border-primary/40
@@ -773,7 +792,7 @@ export const MediaLibrary = memo(function MediaLibrary({ onMediaSelect }: MediaL
                 </div>
 
                 {/* Generate proxies for selection */}
-                {selectedProxyEligibleCount > 0 && (
+                {canGenerateProxy && selectedProxyEligibleCount > 0 && (
                   <HeaderActionTooltip
                     label={t('media.library.generateProxiesForSelected', {
                       count: selectedProxyEligibleCount,
@@ -800,9 +819,11 @@ export const MediaLibrary = memo(function MediaLibrary({ onMediaSelect }: MediaL
                 <HeaderActionTooltip label={t('media.library.deleteSelectedAssets')}>
                   <button
                     onClick={handleDeleteSelected}
+                    disabled={!canDeleteMedia}
                     className="flex items-center gap-1.5 h-7 px-2.5 rounded-md shrink-0
                       bg-destructive/10 border border-destructive/25 text-destructive
                       hover:bg-destructive/20 hover:border-destructive/40
+                      disabled:opacity-40 disabled:cursor-not-allowed
                       transition-colors duration-150"
                   >
                     <Trash2 className="w-3.5 h-3.5" />
@@ -865,7 +886,10 @@ export const MediaLibrary = memo(function MediaLibrary({ onMediaSelect }: MediaL
               <Button
                 type="submit"
                 disabled={
-                  !currentProjectId || importUrlValue.trim().length === 0 || isImportUrlSubmitting
+                  !currentProjectId ||
+                  !canImportMedia ||
+                  importUrlValue.trim().length === 0 ||
+                  isImportUrlSubmitting
                 }
               >
                 {isImportUrlSubmitting && <Loader2 className="w-4 h-4 animate-spin" />}
@@ -1002,23 +1026,25 @@ export const MediaLibrary = memo(function MediaLibrary({ onMediaSelect }: MediaL
                 <span className="hidden @[280px]:inline">{t('media.library.mediaTab')}</span>
               </button>
             </HeaderActionTooltip>
-            <HeaderActionTooltip label={t('media.library.searchScenes')}>
-              <button
-                onClick={() => {
-                  if (!sceneBrowserOpen) openSceneBrowser()
-                }}
-                aria-pressed={sceneBrowserOpen}
-                className={cn(
-                  'flex items-center gap-1 h-6 px-1.5 @[280px]:px-2 rounded-[3px] text-[11px] transition-colors duration-150',
-                  sceneBrowserOpen
-                    ? 'bg-primary text-primary-foreground'
-                    : 'text-muted-foreground hover:text-foreground',
-                )}
-              >
-                <ScanSearch className="w-3 h-3" />
-                <span className="hidden @[280px]:inline">{t('media.library.scenesTab')}</span>
-              </button>
-            </HeaderActionTooltip>
+            {!hostMode && (
+              <HeaderActionTooltip label={t('media.library.searchScenes')}>
+                <button
+                  onClick={() => {
+                    if (!sceneBrowserOpen) openSceneBrowser()
+                  }}
+                  aria-pressed={sceneBrowserOpen}
+                  className={cn(
+                    'flex items-center gap-1 h-6 px-1.5 @[280px]:px-2 rounded-[3px] text-[11px] transition-colors duration-150',
+                    sceneBrowserOpen
+                      ? 'bg-primary text-primary-foreground'
+                      : 'text-muted-foreground hover:text-foreground',
+                  )}
+                >
+                  <ScanSearch className="w-3 h-3" />
+                  <span className="hidden @[280px]:inline">{t('media.library.scenesTab')}</span>
+                </button>
+              </HeaderActionTooltip>
+            )}
           </div>
         </div>
 
@@ -1229,7 +1255,11 @@ export const MediaLibrary = memo(function MediaLibrary({ onMediaSelect }: MediaL
 
           {/* Loading / empty state when no groups to show */}
           {mediaGroups.length === 0 && (
-            <EmptyMediaGrid onMediaSelect={onMediaSelect} itemSize={mediaItemSize} />
+            <EmptyMediaGrid
+              onMediaSelect={onMediaSelect}
+              itemSize={mediaItemSize}
+              canImportMedia={canImportMedia}
+            />
           )}
         </div>
 

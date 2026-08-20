@@ -14,6 +14,35 @@ const logger = createLogger('MediaResolver')
  */
 const pendingRequests = new Map<string, Promise<string>>()
 
+type RuntimeMediaResolver = (mediaId: string) => Promise<string | null> | string | null
+
+let runtimeMediaResolver: RuntimeMediaResolver | null = null
+
+/**
+ * Install a runtime-only media resolver for an embedded host.  The resolver
+ * receives an opaque media id and returns a playback locator for this session;
+ * it is never written into a timeline item or project record.
+ */
+export function installRuntimeMediaResolver(resolver: RuntimeMediaResolver): () => void {
+  const previous = runtimeMediaResolver
+  const resolvedMediaIds = new Set<string>()
+  const installedResolver: RuntimeMediaResolver = async (mediaId) => {
+    const source = await resolver(mediaId)
+    if (source) resolvedMediaIds.add(mediaId)
+    return source
+  }
+  runtimeMediaResolver = installedResolver
+  return () => {
+    if (runtimeMediaResolver === installedResolver) {
+      for (const mediaId of resolvedMediaIds) {
+        blobUrlManager.invalidate(mediaId)
+      }
+      resolvedMediaIds.clear()
+      runtimeMediaResolver = previous
+    }
+  }
+}
+
 /**
  * Resolves a mediaId to a blob URL for use in Composition Player
  *
@@ -21,6 +50,21 @@ const pendingRequests = new Map<string, Promise<string>>()
  * @returns Blob URL for the media, or empty string if not found
  */
 export async function resolveMediaUrl(mediaId: string): Promise<string> {
+  if (runtimeMediaResolver) {
+    const source = await runtimeMediaResolver(mediaId)
+    if (!source) return ''
+
+    // The preview runtime uses this manager as a freshness signal. Registering
+    // an external locator keeps that signal in memory only; unlike acquire(),
+    // it never creates or persists a Blob URL.
+    const cached = blobUrlManager.get(mediaId)
+    if (cached !== source) {
+      if (cached) blobUrlManager.invalidate(mediaId)
+      blobUrlManager.registerUrl(mediaId, source)
+    }
+    return source
+  }
+
   // Check centralized manager first - URLs persist until explicit release
   const cached = blobUrlManager.get(mediaId)
   if (cached) {
@@ -116,6 +160,8 @@ export async function resolveMediaUrl(mediaId: string): Promise<string> {
  * Returns null if no proxy exists (caller should fall back to full-res).
  */
 export function resolveProxyUrl(mediaId: string): string | null {
+  if (runtimeMediaResolver) return null
+
   const media = useMediaLibraryStore.getState().mediaById[mediaId]
   if (media) {
     const proxyKey = getSharedProxyKey(media)

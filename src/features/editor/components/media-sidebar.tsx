@@ -60,6 +60,8 @@ import { EffectThumbnail, useGpuEffectPreviewData } from '@/features/editor/deps
 import { createLogger } from '@/shared/logging/logger'
 import { useSettingsStore } from '@/features/editor/deps/settings'
 import { resolveGeneratedLayerCanvasSize } from '../utils/generated-layer-canvas-size'
+import { useEditorCapability, useEditorHostContext, useEditorHostMode } from '../host/context'
+import { HostTranscriptEditor } from '../host/transcript-editor'
 const LazyAiPanel = lazy(() => import('./ai-tab').then((m) => ({ default: m.AiTab })))
 const LazyTranscriptEditorPanel = lazy(() =>
   importTranscriptEditorPanel().then(({ TranscriptEditorPanel }) => ({
@@ -288,6 +290,10 @@ const ADD_TEXT_TEMPLATE_LABEL = 'Add Text'
 
 export const MediaSidebar = memo(function MediaSidebar() {
   const { t } = useTranslation()
+  const hostMode = useEditorHostMode()
+  const { host } = useEditorHostContext()
+  const canAddTimeline = useEditorCapability('timeline.add')
+  const canTranscribe = useEditorCapability('media.transcription')
   const editorDensity = useSettingsStore((s) => s.editorDensity)
   const editorLayout = getEditorLayout(editorDensity)
   // Use granular selectors - Zustand v5 best practice
@@ -383,6 +389,7 @@ export const MediaSidebar = memo(function MediaSidebar() {
   // the same preset onto the canvas does (minus the cursor-driven position).
   const handleAddText = useCallback(
     (presetId?: (typeof TEXT_STYLE_PRESETS)[number]['id']) => {
+      if (!canAddTimeline) return
       // Read all needed state from stores directly to avoid subscriptions
       const { tracks, fps, addItemOnNewTrack } = useTimelineStore.getState()
       const { activeTrackId, selectItems, setActiveTrack } = useSelectionStore.getState()
@@ -422,58 +429,65 @@ export const MediaSidebar = memo(function MediaSidebar() {
       setActiveTrack(newTrack.trackId)
       selectItems([textItem.id])
     },
-    [t],
+    [canAddTimeline, t],
   )
 
   // Add shape item on its own new layer at the playhead, matching the canvas drop.
-  const handleAddShape = useCallback((shapeType: ShapeType, shapePreset?: 'solid' | 'gradient') => {
-    // Read all needed state from stores directly to avoid subscriptions
-    const { tracks, fps, addItemOnNewTrack } = useTimelineStore.getState()
-    const { activeTrackId, selectItems, setActiveTrack } = useSelectionStore.getState()
-    const currentProject = useProjectStore.getState().currentProject
-    const activeCompositionId =
-      useCompositionNavigationStore.getState().activeCompositionId
-    const activeComposition = activeCompositionId
-      ? useCompositionsStore.getState().getComposition(activeCompositionId)
-      : undefined
+  const handleAddShape = useCallback(
+    (shapeType: ShapeType, shapePreset?: 'solid' | 'gradient') => {
+      if (hostMode || !canAddTimeline) return
+      // Read all needed state from stores directly to avoid subscriptions
+      const { tracks, fps, addItemOnNewTrack } = useTimelineStore.getState()
+      const { activeTrackId, selectItems, setActiveTrack } = useSelectionStore.getState()
+      const currentProject = useProjectStore.getState().currentProject
+      const activeCompositionId = useCompositionNavigationStore.getState().activeCompositionId
+      const activeComposition = activeCompositionId
+        ? useCompositionsStore.getState().getComposition(activeCompositionId)
+        : undefined
 
-    const newTrack = createOverlayLayerTrack({ tracks, activeTrackId })
+      const newTrack = createOverlayLayerTrack({ tracks, activeTrackId })
 
-    if (!newTrack) {
-      logger.warn('No available track for shape item')
-      return
-    }
+      if (!newTrack) {
+        logger.warn('No available track for shape item')
+        return
+      }
 
-    const { width: canvasWidth, height: canvasHeight } = resolveGeneratedLayerCanvasSize(
-      activeComposition,
-      currentProject?.metadata,
-    )
+      const { width: canvasWidth, height: canvasHeight } = resolveGeneratedLayerCanvasSize(
+        activeComposition,
+        currentProject?.metadata,
+      )
 
-    const placement = {
-      trackId: newTrack.trackId,
-      from: Math.max(0, usePlaybackStore.getState().currentFrame),
-      durationInFrames: getDefaultGeneratedLayerDurationInFrames(fps),
-      canvasWidth,
-      canvasHeight,
-      shapeType,
-    }
-    const shapeItem: ShapeItem =
-      shapePreset === 'solid'
-        ? createDefaultSolidColorItem(placement)
-        : shapePreset === 'gradient'
-          ? createDefaultGradientItem(placement)
-          : createDefaultShapeItem(placement)
+      const placement = {
+        trackId: newTrack.trackId,
+        from: Math.max(0, usePlaybackStore.getState().currentFrame),
+        durationInFrames: getDefaultGeneratedLayerDurationInFrames(fps),
+        canvasWidth,
+        canvasHeight,
+        shapeType,
+      }
+      const shapeItem: ShapeItem =
+        shapePreset === 'solid'
+          ? createDefaultSolidColorItem(placement)
+          : shapePreset === 'gradient'
+            ? createDefaultGradientItem(placement)
+            : createDefaultShapeItem(placement)
 
-    addItemOnNewTrack(shapeItem, newTrack.tracks)
-    setActiveTrack(newTrack.trackId)
-    selectItems([shapeItem.id])
-  }, [])
+      addItemOnNewTrack(shapeItem, newTrack.tracks)
+      setActiveTrack(newTrack.trackId)
+      selectItems([shapeItem.id])
+    },
+    [canAddTimeline, hostMode],
+  )
 
   // Add adjustment layer to timeline at the best available position
   // Optionally with pre-applied effects and custom label
-  const handleAddAdjustmentLayer = useCallback((effects?: VisualEffect[], label?: string) => {
-    addAdjustmentLayer(effects, label)
-  }, [])
+  const handleAddAdjustmentLayer = useCallback(
+    (effects?: VisualEffect[], label?: string) => {
+      if (hostMode || !canAddTimeline) return
+      addAdjustmentLayer(effects, label)
+    },
+    [canAddTimeline, hostMode],
+  )
 
   // Create adjustment layer with preset effects
   const handleAddPreset = useCallback(
@@ -488,6 +502,7 @@ export const MediaSidebar = memo(function MediaSidebar() {
   // Add a single GPU effect ââ‚¬” to selected clips, or as adjustment layer if nothing selected
   const handleAddGpuEffect = useCallback(
     (gpuEffectId: string) => {
+      if (hostMode || !canAddTimeline) return
       const { selectedItemIds } = useSelectionStore.getState()
       const { items, addEffect } = useTimelineStore.getState()
 
@@ -513,7 +528,7 @@ export const MediaSidebar = memo(function MediaSidebar() {
         ])
       }
     },
-    [handleAddAdjustmentLayer],
+    [canAddTimeline, handleAddAdjustmentLayer, hostMode],
   )
 
   const { gpuCategories, triggerPreviews } = useGpuEffectPreviewData()
@@ -544,6 +559,14 @@ export const MediaSidebar = memo(function MediaSidebar() {
     { id: 'transcript' as const, icon: Captions, label: t('transcript.tabLabel') },
     { id: 'ai' as const, icon: WandSparkles, label: t('editor.mediaSidebar.ai') },
   ]
+  const visibleCategories = hostMode
+    ? categories.filter(
+        ({ id }) =>
+          id === 'media' ||
+          (id === 'text' && canAddTimeline) ||
+          (id === 'transcript' && canTranscribe && !!host?.transcript),
+      )
+    : categories
 
   const shouldSuppressGeneratedItemClick = useCallback(() => {
     if (!suppressGeneratedItemClickRef.current) {
@@ -620,7 +643,7 @@ export const MediaSidebar = memo(function MediaSidebar() {
 
         {/* Category Icons */}
         <div className="flex flex-col gap-1 py-1.5">
-          {categories.map(({ id, icon: Icon, label }) => (
+          {visibleCategories.map(({ id, icon: Icon, label }) => (
             <button
               key={id}
               onClick={() => {
@@ -1150,11 +1173,13 @@ export const MediaSidebar = memo(function MediaSidebar() {
             <div
               className={`min-h-0 flex-1 overflow-hidden ${activeTab === 'transcript' ? 'block' : 'hidden'}`}
             >
-              {activeTab === 'transcript' && (
+              {activeTab === 'transcript' && hostMode ? (
+                <HostTranscriptEditor active />
+              ) : activeTab === 'transcript' ? (
                 <Suspense fallback={null}>
                   <LazyTranscriptEditorPanel active />
                 </Suspense>
-              )}
+              ) : null}
             </div>
 
             {/* AI Tab */}

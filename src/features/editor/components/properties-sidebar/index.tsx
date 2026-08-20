@@ -8,6 +8,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type ReactNode,
 } from 'react'
 import { motion, useReducedMotion } from 'motion/react'
 import { useTranslation } from 'react-i18next'
@@ -23,6 +24,8 @@ import { useEditorStore } from '@/shared/state/editor'
 import { useSelectionStore } from '@/shared/state/selection'
 import type { TimelineItem } from '@/types/timeline'
 import { CanvasPanel } from './canvas-panel'
+import { HostCaptionEditor } from '@/features/editor/host/caption-editor-context'
+import { useEditorHostMode } from '@/features/editor/host/context'
 import { useSettingsStore } from '@/features/editor/deps/settings'
 import {
   EDITOR_LAYOUT_CSS_VALUES,
@@ -48,6 +51,26 @@ function PropertiesPanelLoadingFallback() {
       <div className="h-8 rounded bg-muted/60" />
       <div className="h-24 rounded bg-muted/40" />
       <div className="h-16 rounded bg-muted/30" />
+    </div>
+  )
+}
+
+function HostDisabledLocalProperties({
+  disabled,
+  children,
+}: {
+  disabled: boolean
+  children: ReactNode
+}) {
+  if (!disabled) return <>{children}</>
+  return (
+    <div
+      className="relative pointer-events-none select-none opacity-60"
+      aria-disabled="true"
+      data-host-disabled="local-properties"
+      inert
+    >
+      {children}
     </div>
   )
 }
@@ -126,6 +149,7 @@ function getClipHeader(items: HeaderItem[]) {
  */
 export const PropertiesSidebar = memo(function PropertiesSidebar() {
   const { t } = useTranslation()
+  const hostMode = useEditorHostMode()
   const editorDensity = useSettingsStore((s) => s.editorDensity)
   const editorLayout = getEditorLayout(editorDensity)
   // Use granular selectors - Zustand v5 best practice
@@ -303,16 +327,11 @@ export const PropertiesSidebar = memo(function PropertiesSidebar() {
                 </Button>
                 <Settings2 className="w-3 h-3 shrink-0 text-muted-foreground" />
                 <h2 className="min-w-0 flex items-center gap-1.5 text-xs font-semibold text-muted-foreground">
-                  <span className="shrink-0 uppercase tracking-wide">
-                    {headerLabel}
-                  </span>
+                  <span className="shrink-0 uppercase tracking-wide">{headerLabel}</span>
                   {headerContext && (
                     <>
                       <span className="shrink-0">-</span>
-                      <span
-                        className="truncate normal-case tracking-normal"
-                        title={headerTitle}
-                      >
+                      <span className="truncate normal-case tracking-normal" title={headerTitle}>
                         {headerContext}
                       </span>
                     </>
@@ -342,37 +361,40 @@ export const PropertiesSidebar = memo(function PropertiesSidebar() {
               }
             >
               {selectedTransitionId ? (
-                <Suspense fallback={null}>
-                  <LazyTransitionPanel />
-                </Suspense>
+                <HostDisabledLocalProperties disabled={hostMode}>
+                  <Suspense fallback={null}>
+                    <LazyTransitionPanel />
+                  </Suspense>
+                </HostDisabledLocalProperties>
               ) : selectedMarkerId ? (
-                <Suspense fallback={null}>
-                  <LazyMarkerPanel />
-                </Suspense>
+                <HostDisabledLocalProperties disabled={hostMode}>
+                  <Suspense fallback={null}>
+                    <LazyMarkerPanel />
+                  </Suspense>
+                </HostDisabledLocalProperties>
               ) : (
                 <>
-                  {/* Mount the lazy inspector before the first selection. Once
-                      its chunk resolves it stays subscribed while hidden, so a
-                      selection made during playback can commit synchronously
-                      instead of waiting for a starved Suspense retry. */}
-                  <div
-                    data-testid="properties-clip-panel-host"
-                    hidden={!hasClipSelection}
-                    className={
-                      workspace === 'motion' && clipInspectorTab === 'motion'
-                        ? 'h-full min-h-0'
-                        : undefined
-                    }
-                  >
-                    <Suspense fallback={<PropertiesPanelLoadingFallback />}>
-                      <LazyClipPanel />
-                    </Suspense>
-                  </div>
-                  {!hasClipSelection && (
-                    <div>
-                      <CanvasPanel />
+                  <HostDisabledLocalProperties disabled={hostMode}>
+                    {/* Mount the lazy inspector before the first selection. Once
+                        its chunk resolves it stays subscribed while hidden, so a
+                        selection made during playback can commit synchronously
+                        instead of waiting for a starved Suspense retry. */}
+                    <div
+                      data-testid="properties-clip-panel-host"
+                      hidden={!hasClipSelection}
+                      className={
+                        workspace === 'motion' && clipInspectorTab === 'motion'
+                          ? 'h-full min-h-0'
+                          : undefined
+                      }
+                    >
+                      <Suspense fallback={<PropertiesPanelLoadingFallback />}>
+                        <LazyClipPanel />
+                      </Suspense>
                     </div>
-                  )}
+                    {!hasClipSelection && <CanvasPanel />}
+                  </HostDisabledLocalProperties>
+                  {!hasClipSelection && hostMode ? <HostCaptionEditor /> : null}
                 </>
               )}
             </div>

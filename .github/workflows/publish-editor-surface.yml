@@ -1,0 +1,92 @@
+name: Publish FreeCut editor surface
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - codepress-main
+    tags:
+      - 'freecut-editor-surface-v*'
+
+permissions:
+  contents: read
+  # npm trusted publishing (OIDC): the job exchanges the GitHub Actions
+  # identity token for a short-lived npm credential, so there is no NPM_TOKEN
+  # to store or rotate. Requires a trusted publisher configured on npmjs.com
+  # for this repository and this workflow filename.
+  id-token: write
+
+concurrency:
+  group: publish-freecut-editor-surface
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Publish @quantfive/freecut-editor-surface
+    # Manual runs are intentionally limited to staging; tag pushes are
+    # already constrained by the trigger below and must match the package
+    # version in the validation step.
+    if: github.event_name == 'push' || github.ref_name == 'staging'
+    # A merge that does not bump the version is a no-op, not a failure: npm
+    # rejects republishing an existing version, and the branch trigger fires
+    # on every qualifying merge.
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.14.0'
+          cache: npm
+          registry-url: https://registry.npmjs.org
+
+      - name: Select pinned npm
+        run: npm install --global npm@11.8.0
+
+      - name: Install locked dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Verify provenance
+        run: npm run verify:provenance
+
+      - name: Validate release tag
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag_version="${GITHUB_REF_NAME#freecut-editor-surface-v}"
+          package_version="$(node -p "require('./packages/freecut-editor/package.json').version")"
+          if [[ "${GITHUB_REF_NAME}" != freecut-editor-surface-v* || "${tag_version}" != "${package_version}" ]]; then
+            echo "Release tag ${GITHUB_REF_NAME} must match package version ${package_version}." >&2
+            exit 1
+          fi
+
+      - name: Build deterministic package artifact
+        run: npm run package:editor-surface
+
+      - name: Verify packed artifact as an installed consumer
+        shell: bash
+        run: |
+          set -euo pipefail
+          package_version="$(node -p "require('./packages/freecut-editor/package.json').version")"
+          artifact="artifacts/freecut-editor-surface-${package_version}.tgz"
+          test -f "${artifact}"
+          npm run test:editor-surface:consumer -- --artifact "${artifact}"
+
+      - name: Publish to the public npm registry
+        shell: bash
+        run: |
+          set -euo pipefail
+          package_version="$(node -p "require('./packages/freecut-editor/package.json').version")"
+          artifact="artifacts/freecut-editor-surface-${package_version}.tgz"
+          test -f "${artifact}"
+          if npm view "@quantfive/freecut-editor-surface@${package_version}" version >/dev/null 2>&1; then
+            echo "::notice::@quantfive/freecut-editor-surface@${package_version} is already published; nothing to do."
+            exit 0
+          fi
+          npm publish "./${artifact}" --provenance --access public

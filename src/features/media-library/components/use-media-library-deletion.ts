@@ -25,6 +25,7 @@ interface UseMediaLibraryDeletionParams {
   currentProjectId: string | null
   clearSelection: () => void
   deleteMediaBatch: (mediaIds: string[]) => Promise<void>
+  enabled?: boolean
 }
 
 /**
@@ -42,6 +43,7 @@ export function useMediaLibraryDeletion({
   currentProjectId,
   clearSelection,
   deleteMediaBatch,
+  enabled = true,
 }: UseMediaLibraryDeletionParams) {
   const { t, i18n } = useTranslation()
   const isFocusedRef = useRef(false)
@@ -74,7 +76,7 @@ export function useMediaLibraryDeletion({
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       // Only handle Delete key
-      if (event.key !== 'Delete') return
+      if (!enabled || event.key !== 'Delete') return
 
       // Don't trigger if media library is not focused
       if (!isFocusedRef.current) return
@@ -105,7 +107,14 @@ export function useMediaLibraryDeletion({
     return () => {
       document.removeEventListener('keydown', handleKeyDown)
     }
-  }, [isFocusedRef, selectedAssetCount, selectedCompositionIds, selectedMediaIds, showDeleteDialog])
+  }, [
+    enabled,
+    isFocusedRef,
+    selectedAssetCount,
+    selectedCompositionIds,
+    selectedMediaIds,
+    showDeleteDialog,
+  ])
 
   const deleteSummary = useMemo(() => {
     const parts: string[] = []
@@ -152,7 +161,7 @@ export function useMediaLibraryDeletion({
     affectedMediaImpact.totalReferenceCount + compoundClipDeleteImpact.totalReferenceCount
 
   const handleDeleteSelected = () => {
-    if (selectedAssetCount === 0) return
+    if (!enabled || selectedAssetCount === 0) return
     // Capture the IDs BEFORE opening dialog (selection may be cleared by click outside)
     setPendingDeletion({
       mediaIds: [...selectedMediaIds],
@@ -162,6 +171,7 @@ export function useMediaLibraryDeletion({
   }
 
   const handleConfirmDelete = async () => {
+    if (!enabled) return
     setShowDeleteDialog(false)
     try {
       // First remove timeline items that reference selected library assets

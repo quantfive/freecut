@@ -1,0 +1,20 @@
+{
+  "fixture_version": 1,
+  "id": "idempotency-conflict",
+  "kind": "structured_error",
+  "error": {
+    "code": "idempotency_conflict",
+    "message": "The idempotency key was already used for a different operation.",
+    "retryable": false,
+    "details": {
+      "kind": "idempotency_conflict",
+      "idempotency_key": "timeline-demo:cut-intro:v1",
+      "original_operation_id": "operation-cut-intro"
+    }
+  },
+  "expect": {
+    "code": "idempotency_conflict",
+    "retryable": false,
+    "idempotency_key": "timeline-demo:cut-intro:v1"
+  }
+}

@@ -11,6 +11,7 @@ import { useMediaLibraryStore } from '@/features/timeline/deps/media-library-sto
 import { observeParentElementHeight } from '../measure-parent-height'
 import { useTimelineViewportStore } from '../../stores/timeline-viewport-store'
 import { CLIP_VISIBILITY_PREFETCH_MARGIN_PX } from '../../hooks/use-clip-visibility'
+import { useEditorStore } from '@/shared/state/editor'
 
 const logger = createLogger('ClipFilmstrip')
 
@@ -79,6 +80,7 @@ export const ClipFilmstrip = memo(function ClipFilmstrip({
   const containerRef = useRef<HTMLDivElement>(null)
   const [height, setHeight] = useState(0)
   const viewportWidth = useTimelineViewportStore((state) => state.viewportWidth)
+  const hostMode = useEditorStore((state) => state.hostMode)
   const { blobUrl, setBlobUrl, hasStartedLoadingRef, blobUrlVersion } = useMediaBlobUrl(mediaId)
   const refreshingFrameIndicesRef = useRef<Set<number>>(new Set())
   const proxyStatus = useMediaLibraryStore((s) => s.proxyStatus.get(mediaId) ?? null)
@@ -189,7 +191,7 @@ export const ClipFilmstrip = memo(function ClipFilmstrip({
 
   // Load blob URL lazily when visible, and retry after global invalidation.
   useEffect(() => {
-    if (!isVisible || !mediaId || proxyBlobUrl || hasStartedLoadingRef.current) {
+    if (hostMode || !isVisible || !mediaId || proxyBlobUrl || hasStartedLoadingRef.current) {
       return
     }
     hasStartedLoadingRef.current = true
@@ -211,7 +213,7 @@ export const ClipFilmstrip = memo(function ClipFilmstrip({
     return () => {
       mounted = false
     }
-  }, [mediaId, isVisible, proxyBlobUrl, blobUrlVersion, hasStartedLoadingRef, setBlobUrl])
+  }, [blobUrlVersion, hasStartedLoadingRef, hostMode, isVisible, mediaId, proxyBlobUrl, setBlobUrl])
 
   // Use filmstrip hook. `enabled` no longer requires the source blob URL —
   // disk-cached frames can render before useMediaBlobUrl resolves. The
@@ -221,7 +223,7 @@ export const ClipFilmstrip = memo(function ClipFilmstrip({
     blobUrl: filmstripSourceUrl,
     duration: sourceDuration,
     isVisible,
-    enabled: sourceDuration > 0,
+    enabled: !hostMode && sourceDuration > 0,
     priorityWindow,
     targetFrameCount,
     targetFrameIndices,
@@ -252,7 +254,7 @@ export const ClipFilmstrip = memo(function ClipFilmstrip({
 
   const handleFrameSourceError = useCallback(
     (frameIndex: number) => {
-      if (!mediaId || refreshingFrameIndicesRef.current.has(frameIndex)) {
+      if (hostMode || !mediaId || refreshingFrameIndicesRef.current.has(frameIndex)) {
         return
       }
 
@@ -266,7 +268,7 @@ export const ClipFilmstrip = memo(function ClipFilmstrip({
           refreshingFrameIndicesRef.current.delete(frameIndex)
         })
     },
-    [mediaId],
+    [hostMode, mediaId],
   )
 
   // Share one stable fallback frame per media item. Every clip instance then

@@ -2,6 +2,7 @@ import { blobUrlManager } from '@/infrastructure/browser/blob-url-manager'
 import { getObjectUrlBlob } from '@/infrastructure/browser/object-url-registry'
 import { proxyService, useMediaLibraryStore } from '../deps/media-library-contract'
 import { importFilmstripCache } from '../deps/timeline-filmstrip'
+import { useEditorStore } from '@/shared/state/editor'
 import {
   cacheActivePreviewFallbackBitmap,
   getCachedActivePreviewFallbackBitmap,
@@ -19,6 +20,7 @@ function loadFilmstripModule() {
 }
 
 export function warmScrubProxyFallback(): void {
+  if (useEditorStore.getState().hostMode) return
   void loadFilmstripModule().then(({ filmstripCache }) => filmstripCache.prewarm())
 }
 
@@ -32,6 +34,7 @@ async function bitmapFromFrame(frame: { url: string; bitmap?: ImageBitmap }): Pr
 }
 
 export function scheduleScrubProxyFallback(src: string, timestamp: number): void {
+  if (useEditorStore.getState().hostMode) return
   if (getCachedActivePreviewFallbackBitmap(src, timestamp)) return
   const mediaId = blobUrlManager.getMediaIdByUrl(src) ?? proxyService.getMediaIdByProxyUrl(src)
   if (!mediaId) return

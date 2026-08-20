@@ -14,6 +14,7 @@ import {
 import type { LazyContextMenuEventInit } from '../../utils/lazy-context-menu'
 import { captureContextMenuEventInit, replayContextMenuEvent } from '../../utils/lazy-context-menu'
 import { useSelectionStore } from '@/shared/state/selection'
+import { useEditorStore } from '@/shared/state/editor'
 import { useGradeClipboardStore } from '@/shared/state/grade-clipboard'
 import { useItemsStore } from '../../stores/items-store'
 import {
@@ -30,6 +31,7 @@ import {
 } from '@/features/timeline/deps/analysis'
 import { formatHotkeyBinding } from '@/config/hotkeys'
 import { useResolvedHotkeys } from '@/features/timeline/deps/settings'
+import { useEditorCapability } from '../../deps/editor'
 
 type ItemContextMenuSectionProps = {
   t: ReturnType<typeof useTranslation>['t']
@@ -108,6 +110,8 @@ type LayoutActionsProps = ItemContextMenuSectionProps & {
 
 type DestructiveActionsProps = ItemContextMenuSectionProps & {
   isSelected: boolean
+  canRippleDelete?: boolean
+  canDelete?: boolean
   onRippleDelete: () => void
   onDelete: () => void
 }
@@ -266,6 +270,8 @@ const ItemContextMenuFull = memo(function ItemContextMenuFull({
   const { t } = useTranslation()
   const triggerRef = useRef<HTMLSpanElement | null>(null)
   const hotkeys = useResolvedHotkeys()
+  const hostMode = useEditorStore((s) => s.hostMode)
+  const canDeleteItem = useEditorCapability('timeline.remove')
   const selectedCount = useSelectionStore((s) => s.selectedItemIds.length)
   // Filter to only properties that actually have keyframes
   const propertiesWithKeyframes = useMemo(() => {
@@ -295,36 +301,46 @@ const ItemContextMenuFull = memo(function ItemContextMenuFull({
         </span>
       </ContextMenuTrigger>
       <ContextMenuContent>
-        <JoinActions t={t} hotkeys={hotkeys} {...joinActions} />
-        {linkActions && <LinkActions t={t} hotkeys={hotkeys} {...linkActions} />}
-        <KeyframeActions
+        {!hostMode && (
+          <>
+            <JoinActions t={t} hotkeys={hotkeys} {...joinActions} />
+            {linkActions && <LinkActions t={t} hotkeys={hotkeys} {...linkActions} />}
+            <KeyframeActions
+              t={t}
+              hotkeys={hotkeys}
+              propertiesWithKeyframes={propertiesWithKeyframes}
+              onClearAllKeyframes={keyframeActions?.onClearAllKeyframes}
+              onClearPropertyKeyframes={keyframeActions?.onClearPropertyKeyframes}
+            />
+            <LayoutActions
+              t={t}
+              hotkeys={hotkeys}
+              selectedCount={selectedCount}
+              onBentoLayout={layoutActions?.onBentoLayout}
+            />
+            {mediaActions && <MediaActions t={t} hotkeys={hotkeys} {...mediaActions} />}
+            {sceneDetectionActions && (
+              <SceneDetectionActions
+                t={t}
+                hotkeys={hotkeys}
+                sceneVerificationModelOptions={sceneVerificationModelOptions}
+                {...sceneDetectionActions}
+              />
+            )}
+            {captionActions && <CaptionActions t={t} hotkeys={hotkeys} {...captionActions} />}
+            <GradeActions t={t} />
+            {compositionActions && (
+              <CompositionActions t={t} hotkeys={hotkeys} {...compositionActions} />
+            )}
+          </>
+        )}
+        <DestructiveActions
           t={t}
           hotkeys={hotkeys}
-          propertiesWithKeyframes={propertiesWithKeyframes}
-          onClearAllKeyframes={keyframeActions?.onClearAllKeyframes}
-          onClearPropertyKeyframes={keyframeActions?.onClearPropertyKeyframes}
+          {...destructiveActions}
+          canRippleDelete={!hostMode}
+          canDelete={canDeleteItem}
         />
-        <LayoutActions
-          t={t}
-          hotkeys={hotkeys}
-          selectedCount={selectedCount}
-          onBentoLayout={layoutActions?.onBentoLayout}
-        />
-        {mediaActions && <MediaActions t={t} hotkeys={hotkeys} {...mediaActions} />}
-        {sceneDetectionActions && (
-          <SceneDetectionActions
-            t={t}
-            hotkeys={hotkeys}
-            sceneVerificationModelOptions={sceneVerificationModelOptions}
-            {...sceneDetectionActions}
-          />
-        )}
-        {captionActions && <CaptionActions t={t} hotkeys={hotkeys} {...captionActions} />}
-        <GradeActions t={t} />
-        {compositionActions && (
-          <CompositionActions t={t} hotkeys={hotkeys} {...compositionActions} />
-        )}
-        <DestructiveActions t={t} hotkeys={hotkeys} {...destructiveActions} />
       </ContextMenuContent>
     </ContextMenu>
   )
@@ -687,25 +703,36 @@ function CompositionActions({
   )
 }
 
-function DestructiveActions({ t, isSelected, onRippleDelete, onDelete }: DestructiveActionsProps) {
+function DestructiveActions({
+  t,
+  isSelected,
+  canRippleDelete = true,
+  canDelete = true,
+  onRippleDelete,
+  onDelete,
+}: DestructiveActionsProps) {
   return (
     <>
-      <ContextMenuItem
-        onClick={onRippleDelete}
-        disabled={!isSelected}
-        className="text-destructive focus:text-destructive"
-      >
-        {t('timeline.contextMenu.rippleDelete')}
-        <ContextMenuShortcut>Ctrl+Del</ContextMenuShortcut>
-      </ContextMenuItem>
-      <ContextMenuItem
-        onClick={onDelete}
-        disabled={!isSelected}
-        className="text-destructive focus:text-destructive"
-      >
-        {t('common.delete')}
-        <ContextMenuShortcut>Del</ContextMenuShortcut>
-      </ContextMenuItem>
+      {canRippleDelete && (
+        <ContextMenuItem
+          onClick={onRippleDelete}
+          disabled={!isSelected}
+          className="text-destructive focus:text-destructive"
+        >
+          {t('timeline.contextMenu.rippleDelete')}
+          <ContextMenuShortcut>Ctrl+Del</ContextMenuShortcut>
+        </ContextMenuItem>
+      )}
+      {canDelete && (
+        <ContextMenuItem
+          onClick={onDelete}
+          disabled={!isSelected}
+          className="text-destructive focus:text-destructive"
+        >
+          {t('common.delete')}
+          <ContextMenuShortcut>Del</ContextMenuShortcut>
+        </ContextMenuItem>
+      )}
     </>
   )
 }

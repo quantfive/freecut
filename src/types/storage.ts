@@ -12,8 +12,11 @@
  *                imported by older builds, and the repair sweep mirrors them
  *                into the workspace folder. OPFS remains the store for
  *                regenerable caches (proxies, waveforms, decoded audio).
+ * - 'host':      Descriptive metadata supplied by an embedded host. The
+ *                source is resolved at runtime and is never represented by a
+ *                File System Access handle or an OPFS path.
  */
-export type MediaStorageType = 'handle' | 'workspace' | 'opfs'
+export type MediaStorageType = 'handle' | 'workspace' | 'opfs' | 'host'
 
 /**
  * Provenance + usage terms for media imported from a third-party provider.

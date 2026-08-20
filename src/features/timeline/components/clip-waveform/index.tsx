@@ -18,6 +18,7 @@ import { observeParentElementHeight } from '../measure-parent-height'
 import { useTimelineViewportStore } from '../../stores/timeline-viewport-store'
 import { useZoomStore } from '../../stores/zoom-store'
 import { CLIP_VISIBILITY_PREFETCH_MARGIN_PX } from '../../hooks/use-clip-visibility'
+import { useEditorStore } from '@/shared/state/editor'
 
 const logger = createLogger('ClipWaveform')
 
@@ -85,6 +86,7 @@ export const ClipWaveform = memo(function ClipWaveform({
   const amplitudesBufferRef = useRef<Float32Array>(new Float32Array(0))
   const [height, setHeight] = useState(0)
   const viewportWidth = useTimelineViewportStore((state) => state.viewportWidth)
+  const hostMode = useEditorStore((state) => state.hostMode)
   const conformStartedRef = useRef(false)
   const { blobUrl, setBlobUrl, hasStartedLoadingRef, blobUrlVersion } = useMediaBlobUrl(mediaId)
 
@@ -169,7 +171,7 @@ export const ClipWaveform = memo(function ClipWaveform({
   // Load blob URL for the media when visible, including post-invalidation retries.
   useEffect(() => {
     // Skip if already started loading (prevents re-triggering on visibility changes)
-    if (hasStartedLoadingRef.current) {
+    if (hostMode || hasStartedLoadingRef.current) {
       return
     }
 
@@ -236,7 +238,7 @@ export const ClipWaveform = memo(function ClipWaveform({
     return () => {
       mounted = false
     }
-  }, [mediaId, isVisible, blobUrlVersion, hasStartedLoadingRef, setBlobUrl])
+  }, [blobUrlVersion, hasStartedLoadingRef, hostMode, isVisible, mediaId, setBlobUrl])
 
   // Use waveform hook. It can hydrate persisted waveforms before blobUrl is
   // available; blobUrl is only required when the cache has to generate.
@@ -245,7 +247,7 @@ export const ClipWaveform = memo(function ClipWaveform({
       mediaId,
       blobUrl,
       isVisible,
-      enabled: audioCodecSupported,
+      enabled: audioCodecSupported && !hostMode,
       deferDurationSec: sourceDuration,
       pixelsPerSecond,
       visibleSourceStartSec: visibleSourceWindow.start,

@@ -1,0 +1,31 @@
+{
+  "fixture_version": 1,
+  "id": "invalid-caption-cue",
+  "kind": "invalid_command_batch",
+  "request": {
+    "contract_version": 1,
+    "timeline_id": "timeline-caption",
+    "operation_id": "operation-invalid-caption",
+    "idempotency_key": "timeline-caption:invalid-caption:1",
+    "base_revision": 2,
+    "preconditions": [],
+    "commands": [
+      {
+        "command_id": "command-invalid-cue",
+        "type": "upsert_caption_cues",
+        "track_id": "track-captions",
+        "cues": [
+          {
+            "item_type": "caption_cue",
+            "cue_id": "cue-invalid",
+            "track_id": "track-captions",
+            "start_us": 5000000,
+            "end_us": 5000000,
+            "text": "An empty range is not valid."
+          }
+        ]
+      }
+    ]
+  },
+  "expect": { "request_valid": false, "error_codes": ["invalid_request"] }
+}

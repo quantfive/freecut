@@ -1,0 +1,48 @@
+export { FreeCutEditorSurface } from '@/features/editor/host/editor-surface'
+export { EditorHostProvider } from '@/features/editor/host/context-provider'
+export {
+  DEFAULT_HOST_CAPABILITIES,
+  MAX_TRANSCRIPT_COMMAND_TEXT_BYTES,
+  MAX_TRANSCRIPT_CURSOR_LENGTH,
+  MAX_TRANSCRIPT_DURATION_US,
+  MAX_TRANSCRIPT_QUERY_LENGTH,
+  MAX_TRANSCRIPT_SECTION_PAGE_SIZE,
+  MAX_TRANSCRIPT_SECTION_TEXT_BYTES,
+  MAX_TRANSCRIPT_SELECTIONS,
+  SUPPORTED_HOST_COMMANDS,
+  capabilityForCommand,
+  createLocalEditorHost,
+  isHostCapabilityEnabled,
+} from '@/features/editor/host/contract'
+export type { EditorHostContextValue } from '@/features/editor/host/context'
+export type { EditorHostProviderProps } from '@/features/editor/host/context-provider'
+export type {
+  EditorCapability,
+  EditorCapabilityMap,
+  EditorHost,
+  EditorHostNavigation,
+  EmbeddedEditorAsset,
+  EmbeddedEditorProject,
+  EmbeddedEditorSnapshot,
+  EditorTranscriptPort,
+  HostAppliedEditResult,
+  HostConflictResult,
+  HostEditResult,
+  HostMediaKind,
+  HostNotice,
+  HostTranscriptCommandAction,
+  HostTranscriptCommandPreview,
+  HostTranscriptCommandPreviewRequest,
+  HostTranscriptError,
+  HostTranscriptRange,
+  HostTranscriptSearchPage,
+  HostTranscriptSearchRequest,
+  HostTranscriptSection,
+  HostTranscriptSectionsPage,
+  HostTranscriptSectionsRequest,
+  HostTranscriptStatus,
+  HostTranscriptStatusReceipt,
+  LocalEditorHostOptions,
+  MediaLocator,
+  ResolvedMediaLocator,
+} from '@/features/editor/host/contract'

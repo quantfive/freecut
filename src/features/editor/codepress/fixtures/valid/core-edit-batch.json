@@ -1,0 +1,150 @@
+{
+  "fixture_version": 1,
+  "id": "core-edit-batch",
+  "kind": "valid_command_batch",
+  "timeline": {
+    "contract_version": 1,
+    "schema_version": 1,
+    "timeline_id": "timeline-demo",
+    "revision": 7,
+    "duration_us": 12000000,
+    "media": [
+      {
+        "media_id": "media-speaker",
+        "media_kind": "video",
+        "content_hash": "sha256:speaker-v1",
+        "duration_us": 30000000,
+        "availability": {
+          "mode": "hybrid",
+          "local": {
+            "device_id": "device-owner",
+            "root_id": "root-shared",
+            "file_id": "file-speaker",
+            "root_generation": 3
+          },
+          "cloud": { "object_id": "object-speaker-original" }
+        }
+      },
+      {
+        "media_id": "media-music",
+        "media_kind": "audio",
+        "content_hash": "sha256:music-v1",
+        "duration_us": 60000000,
+        "availability": {
+          "mode": "cloud",
+          "cloud": { "object_id": "object-music-original" }
+        }
+      }
+    ],
+    "tracks": [
+      {
+        "track_id": "track-video",
+        "kind": "video",
+        "name": "Video",
+        "locked": false,
+        "muted": false,
+        "items": [
+          {
+            "item_type": "clip",
+            "item_id": "item-speaker",
+            "track_id": "track-video",
+            "media_id": "media-speaker",
+            "media_kind": "video",
+            "timeline_start_us": 0,
+            "timeline_end_us": 12000000,
+            "source_start_us": 0,
+            "source_end_us": 12000000
+          }
+        ]
+      },
+      {
+        "track_id": "track-music",
+        "kind": "audio",
+        "name": "Music",
+        "locked": false,
+        "muted": false,
+        "items": [
+          {
+            "item_type": "clip",
+            "item_id": "item-music",
+            "track_id": "track-music",
+            "media_id": "media-music",
+            "media_kind": "audio",
+            "timeline_start_us": 0,
+            "timeline_end_us": 12000000,
+            "source_start_us": 0,
+            "source_end_us": 12000000,
+            "volume": 0.7
+          }
+        ]
+      }
+    ]
+  },
+  "request": {
+    "contract_version": 1,
+    "timeline_id": "timeline-demo",
+    "operation_id": "operation-cut-intro",
+    "idempotency_key": "timeline-demo:cut-intro:v1",
+    "base_revision": 7,
+    "preconditions": [
+      {
+        "type": "item_at",
+        "item_id": "item-speaker",
+        "track_id": "track-video",
+        "timeline_start_us": 0,
+        "timeline_end_us": 12000000
+      },
+      {
+        "type": "media_content_hash",
+        "media_id": "media-speaker",
+        "content_hash": "sha256:speaker-v1"
+      }
+    ],
+    "commands": [
+      {
+        "command_id": "command-split-speaker",
+        "type": "split_item",
+        "item_id": "item-speaker",
+        "at_timeline_us": 4000000,
+        "at_source_us": 4000000,
+        "left_item_id": "item-speaker-left",
+        "right_item_id": "item-speaker-right"
+      },
+      {
+        "command_id": "command-trim-left",
+        "type": "trim_item",
+        "item_id": "item-speaker-left",
+        "edge": "start",
+        "timeline_us": 1000000,
+        "source_us": 1000000
+      },
+      {
+        "command_id": "command-ripple-delete",
+        "type": "ripple_delete",
+        "start_us": 2000000,
+        "end_us": 2500000,
+        "track_ids": null
+      },
+      {
+        "command_id": "command-move-music",
+        "type": "move_item",
+        "item_id": "item-music",
+        "to_track_id": "track-music",
+        "timeline_start_us": 0,
+        "index": 0
+      },
+      {
+        "command_id": "command-move-video-track",
+        "type": "move_track",
+        "track_id": "track-video",
+        "to_index": 0
+      }
+    ]
+  },
+  "expect": {
+    "timeline_valid": true,
+    "request_valid": true,
+    "command_types": ["split_item", "trim_item", "ripple_delete", "move_item", "move_track"],
+    "command_count": 5
+  }
+}

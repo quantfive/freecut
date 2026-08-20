@@ -1,0 +1,38 @@
+# Keep `main` a clean mirror of upstream walterlow/freecut.
+#
+# Nothing CodePress-owned is ever committed to `main`. Our work lives on the
+# `codepress-main` integration branch, and upstream reaches it through a reviewed
+# PR (`main` -> `codepress-main`) rather than by landing here directly. That keeps
+# `gh repo sync` a fast-forward, so this job never has to resolve a conflict
+# unattended.
+name: sync-upstream
+
+on:
+  schedule:
+    - cron: "0 8 * * 1" # Mondays, 08:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fast-forward main from upstream
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh repo sync ${{ github.repository }} --source walterlow/freecut --branch main
+
+      # Surface the delta so upstream drift is visible without anyone going
+      # looking for it. This opens nothing and merges nothing by itself.
+      - name: Report how far codepress-main trails main
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          behind="$(gh api "repos/${{ github.repository }}/compare/codepress-main...main" --jq '.ahead_by')"
+          if [ "${behind:-0}" -gt 0 ]; then
+            echo "::warning::codepress-main is $behind commit(s) behind upstream main. Open a PR from main into codepress-main to integrate."
+          else
+            echo "codepress-main is up to date with upstream main."
+          fi

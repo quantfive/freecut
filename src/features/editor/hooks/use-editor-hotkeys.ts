@@ -8,6 +8,7 @@ import { useSceneBrowserStore } from '@/features/editor/deps/scene-browser'
 interface EditorHotkeyCallbacks {
   onSave?: () => void
   onExport?: () => void
+  enableLocalUi?: boolean
 }
 
 /**
@@ -24,6 +25,7 @@ interface EditorHotkeyCallbacks {
  */
 export function useEditorHotkeys(callbacks: EditorHotkeyCallbacks = {}) {
   const hotkeys = useResolvedHotkeys()
+  const enableLocalUi = callbacks.enableLocalUi ?? true
 
   // Save: Cmd/Ctrl+S
   useHotkeys(
@@ -57,11 +59,12 @@ export function useEditorHotkeys(callbacks: EditorHotkeyCallbacks = {}) {
   useHotkeys(
     hotkeys.OPEN_SCENE_BROWSER,
     (event) => {
+      if (!enableLocalUi) return
       event.preventDefault()
       useSceneBrowserStore.getState().openBrowser({ focus: true })
     },
     { ...HOTKEY_OPTIONS, eventListenerOptions: { capture: true } },
-    [],
+    [enableLocalUi],
   )
 
   // Workspace switching: Alt+1 (Edit), Alt+2 (Color), Alt+3 (Motion).
@@ -69,30 +72,33 @@ export function useEditorHotkeys(callbacks: EditorHotkeyCallbacks = {}) {
   useHotkeys(
     hotkeys.WORKSPACE_EDIT,
     (event) => {
+      if (!enableLocalUi) return
       event.preventDefault()
       useEditorStore.getState().setWorkspace('edit')
     },
     HOTKEY_OPTIONS,
-    [],
+    [enableLocalUi],
   )
 
   useHotkeys(
     hotkeys.WORKSPACE_COLOR,
     (event) => {
+      if (!enableLocalUi) return
       event.preventDefault()
       useEditorStore.getState().setWorkspace('color')
     },
     HOTKEY_OPTIONS,
-    [],
+    [enableLocalUi],
   )
 
   useHotkeys(
     hotkeys.WORKSPACE_ANIMATE,
     (event) => {
+      if (!enableLocalUi) return
       event.preventDefault()
       useEditorStore.getState().setWorkspace('motion')
     },
     HOTKEY_OPTIONS,
-    [],
+    [enableLocalUi],
   )
 }

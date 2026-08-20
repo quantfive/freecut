@@ -5,6 +5,7 @@ import type { LucideIcon } from 'lucide-react'
 import { useEditorStore } from '@/shared/state/editor'
 import { cn } from '@/shared/ui/cn'
 import type { EditorWorkspaceId } from '@/config/editor-workspaces'
+import { useEditorCapability } from '../host/context'
 
 const WORKSPACE_ITEMS: readonly {
   id: EditorWorkspaceId
@@ -25,6 +26,12 @@ export const WorkspaceSwitcher = memo(function WorkspaceSwitcher() {
   const { t } = useTranslation()
   const workspace = useEditorStore((s) => s.workspace)
   const setWorkspace = useEditorStore((s) => s.setWorkspace)
+  const canUseColor = useEditorCapability('workspace.color')
+  const canUseMotion = useEditorCapability('workspace.motion')
+  const visibleWorkspaceItems = WORKSPACE_ITEMS.filter(
+    ({ id }) =>
+      id === 'edit' || (id === 'color' && canUseColor) || (id === 'motion' && canUseMotion),
+  )
 
   return (
     <div
@@ -32,7 +39,7 @@ export const WorkspaceSwitcher = memo(function WorkspaceSwitcher() {
       aria-label={t('toolbar.workspaces.label')}
       className="flex items-center gap-0.5 rounded-md bg-muted p-0.5"
     >
-      {WORKSPACE_ITEMS.map(({ id, icon: Icon, labelKey }) => {
+      {visibleWorkspaceItems.map(({ id, icon: Icon, labelKey }) => {
         const isActive = workspace === id
         return (
           <button

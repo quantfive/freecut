@@ -349,12 +349,7 @@ const TimelineZoomControls = memo(function TimelineZoomControls({
         finishSliderZoomInteraction()
       }
     },
-    [
-      commitSliderZoom,
-      finishSliderZoomInteraction,
-      releaseSliderZoomGesture,
-      renderSliderPreview,
-    ],
+    [commitSliderZoom, finishSliderZoomInteraction, releaseSliderZoomGesture, renderSliderPreview],
   )
 
   const controlledSliderValue = zoomToSlider(settledZoomLevel)
@@ -444,6 +439,7 @@ const TimelineZoomControls = memo(function TimelineZoomControls({
  * - In/Out points, Snap toggle
  * - Zoom controls
  */
+// fallow-ignore-next-line complexity
 export const TimelineHeader = memo(function TimelineHeader({
   onZoomChange,
   onZoomIn,
@@ -451,6 +447,7 @@ export const TimelineHeader = memo(function TimelineHeader({
   onZoomToFit,
 }: TimelineHeaderProps) {
   const { t } = useTranslation()
+  const hostMode = useEditorStore((s) => s.hostMode)
   const hotkeys = useResolvedHotkeys()
   const snapEnabled = useTimelineStore((s) => s.snapEnabled)
   const toggleSnap = useTimelineStore((s) => s.toggleSnap)
@@ -563,25 +560,27 @@ export const TimelineHeader = memo(function TimelineHeader({
               <Scissors className="w-3.5 h-3.5 -rotate-90" />
             </Button>
 
-            <Button
-              variant="ghost"
-              size="icon"
-              style={btnSize}
-              className={
-                activeTool === 'rate-stretch'
-                  ? 'bg-primary text-primary-foreground hover:bg-primary/90'
-                  : ''
-              }
-              onClick={() =>
-                setActiveTool(activeTool === 'rate-stretch' ? 'select' : 'rate-stretch')
-              }
-              aria-label={t('timeline.header.rateStretchTool')}
-              data-tooltip={t('timeline.header.rateStretchToolTooltip')}
-            >
-              <Gauge className="w-3.5 h-3.5" />
-            </Button>
+            {!hostMode && (
+              <Button
+                variant="ghost"
+                size="icon"
+                style={btnSize}
+                className={
+                  activeTool === 'rate-stretch'
+                    ? 'bg-primary text-primary-foreground hover:bg-primary/90'
+                    : ''
+                }
+                onClick={() =>
+                  setActiveTool(activeTool === 'rate-stretch' ? 'select' : 'rate-stretch')
+                }
+                aria-label={t('timeline.header.rateStretchTool')}
+                data-tooltip={t('timeline.header.rateStretchToolTooltip')}
+              >
+                <Gauge className="w-3.5 h-3.5" />
+              </Button>
+            )}
 
-            {SLIP_SLIDE_TOOLS_ENABLED ? (
+            {!hostMode && SLIP_SLIDE_TOOLS_ENABLED ? (
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button
@@ -630,140 +629,151 @@ export const TimelineHeader = memo(function TimelineHeader({
           <Separator orientation="vertical" className="h-5 mx-1.5" />
 
           {/* Undo/Redo */}
-          <div className="flex items-center gap-1">
-            <Button
-              variant="ghost"
-              size="icon"
-              style={btnSize}
-              onClick={handleUndo}
-              disabled={!canUndo}
-              aria-label={
-                undoLabel
-                  ? t('timeline.header.undoWithLabel', { label: undoLabel })
-                  : t('timeline.header.undo')
-              }
-              data-tooltip={
-                undoLabel
-                  ? t('timeline.header.undoWithLabelTooltip', { label: undoLabel })
-                  : t('timeline.header.undoTooltip')
-              }
-            >
-              <Undo2 className="w-3.5 h-3.5" />
-            </Button>
+          {!hostMode && (
+            <div className="flex items-center gap-1">
+              <Button
+                variant="ghost"
+                size="icon"
+                style={btnSize}
+                onClick={handleUndo}
+                disabled={!canUndo}
+                aria-label={
+                  undoLabel
+                    ? t('timeline.header.undoWithLabel', { label: undoLabel })
+                    : t('timeline.header.undo')
+                }
+                data-tooltip={
+                  undoLabel
+                    ? t('timeline.header.undoWithLabelTooltip', { label: undoLabel })
+                    : t('timeline.header.undoTooltip')
+                }
+              >
+                <Undo2 className="w-3.5 h-3.5" />
+              </Button>
 
-            <Button
-              variant="ghost"
-              size="icon"
-              style={btnSize}
-              onClick={handleRedo}
-              disabled={!canRedo}
-              aria-label={
-                redoLabel
-                  ? t('timeline.header.redoWithLabel', { label: redoLabel })
-                  : t('timeline.header.redo')
-              }
-              data-tooltip={
-                redoLabel
-                  ? t('timeline.header.redoWithLabelTooltip', { label: redoLabel })
-                  : t('timeline.header.redoTooltip')
-              }
-            >
-              <Redo2 className="w-3.5 h-3.5" />
-            </Button>
-          </div>
-
-          <Separator orientation="vertical" className="h-5 mx-1.5" />
-
-          {/* In/Out Points */}
-          <div className="flex items-center gap-1">
-            <Button
-              variant="ghost"
-              size="icon"
-              style={btnSize}
-              onClick={() => setInPoint(usePlaybackStore.getState().currentFrame)}
-              aria-label={t('timeline.header.setInPoint')}
-              data-tooltip={t('timeline.header.setInPointTooltip')}
-            >
-              <span className="text-sm font-bold" style={{ color: 'var(--color-timeline-in)' }}>
-                [
-              </span>
-            </Button>
-
-            <Button
-              variant="ghost"
-              size="icon"
-              style={btnSize}
-              onClick={() => setOutPoint(usePlaybackStore.getState().currentFrame)}
-              aria-label={t('timeline.header.setOutPoint')}
-              data-tooltip={t('timeline.header.setOutPointTooltip')}
-            >
-              <span className="text-sm font-bold" style={{ color: 'var(--color-timeline-out)' }}>
-                ]
-              </span>
-            </Button>
-
-            <Button
-              variant="ghost"
-              size="icon"
-              style={btnSize}
-              onClick={clearInOutPoints}
-              disabled={inPoint === null && outPoint === null}
-              aria-label={t('timeline.header.clearInOutPoints')}
-              data-tooltip={t('timeline.header.clearInOutPointsTooltip')}
-            >
-              <X className="w-3.5 h-3.5" />
-            </Button>
-          </div>
+              <Button
+                variant="ghost"
+                size="icon"
+                style={btnSize}
+                onClick={handleRedo}
+                disabled={!canRedo}
+                aria-label={
+                  redoLabel
+                    ? t('timeline.header.redoWithLabel', { label: redoLabel })
+                    : t('timeline.header.redo')
+                }
+                data-tooltip={
+                  redoLabel
+                    ? t('timeline.header.redoWithLabelTooltip', { label: redoLabel })
+                    : t('timeline.header.redoTooltip')
+                }
+              >
+                <Redo2 className="w-3.5 h-3.5" />
+              </Button>
+            </div>
+          )}
 
           <Separator orientation="vertical" className="h-5 mx-1.5" />
+
+          {!hostMode && (
+            <>
+              {/* In/Out Points */}
+              <div className="flex items-center gap-1">
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  style={btnSize}
+                  onClick={() => setInPoint(usePlaybackStore.getState().currentFrame)}
+                  aria-label={t('timeline.header.setInPoint')}
+                  data-tooltip={t('timeline.header.setInPointTooltip')}
+                >
+                  <span className="text-sm font-bold" style={{ color: 'var(--color-timeline-in)' }}>
+                    [
+                  </span>
+                </Button>
+
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  style={btnSize}
+                  onClick={() => setOutPoint(usePlaybackStore.getState().currentFrame)}
+                  aria-label={t('timeline.header.setOutPoint')}
+                  data-tooltip={t('timeline.header.setOutPointTooltip')}
+                >
+                  <span
+                    className="text-sm font-bold"
+                    style={{ color: 'var(--color-timeline-out)' }}
+                  >
+                    ]
+                  </span>
+                </Button>
+
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  style={btnSize}
+                  onClick={clearInOutPoints}
+                  disabled={inPoint === null && outPoint === null}
+                  aria-label={t('timeline.header.clearInOutPoints')}
+                  data-tooltip={t('timeline.header.clearInOutPointsTooltip')}
+                >
+                  <X className="w-3.5 h-3.5" />
+                </Button>
+              </div>
+
+              <Separator orientation="vertical" className="h-5 mx-1.5" />
+            </>
+          )}
 
           {/* Markers */}
-          <div className="flex items-center gap-1">
-            <Button
-              variant="ghost"
-              size="icon"
-              style={btnSize}
-              onClick={() => addMarker(usePlaybackStore.getState().currentFrame)}
-              aria-label={t('timeline.header.addMarker')}
-              data-tooltip={t('timeline.header.addMarkerTooltip')}
-            >
-              <Flag className="w-3.5 h-3.5" style={{ color: 'var(--color-timeline-marker)' }} />
-            </Button>
+          {!hostMode && (
+            <div className="flex items-center gap-1">
+              <Button
+                variant="ghost"
+                size="icon"
+                style={btnSize}
+                onClick={() => addMarker(usePlaybackStore.getState().currentFrame)}
+                aria-label={t('timeline.header.addMarker')}
+                data-tooltip={t('timeline.header.addMarkerTooltip')}
+              >
+                <Flag className="w-3.5 h-3.5" style={{ color: 'var(--color-timeline-marker)' }} />
+              </Button>
 
-            <Button
-              variant="ghost"
-              size="icon"
-              style={btnSize}
-              onClick={() => {
-                if (selectedMarkerId) {
-                  removeMarker(selectedMarkerId)
-                  clearSelection()
-                }
-              }}
-              disabled={!selectedMarkerId}
-              aria-label={t('timeline.header.removeSelectedMarker')}
-              data-tooltip={t('timeline.header.removeSelectedMarkerTooltip')}
-            >
-              <FlagOff className="w-3.5 h-3.5" />
-            </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                style={btnSize}
+                onClick={() => {
+                  if (selectedMarkerId) {
+                    removeMarker(selectedMarkerId)
+                    clearSelection()
+                  }
+                }}
+                disabled={!selectedMarkerId}
+                aria-label={t('timeline.header.removeSelectedMarker')}
+                data-tooltip={t('timeline.header.removeSelectedMarkerTooltip')}
+              >
+                <FlagOff className="w-3.5 h-3.5" />
+              </Button>
 
-            <Button
-              variant="ghost"
-              size="icon"
-              style={btnSize}
-              onClick={clearAllMarkers}
-              disabled={!hasMarkers}
-              aria-label={t('timeline.header.clearAllMarkers')}
-              data-tooltip={t('timeline.header.clearAllMarkersTooltip')}
-            >
-              <X className="w-3.5 h-3.5" />
-            </Button>
-          </div>
+              <Button
+                variant="ghost"
+                size="icon"
+                style={btnSize}
+                onClick={clearAllMarkers}
+                disabled={!hasMarkers}
+                aria-label={t('timeline.header.clearAllMarkers')}
+                data-tooltip={t('timeline.header.clearAllMarkersTooltip')}
+              >
+                <X className="w-3.5 h-3.5" />
+              </Button>
+            </div>
+          )}
 
           <Separator orientation="vertical" className="h-5 mx-1.5" />
 
           {/* Microphone voiceover */}
-          <MicRecordControl />
+          {!hostMode && <MicRecordControl />}
 
           <Separator orientation="vertical" className="h-5 mx-1.5" />
 
@@ -811,7 +821,12 @@ export const TimelineHeader = memo(function TimelineHeader({
 
           <Separator orientation="vertical" className="h-5 mx-1.5" />
 
-          <InlineKeyframesToggle isOpen={inlineKeyframesOpen} onToggle={toggleEditKeyframePanel} />
+          {!hostMode && (
+            <InlineKeyframesToggle
+              isOpen={inlineKeyframesOpen}
+              onToggle={toggleEditKeyframePanel}
+            />
+          )}
 
           <Button
             variant="ghost"
