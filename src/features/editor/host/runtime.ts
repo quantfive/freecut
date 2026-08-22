@@ -15,6 +15,7 @@ import { usePlaybackStore } from '@/shared/state/playback'
 import { useEditorStore } from '@/shared/state/editor'
 import { useSelectionStore } from '@/shared/state/selection'
 import { useGizmoStore, useMaskEditorStore } from '@/features/editor/deps/preview'
+import { peekSharedPreviewAudioContext } from '@/features/editor/deps/composition-runtime'
 import {
   isHostCapabilityEnabled,
   type EmbeddedEditorSnapshot,
@@ -53,6 +54,7 @@ export class EmbeddedEditorHostRuntime implements EmbeddedEditorHostRuntimeContr
   private applyingAuthoritative = false
   private reconcileScheduled = false
   private editInFlight = false
+  private gestureListenersAttached = false
   private unsubscribeResolver: (() => void) | null = null
   private unsubscribeController: (() => void) | null = null
   private unsubscribeTimeline: (() => void) | null = null
@@ -65,16 +67,40 @@ export class EmbeddedEditorHostRuntime implements EmbeddedEditorHostRuntimeContr
     this.controller = new HostEditorController(host, snapshot)
   }
 
+  /**
+   * The host serves cross-origin media URLs, which rules out the Web Audio
+   * clip graph (non-CORS cross-origin resources are silenced through
+   * MediaElementAudioSourceNode) — but the shared preview AudioContext can
+   * still start suspended when playback did not begin with a real user
+   * gesture.  Kept attached for the whole host session (not once) so a
+   * context created after the first gesture is also resumed.
+   */
+  private readonly resumePreviewAudioOnGesture = (): void => {
+    const context = peekSharedPreviewAudioContext()
+    if (context?.state === 'suspended') {
+      void context.resume()
+    }
+  }
+
   mountStores(): void {
     if (this.mounted) return
     this.mounted = true
     useEditorStore.setState({ hostMode: true })
+    // The monitor volume UI is hidden in host mode, so a persisted local
+    // mute/volume preference must not silently zero embedded audio.
+    usePlaybackStore.setState({ muted: false, volume: 1 })
     useSelectionStore.getState().clearSelection()
     useSelectionStore.getState().setActiveTool('select')
     useGizmoStore.getState().cancelInteraction()
     useGizmoStore.getState().clearPreview()
     useMaskEditorStore.getState().stopEditing()
     this.applySnapshotToStores(this.authoritativeSnapshot)
+
+    if (typeof document !== 'undefined') {
+      document.addEventListener('pointerdown', this.resumePreviewAudioOnGesture)
+      document.addEventListener('keydown', this.resumePreviewAudioOnGesture)
+      this.gestureListenersAttached = true
+    }
 
     this.unsubscribeResolver = installRuntimeMediaResolver(async (mediaId) => {
       const asset = this.authoritativeSnapshot.assets.find((candidate) => candidate.id === mediaId)
@@ -97,6 +123,11 @@ export class EmbeddedEditorHostRuntime implements EmbeddedEditorHostRuntimeContr
   unmountStores(): void {
     if (!this.mounted) return
     this.mounted = false
+    if (this.gestureListenersAttached) {
+      document.removeEventListener('pointerdown', this.resumePreviewAudioOnGesture)
+      document.removeEventListener('keydown', this.resumePreviewAudioOnGesture)
+      this.gestureListenersAttached = false
+    }
     this.unsubscribeTimeline?.()
     this.unsubscribeTimeline = null
     this.unsubscribeController?.()

@@ -26,6 +26,7 @@ import {
   setPreviewClipGain,
   type PreviewClipAudioGraph,
 } from '../utils/preview-audio-graph'
+import { isWebAudioSafeMediaSource } from '../utils/media-source-origin'
 
 // Track video elements that have been connected to Web Audio API
 // A video element can only be connected to ONE MediaElementSourceNode ever
@@ -57,6 +58,16 @@ export function applyVideoElementAudioState(
     if (audioContext?.state === 'suspended') {
       audioContext.resume()
     }
+    return
+  }
+
+  // Cross-origin media without CORS approval is silenced by
+  // MediaElementAudioSourceNode (HTML spec) — host-provided signed URLs take
+  // this direct element volume path instead of the Web Audio graph.  EQ is
+  // graph-only and does not apply on this path.  Called on every volume
+  // change, so element.volume stays in sync.
+  if (!isWebAudioSafeMediaSource(video.currentSrc || video.src)) {
+    video.volume = Math.min(1, safeVolume)
     return
   }
 
