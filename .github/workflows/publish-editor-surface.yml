@@ -1,5 +1,12 @@
 name: Publish FreeCut editor surface
 
+# Publishes @quantfive/freecut-editor-surface to the public npmjs registry
+# (the canonical release target; publishConfig in packages/freecut-editor
+# points there and scripts/package-editor-surface.mjs enforces it). Requires
+# an NPM_TOKEN repo secret (npm automation token with publish rights on the
+# @quantfive scope); until a repo admin adds it, use the manual maintainer
+# path instead: npm run publish:editor-surface:npmjs
+
 on:
   workflow_dispatch:
   push:
@@ -34,7 +41,7 @@ jobs:
         with:
           node-version: '22.14.0'
           cache: npm
-          registry-url: https://npm.pkg.github.com
+          registry-url: https://registry.npmjs.org
 
       - name: Select pinned npm
         run: npm install --global npm@11.8.0
@@ -69,13 +76,16 @@ jobs:
           test -f "${artifact}"
           npm run test:editor-surface:consumer -- --artifact "${artifact}"
 
-      - name: Publish private package to GitHub Packages
+      - name: Publish public package to npmjs
         shell: bash
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           set -euo pipefail
           package_version="$(node -p "require('./packages/freecut-editor/package.json').version")"
           artifact="artifacts/freecut-editor-surface-${package_version}.tgz"
           test -f "${artifact}"
-          npm publish "./${artifact}" --registry=https://npm.pkg.github.com
+          # publishConfig in the manifest already targets npmjs with public
+          # access; the explicit flags keep this step robust against manifest
+          # drift (the pack gate also asserts them).
+          npm publish "./${artifact}" --registry=https://registry.npmjs.org --access=public

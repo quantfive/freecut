@@ -46,42 +46,22 @@ npm ci --ignore-scripts
 npm run package:editor-surface
 ```
 
-The command writes a deterministic tarball to `artifacts/`. There are two
-release targets for that tarball:
+The command writes a deterministic tarball to `artifacts/`. The canonical
+release target is the **public npmjs registry**: `publishConfig` in this
+manifest points at `https://registry.npmjs.org` with `"access": "public"`
+(enforced by `scripts/package-editor-surface.mjs`). GitHub Packages is no
+longer a release target for this package.
 
-**GitHub Packages (CI).** The default target. `publishConfig.registry` in
-this manifest points at `https://npm.pkg.github.com` (enforced by
-`scripts/package-editor-surface.mjs`), and the manual/tagged workflow in
-`.github/workflows/publish-editor-surface.yml` publishes there with its
-`GITHUB_TOKEN`. The first GitHub Packages publication defaults to private;
-verify that visibility remains private and grant `quantfive/codepress` read
-access under **Manage Actions access** before CodePress installs it.
+**CI (tag or manual dispatch).** The workflow in
+`.github/workflows/publish-editor-surface.yml` verifies provenance, builds
+the deterministic tarball, smoke-tests it as an installed consumer, and
+publishes to npmjs with `NODE_AUTH_TOKEN` from the `NPM_TOKEN` repo secret
+(npm automation token with publish rights on the `@quantfive` scope). A repo
+admin must add that secret before tag publishes work; until then, use the
+manual path below.
 
-For an authorized local publication, authenticate with a GitHub classic PAT
-that has `write:packages` and run:
-
-```bash
-NODE_AUTH_TOKEN="$GITHUB_CLASSIC_PAT" npm publish \
-  artifacts/freecut-editor-surface-0.3.0.tgz \
-  --registry=https://npm.pkg.github.com
-```
-
-Do not commit a token. The workflow uses its `GITHUB_TOKEN` with
-`packages: write`; CodePress CI uses its `GITHUB_TOKEN` with `packages: read`
-after the repository has been granted package access.
-
-CodePress should route the `@quantfive` scope to GitHub Packages and provide
-`NODE_AUTH_TOKEN` in CI:
-
-```ini
-@quantfive:registry=https://npm.pkg.github.com
-//npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}
-```
-
-**npmjs (manual, CodePress consumption).** CodePress installs this package
-from the public npm registry, and this repository has no `NPM_TOKEN` secret,
-so npmjs releases are a manual maintainer step run from a clean checkout of
-the merged staging commit:
+**Manual (maintainer).** Run from a clean checkout of the merged staging
+commit with local npm auth:
 
 ```bash
 npm ci --ignore-scripts
@@ -91,14 +71,13 @@ npm run publish:editor-surface:npmjs
 `scripts/publish-editor-surface-npmjs.mjs` runs the preflight (provenance
 verification, deterministic pack, and a fresh-consumer install + smoke of the
 exact tarball) and then publishes
-`artifacts/freecut-editor-surface-<version>.tgz` to
-`https://registry.npmjs.org` with `--access=public`, using the maintainer's
-local npm auth. The registry override is command-line only: the manifest
-keeps targeting GitHub Packages and the CI path is unchanged. Run
+`artifacts/freecut-editor-surface-<version>.tgz` to npmjs. Run
 `npm run publish:editor-surface:npmjs -- --dry-run` to validate without
 publishing. Versions 0.3.1 and 0.3.2 are released this way.
 
-It can then install the exact published version and keep it pinned in its
+Do not commit a token.
+
+Consumers install the exact published version and keep it pinned in their
 lockfile:
 
 ```bash

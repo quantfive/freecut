@@ -32,16 +32,26 @@ function npmCommand() {
   return process.platform === 'win32' ? 'npm.cmd' : 'npm'
 }
 
-// Manual public-npm release path.  The package manifest intentionally keeps
-// publishConfig pointed at the private GitHub Packages registry (enforced by
-// scripts/package-editor-surface.mjs); this script overrides the registry on
-// the command line only, so the CI tag/dispatch path is untouched.  CodePress
-// consumes the package from npmjs.
-function main() {
+// Manual public-npmjs release path (fallback for the tag/dispatch CI
+// workflow, which needs the NPM_TOKEN repo secret).  publishConfig in the
+// manifest is the canonical npmjs target (enforced by
+// scripts/package-editor-surface.mjs); this script adds the release
+// preflight and publishes the exact smoke-tested tarball with the
+// maintainer's local npm auth.
+function assertPublicNpmjsTarget() {
   assertCondition(
     packageJson.name === '@quantfive/freecut-editor-surface',
     'unexpected package name',
   )
+  assertCondition(
+    packageJson.publishConfig?.registry === NPMJS_REGISTRY &&
+      packageJson.publishConfig?.access === 'public',
+    'publishConfig must target the public npmjs registry',
+  )
+}
+
+function main() {
+  assertPublicNpmjsTarget()
   // Preflight: provenance inventories, deterministic pack, and a fresh
   // consumer install+smoke of the exact tarball (the consumer script runs
   // package:editor-surface itself).
@@ -49,14 +59,7 @@ function main() {
   run(npmCommand(), ['run', 'test:editor-surface:consumer'])
   assertCondition(fs.existsSync(artifactPath), `artifact does not exist: ${artifactPath}`)
 
-  const args = [
-    'publish',
-    artifactPath,
-    `--registry=${NPMJS_REGISTRY}`,
-    // The scoped package must stay publicly installable for CodePress; the
-    // flag applies to this publish only and does not modify the manifest.
-    '--access=public',
-  ]
+  const args = ['publish', artifactPath]
   if (dryRun) args.push('--dry-run')
   run(npmCommand(), args)
   console.log(
