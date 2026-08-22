@@ -52,35 +52,42 @@ manifest points at `https://registry.npmjs.org` with `"access": "public"`
 (enforced by `scripts/package-editor-surface.mjs`). GitHub Packages is no
 longer a release target for this package.
 
-**CI (tag or manual dispatch).** The workflow in
-`.github/workflows/publish-editor-surface.yml` verifies provenance, builds
-the deterministic tarball, smoke-tests it as an installed consumer, and
-publishes to npmjs with `NODE_AUTH_TOKEN` from the `NPM_TOKEN` repo secret
-(npm automation token with publish rights on the `@quantfive` scope). A repo
-admin must add that secret before tag publishes work; until then, use the
-manual path below.
+**CI (the release path).** `codepress-main` is the release branch. The
+workflow in `.github/workflows/publish-editor-surface.yml` runs on every push
+to `codepress-main` and on `freecut-editor-surface-v*` tags: it verifies
+provenance, builds the deterministic tarball, smoke-tests it as an installed
+consumer, and publishes to npmjs. A merge that does not bump the version is a
+no-op, not a failure — the workflow skips publishing a version that already
+exists.
 
-**Manual (maintainer).** Run from a clean checkout of the merged staging
-commit with local npm auth, naming that commit explicitly:
+Publishing uses npm trusted publishing (OIDC): the workflow exchanges its
+GitHub Actions identity token for a short-lived npm credential and publishes
+with `--provenance`. There is no `NPM_TOKEN` secret in this repository, and
+none should be added. The trusted publisher is configured on npmjs.com
+against this repository and `.github/workflows/publish-editor-surface.yml`;
+changing that filename breaks publishing until the publisher entry is updated
+to match.
+
+**Manual (maintainer fallback).** Run from a clean checkout of the merged
+release commit with local npm auth, naming that commit explicitly:
 
 ```bash
 npm ci --ignore-scripts
-npm run publish:editor-surface:npmjs -- --ref <merged-staging-sha>
+npm run publish:editor-surface:npmjs -- --ref <merged-release-sha>
 ```
 
 `scripts/publish-editor-surface-npmjs.mjs` refuses to package anything else:
 before the preflight it requires a clean worktree (`git status --porcelain`
-empty), HEAD equal to `--ref`, and `--ref` an ancestor of `origin/staging`
-— so the public artifact is always reproducible from the merged staging
-revision, never from uncommitted or unrelated source. The guards run in
-`--dry-run` too. After the guards it runs the preflight (provenance
-verification, deterministic pack, and a fresh-consumer install + smoke of
-the exact tarball) and then publishes
+empty), HEAD equal to `--ref`, and `--ref` an ancestor of
+`origin/codepress-main` — so the public artifact is always reproducible from
+the merged release revision, never from uncommitted or unrelated source. The
+guards run in `--dry-run` too. After the guards it runs the preflight
+(provenance verification, deterministic pack, and a fresh-consumer install +
+smoke of the exact tarball) and then publishes
 `artifacts/freecut-editor-surface-<version>.tgz` to npmjs. Run
 `npm run publish:editor-surface:npmjs -- --ref <sha> --dry-run` to validate
 without publishing; guard behavior is covered by
-`npm run test:publish-editor-surface-guards`. Versions 0.3.1 and 0.3.2 are
-released this way.
+`npm run test:publish-editor-surface-guards`.
 
 Do not commit a token.
 

@@ -1,7 +1,7 @@
 # FreeCut QA Gates
 
 FreeCut's QA gate set mirrors the CodePress delivery gates. Every PR to
-`staging` must run the full gate set at its **exact head** and post a
+`codepress-main` must run the full gate set at its **exact head** and post a
 [canonical QA report](./canonical-report.md) as a PR comment. A PR stays
 **DRAFT** until a trusted judge returns PASS — no self-merge, no report
 comment or evaluator may mark a PR ready.
@@ -62,7 +62,7 @@ through `FREECUT_CHROME_ARGS` / `FREECUT_CHROME_ARGS_REPLACE` (see
 
 ## Baseline failures are disclosed, never hidden
 
-If a gate fails on `staging` before your change (an inherited baseline
+If a gate fails on `codepress-main` before your change (an inherited baseline
 failure — e.g. full-suite jsdom/localStorage failures), record it as FAIL in
 the report with the note `inherited from base <sha>` and reproduce it at the
 base SHA. Never edit allowlists, skip lists, or config to make an inherited

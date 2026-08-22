@@ -11,7 +11,7 @@ Template:
 ## Canonical QA Report
 
 ### Verifier revision binding
-base: <40-hex> (origin/staging)
+base: <40-hex> (origin/codepress-main)
 head: <40-hex>
 git rev-parse HEAD -> <40-hex>
 git status --porcelain -> (empty)

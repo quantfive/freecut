@@ -17,7 +17,7 @@ function commitFile(cwd, name, content) {
   return git(cwd, ['rev-parse', 'HEAD'])
 }
 
-// Two-commit fixture: A <- B, with origin/staging pointing at B.
+// Two-commit fixture: A <- B, with origin/codepress-main pointing at B.
 function initRepo() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'editor-surface-npmjs-guards-'))
   git(dir, ['init', '-q', '-b', 'main'])
@@ -25,16 +25,16 @@ function initRepo() {
   git(dir, ['config', 'user.name', 'Test'])
   const shaA = commitFile(dir, 'a.txt', 'a')
   const shaB = commitFile(dir, 'b.txt', 'b')
-  git(dir, ['update-ref', 'refs/remotes/origin/staging', shaB])
+  git(dir, ['update-ref', 'refs/remotes/origin/codepress-main', shaB])
   return { dir, shaA, shaB }
 }
 
-test('accepts a clean tree whose HEAD matches --ref on origin/staging', () => {
+test('accepts a clean tree whose HEAD matches --ref on origin/codepress-main', () => {
   const { dir, shaB } = initRepo()
   assert.equal(assertReleaseRevision(dir, shaB), shaB)
 })
 
-test('accepts --ref HEAD for a clean staging-tip checkout', () => {
+test('accepts --ref HEAD for a clean release-tip checkout', () => {
   const { dir, shaB } = initRepo()
   assert.equal(assertReleaseRevision(dir, 'HEAD'), shaB)
 })
@@ -50,12 +50,12 @@ test('rejects when HEAD does not match --ref', () => {
   assert.throws(() => assertReleaseRevision(dir, shaA), /does not match --ref/)
 })
 
-test('rejects a ref that is not an ancestor of origin/staging', () => {
+test('rejects a ref that is not an ancestor of origin/codepress-main', () => {
   const { dir } = initRepo()
   git(dir, ['checkout', '-q', '--orphan', 'unrelated'])
   git(dir, ['rm', '-q', '-rf', '.'])
   const orphan = commitFile(dir, 'orphan.txt', 'orphan')
-  assert.throws(() => assertReleaseRevision(dir, orphan), /not an ancestor of origin\/staging/)
+  assert.throws(() => assertReleaseRevision(dir, orphan), /not an ancestor of origin\/codepress-main/)
 })
 
 test('rejects a missing --ref argument', () => {

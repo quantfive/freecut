@@ -7,7 +7,7 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const PACKAGE_ROOT = path.join(ROOT, 'packages/freecut-editor')
 const packageJson = JSON.parse(fs.readFileSync(path.join(PACKAGE_ROOT, 'package.json'), 'utf8'))
 const NPMJS_REGISTRY = 'https://registry.npmjs.org'
-const STAGING_REF = 'origin/staging'
+const RELEASE_REF = 'origin/codepress-main'
 const artifactName = `freecut-editor-surface-${packageJson.version}.tgz`
 const artifactPath = path.join(ROOT, 'artifacts', artifactName)
 const dryRun = process.argv.includes('--dry-run')
@@ -47,14 +47,14 @@ function resolveCommit(cwd, ref) {
 
 /**
  * Release guards: the public npmjs artifact must be packaged from the exact
- * merged staging revision, never from uncommitted or unrelated source.  Runs
+ * merged release revision, never from uncommitted or unrelated source.  Runs
  * before any preflight/build step, in dry-run mode too.
  * Exported for scripts/publish-editor-surface-npmjs.test.mjs.
  */
 export function assertReleaseRevision(cwd, refArg) {
   assertCondition(
     typeof refArg === 'string' && refArg.length > 0,
-    'release requires an explicit --ref <merged-staging-sha> (or --ref HEAD)',
+    'release requires an explicit --ref <merged-release-sha> (or --ref HEAD)',
   )
   assertCondition(
     git(cwd, ['status', '--porcelain']) === '',
@@ -67,9 +67,9 @@ export function assertReleaseRevision(cwd, refArg) {
     `HEAD (${head}) does not match --ref ${release}; check out the release commit first`,
   )
   try {
-    execFileSync('git', ['merge-base', '--is-ancestor', release, STAGING_REF], { cwd })
+    execFileSync('git', ['merge-base', '--is-ancestor', release, RELEASE_REF], { cwd })
   } catch {
-    fail(`--ref ${release} is not an ancestor of ${STAGING_REF}; publish only the merged staging revision`)
+    fail(`--ref ${release} is not an ancestor of ${RELEASE_REF}; publish only the merged release revision`)
   }
   return release
 }
@@ -82,9 +82,9 @@ function readArg(name) {
   return value
 }
 
-// Manual public-npmjs release path (fallback for the tag/dispatch CI
-// workflow, which needs the NPM_TOKEN repo secret).  publishConfig in the
-// manifest is the canonical npmjs target (enforced by
+// Manual public-npmjs release path (fallback for the CI workflow, which
+// publishes from `codepress-main` via npm trusted publishing / OIDC).
+// publishConfig in the manifest is the canonical npmjs target (enforced by
 // scripts/package-editor-surface.mjs); this script adds the release
 // preflight and publishes the exact smoke-tested tarball with the
 // maintainer's local npm auth.
@@ -104,7 +104,7 @@ function main() {
   assertPublicNpmjsTarget()
   const release = assertReleaseRevision(ROOT, readArg('--ref'))
   console.log(
-    `[editor-surface-npmjs] release revision ${release} verified (clean tree, HEAD match, ${STAGING_REF} ancestor)`,
+    `[editor-surface-npmjs] release revision ${release} verified (clean tree, HEAD match, ${RELEASE_REF} ancestor)`,
   )
   // Preflight: provenance inventories, deterministic pack, and a fresh
   // consumer install+smoke of the exact tarball (the consumer script runs

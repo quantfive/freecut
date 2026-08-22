@@ -43,4 +43,4 @@ npm run package:reproducible
 
 `package:reproducible` removes the ignored `dist/` output, runs the production build, verifies provenance/inventory checks, and writes `artifacts/freecut-<source-revision>.tar.gz`. The archive has sorted paths, normalized metadata, zero timestamps, and uid/gid 0. It contains the built `dist/`, package manifests, provenance manifests, the MIT license, and retained notices.
 
-Run the command twice and compare the resulting archive with `cmp` to verify byte-for-byte reproducibility. CI performs that comparison on every pull request and push to `main` or `staging`.
+Run the command twice and compare the resulting archive with `cmp` to verify byte-for-byte reproducibility. CI performs that comparison on every pull request and push to `main` or `codepress-main`.

@@ -17,7 +17,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
-const DEFAULT_BASE_REF = 'origin/staging'
+const DEFAULT_BASE_REF = 'origin/codepress-main'
 
 function fail(message) {
   console.error(`[qa-head-binding] ${message}`)

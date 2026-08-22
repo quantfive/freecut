@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
 
-const DEFAULT_BASE_REF = 'origin/staging';
+const DEFAULT_BASE_REF = 'origin/codepress-main';
 const FALLOW_PACKAGE = 'fallow@2.89.0';
 
 function getBaseRef() {
