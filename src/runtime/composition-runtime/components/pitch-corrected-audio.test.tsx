@@ -409,3 +409,99 @@ describe('PitchCorrectedAudio', () => {
     expect(document.querySelector('[data-testid="pitch"]')).toBeInTheDocument()
   })
 })
+
+describe('PitchCorrectedAudio cross-origin media', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    clockRateMocks.current = 1
+    playbackStateMocks.current = {
+      frame: 0,
+      fps: 30,
+      playing: false,
+      resolvedVolume: 1,
+      resolvedPitchShiftSemitones: 0,
+      resolvedAudioEqStages: [],
+    }
+  })
+
+  it('drives the element directly instead of the silenced Web Audio path', async () => {
+    const { rerender } = render(
+      <PitchCorrectedAudio
+        src="https://cdn.example.com/a.mp3"
+        mediaId="media-1"
+        itemId="item-1"
+        durationInFrames={120}
+        playbackRate={1}
+      />,
+    )
+
+    await waitFor(() => {
+      expect(previewAudioMocks.acquirePreviewAudioElement).toHaveBeenCalledWith(
+        'https://cdn.example.com/a.mp3',
+      )
+    })
+
+    expect(previewGraphMocks.createPreviewClipAudioGraph).not.toHaveBeenCalled()
+    expect(previewGraphMocks.graph.context.createMediaElementSource).not.toHaveBeenCalled()
+    expect(previewAudioMocks.markPreviewAudioElementUsesWebAudio).not.toHaveBeenCalled()
+
+    const audio = previewAudioMocks.state.current
+    expect(audio).not.toBeNull()
+
+    playbackStateMocks.current = { ...playbackStateMocks.current, resolvedVolume: 0.4 }
+    rerender(
+      <PitchCorrectedAudio
+        src="https://cdn.example.com/a.mp3"
+        mediaId="media-1"
+        itemId="item-1"
+        durationInFrames={120}
+        playbackRate={1}
+        volumeMultiplier={1.01}
+      />,
+    )
+
+    await waitFor(() => {
+      expect(audio?.volume).toBeCloseTo(0.4)
+    })
+    expect(audio?.muted).toBe(false)
+    expect(previewGraphMocks.rampPreviewClipGain).not.toHaveBeenCalled()
+
+    rerender(
+      <PitchCorrectedAudio
+        src="https://cdn.example.com/a.mp3"
+        mediaId="media-1"
+        itemId="item-1"
+        durationInFrames={120}
+        playbackRate={1}
+        muted
+      />,
+    )
+
+    await waitFor(() => {
+      expect(audio?.muted).toBe(true)
+      expect(audio?.volume).toBe(0)
+    })
+    expect(previewGraphMocks.rampPreviewClipGain).not.toHaveBeenCalled()
+  })
+
+  it('keeps same-origin blob sources on the Web Audio graph', async () => {
+    render(
+      <PitchCorrectedAudio
+        src="blob:audio"
+        mediaId="media-1"
+        itemId="item-1"
+        durationInFrames={120}
+        playbackRate={1}
+      />,
+    )
+
+    await waitFor(() => {
+      expect(previewGraphMocks.graph.context.createMediaElementSource).toHaveBeenCalledWith(
+        previewAudioMocks.state.current,
+      )
+    })
+    expect(previewAudioMocks.markPreviewAudioElementUsesWebAudio).toHaveBeenCalledWith(
+      previewAudioMocks.state.current,
+    )
+  })
+})

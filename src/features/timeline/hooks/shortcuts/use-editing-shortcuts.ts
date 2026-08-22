@@ -22,18 +22,14 @@ import type { TimelineShortcutCallbacks } from '../use-timeline-shortcuts'
 import { useClearKeyframesDialogStore } from '@/shared/state/clear-keyframes-dialog'
 import { useResolvedHotkeys } from '@/features/timeline/deps/settings'
 import { useKeyframeSelectionStore } from '../../stores/keyframe-selection-store'
+import { useDeleteShortcuts } from './use-delete-shortcuts'
 
 export function useEditingShortcuts(callbacks: TimelineShortcutCallbacks) {
   const hotkeys = useResolvedHotkeys()
   const selectedItemIds = useSelectionStore((s) => s.selectedItemIds)
-  const selectedMarkerId = useSelectionStore((s) => s.selectedMarkerId)
-  const selectedTransitionId = useSelectionStore((s) => s.selectedTransitionId)
   const editKeyframePanelOpen = useSelectionStore((s) => s.editKeyframePanelOpen)
   const clearSelection = useSelectionStore((s) => s.clearSelection)
   const selectedKeyframes = useKeyframeSelectionStore((s) => s.selectedKeyframes)
-  const removeItems = useTimelineStore((s) => s.removeItems)
-  const removeMarker = useTimelineStore((s) => s.removeMarker)
-  const removeTransition = useTimelineStore((s) => s.removeTransition)
   const rippleDeleteItems = useTimelineStore((s) => s.rippleDeleteItems)
   const updateItemsTransformMap = useTimelineStore((s) => s.updateItemsTransformMap)
   const joinItems = useTimelineStore((s) => s.joinItems)
@@ -51,6 +47,10 @@ export function useEditingShortcuts(callbacks: TimelineShortcutCallbacks) {
     keyframeEditorShortcutScopeActive ||
     (editKeyframePanelOpen && selectedKeyframes.length > 0) ||
     transcriptEditorShortcutScopeActive
+
+  // Delete/Backspace live in a dedicated hook so host-embedded surfaces can
+  // mount just the remove bindings.
+  useDeleteShortcuts(callbacks)
 
   const nudgeSelectedVisualItems = useCallback(
     (deltaX: number, deltaY: number) => {
@@ -76,92 +76,6 @@ export function useEditingShortcuts(callbacks: TimelineShortcutCallbacks) {
       updateItemsTransformMap(transforms, { operation: 'move' })
     },
     [selectedItemIds, items, updateItemsTransformMap],
-  )
-
-  // Editing: Delete - Delete selected items, marker, or transition
-  useHotkeys(
-    hotkeys.DELETE_SELECTED,
-    (event) => {
-      if (deleteOwnedByPanel) {
-        event.preventDefault()
-        event.stopPropagation()
-        return
-      }
-      if (selectedTransitionId) {
-        event.preventDefault()
-        removeTransition(selectedTransitionId)
-        clearSelection()
-        return
-      }
-      if (selectedMarkerId) {
-        event.preventDefault()
-        removeMarker(selectedMarkerId)
-        clearSelection()
-        return
-      }
-      if (selectedItemIds.length > 0) {
-        event.preventDefault()
-        removeItems(selectedItemIds)
-        if (callbacks.onDelete) {
-          callbacks.onDelete()
-        }
-      }
-    },
-    HOTKEY_OPTIONS,
-    [
-      deleteOwnedByPanel,
-      selectedItemIds,
-      selectedMarkerId,
-      selectedTransitionId,
-      removeItems,
-      removeMarker,
-      removeTransition,
-      clearSelection,
-      callbacks,
-    ],
-  )
-
-  // Editing: Backspace - Delete selected items, marker, or transition (alternative)
-  useHotkeys(
-    hotkeys.DELETE_SELECTED_ALT,
-    (event) => {
-      if (deleteOwnedByPanel) {
-        event.preventDefault()
-        event.stopPropagation()
-        return
-      }
-      if (selectedTransitionId) {
-        event.preventDefault()
-        removeTransition(selectedTransitionId)
-        clearSelection()
-        return
-      }
-      if (selectedMarkerId) {
-        event.preventDefault()
-        removeMarker(selectedMarkerId)
-        clearSelection()
-        return
-      }
-      if (selectedItemIds.length > 0) {
-        event.preventDefault()
-        removeItems(selectedItemIds)
-        if (callbacks.onDelete) {
-          callbacks.onDelete()
-        }
-      }
-    },
-    HOTKEY_OPTIONS,
-    [
-      deleteOwnedByPanel,
-      selectedItemIds,
-      selectedMarkerId,
-      selectedTransitionId,
-      removeItems,
-      removeMarker,
-      removeTransition,
-      clearSelection,
-      callbacks,
-    ],
   )
 
   // Editing: Ctrl+Delete - Ripple delete selected items (delete + close gap)

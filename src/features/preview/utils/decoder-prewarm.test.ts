@@ -22,6 +22,15 @@ import {
   clearObjectUrlRegistry,
   registerObjectUrl,
 } from '@/infrastructure/browser/object-url-registry'
+import { blobUrlManager } from '@/infrastructure/browser/blob-url-manager'
+import { updateMedia } from '@/infrastructure/storage'
+import { setWorkspaceRoot } from '@/infrastructure/storage/workspace-fs/root'
+import { clearKeyframeIndex, getKeyframeTimestamps } from '@/shared/utils/keyframe-index-registry'
+
+vi.mock('@/infrastructure/storage', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/infrastructure/storage')>()
+  return { ...actual, updateMedia: vi.fn() }
+})
 
 type MockWorkerMessage = {
   type: string
@@ -94,6 +103,7 @@ beforeEach(() => {
   mockBitmap = { close: vi.fn() } as unknown as ImageBitmap
   fetchMock = vi.fn()
   autoRespondPreseek = true
+  vi.mocked(updateMedia).mockClear()
 
   vi.stubGlobal('fetch', fetchMock)
   class WorkerStub extends MockWorker {
@@ -109,6 +119,9 @@ beforeEach(() => {
 afterEach(() => {
   disposePrewarmWorker()
   clearObjectUrlRegistry()
+  blobUrlManager.releaseAll()
+  setWorkspaceRoot(null)
+  clearKeyframeIndex()
   vi.unstubAllGlobals()
 })
 
@@ -710,5 +723,49 @@ describe('decoder prewarm', () => {
     } as MessageEvent)
 
     expect(mockBitmap.close).toHaveBeenCalledTimes(1)
+  })
+
+  it('skips keyframe persistence when no workspace root is set (host-mounted surface)', () => {
+    // Host-mounted consumers (e.g. CodePress) never render <WorkspaceGate>, so
+    // requireWorkspaceRoot() inside updateMedia would throw on every decoded
+    // play/pause cycle. Persistence must be gated off; in-session registration
+    // still happens.
+    setWorkspaceRoot(null)
+    blobUrlManager.registerUrl('media-host-mounted', 'blob:kf-no-root')
+    warmDecoderPrewarmWorkerPool()
+    const worker = createdWorkers[0]!
+
+    expect(() =>
+      worker.onmessage?.({
+        data: {
+          type: 'keyframes_extracted',
+          src: 'blob:kf-no-root',
+          keyframeTimestamps: [0, 1.5, 3],
+        },
+      } as MessageEvent),
+    ).not.toThrow()
+
+    expect(getKeyframeTimestamps('blob:kf-no-root')).toEqual([0, 1.5, 3])
+    expect(updateMedia).not.toHaveBeenCalled()
+  })
+
+  it('persists extracted keyframes to storage when a workspace root is set', () => {
+    setWorkspaceRoot({ name: 'workspace' } as FileSystemDirectoryHandle)
+    blobUrlManager.registerUrl('media-persisted', 'blob:kf-with-root')
+    warmDecoderPrewarmWorkerPool()
+    const worker = createdWorkers[0]!
+
+    worker.onmessage?.({
+      data: {
+        type: 'keyframes_extracted',
+        src: 'blob:kf-with-root',
+        keyframeTimestamps: [0, 2],
+      },
+    } as MessageEvent)
+
+    expect(getKeyframeTimestamps('blob:kf-with-root')).toEqual([0, 2])
+    expect(updateMedia).toHaveBeenCalledWith('media-persisted', {
+      keyframeTimestamps: [0, 2],
+    })
   })
 })

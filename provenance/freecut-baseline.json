@@ -34,7 +34,7 @@
   ],
   "dependencies": {
     "packageJson": "package.json",
-    "packageJsonSha256": "331cb27e2fa2e50dbf9759e625e6d2b9c97db2205ee5870c8157ffbb2b14f971",
+    "packageJsonSha256": "0fcaa186e39d48d5e4e95339c0a853543aeea2a8bbbb54691a51502eb4d3bd5b",
     "lockfile": "package-lock.json",
     "lockfileVersion": 3,
     "lockfileSha256": "b4a86741ce7891da1f63df01b6fdd4ed507e8887d5097c6a0f93fc2ea6f3420e",
@@ -79,14 +79,7 @@
     "packageCommand": "npm run package:reproducible",
     "artifactPattern": "artifacts/freecut-<source-revision>.tar.gz",
     "archiveFormat": "deterministic tar.gz with sorted paths, zeroed mtimes, and uid/gid 0",
-    "contents": [
-      "dist/",
-      "LICENSE",
-      "notices/",
-      "package.json",
-      "package-lock.json",
-      "provenance/"
-    ]
+    "contents": ["dist/", "LICENSE", "notices/", "package.json", "package-lock.json", "provenance/"]
   },
   "ciVerification": {
     "workflow": ".github/workflows/reproducible-package.yml",

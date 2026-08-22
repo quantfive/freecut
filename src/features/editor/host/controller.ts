@@ -11,6 +11,7 @@ import {
 } from './contract'
 import {
   createCodePressCommandAdapter,
+  MAX_COMMANDS_PER_OPERATION,
   type EditCommand,
   type EditCommandBatch,
   type FreeCutFrameDocument,
@@ -39,6 +40,10 @@ function stableSerialize(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(stableSerialize).join(',')}]`
   if (value && typeof value === 'object') {
     return `{${Object.entries(value as Record<string, unknown>)
+      // A present-but-undefined key is equivalent to a missing key: host
+      // snapshots omit unset optional fields while the native round trip may
+      // surface them explicitly.
+      .filter(([, entry]) => entry !== undefined)
       .sort(([left], [right]) => left.localeCompare(right))
       .map(([key, entry]) => `${JSON.stringify(key)}:${stableSerialize(entry)}`)
       .join(',')}}`
@@ -63,6 +68,18 @@ function isFrameClip(item: FreeCutFrameItem): item is FrameClip {
 function sourceBounds(item: FrameClip): [number, number] {
   const start = item.sourceStart ?? item.from
   return [start, item.sourceEnd ?? start + item.durationInFrames]
+}
+
+/**
+ * Host snapshots may omit source bounds; the native bridge synthesizes them
+ * (sourceStart ?? from, sourceEnd ?? sourceStart + duration).  Fill the same
+ * defaults on both sides so an unchanged item compares equal regardless of
+ * which side carried the explicit keys.
+ */
+function withSynthesizedSourceBounds(item: FreeCutFrameItem): FreeCutFrameItem {
+  if (!isFrameClip(item)) return item
+  const [sourceStart, sourceEnd] = sourceBounds(item)
+  return { ...item, sourceStart, sourceEnd }
 }
 
 function trackIndex(document: FreeCutFrameDocument, trackId: string): number {
@@ -197,7 +214,8 @@ function commandIdsForChanges(
     return (
       before !== undefined &&
       after !== undefined &&
-      stableSerialize(before) !== stableSerialize(after)
+      stableSerialize(withSynthesizedSourceBounds(before)) !==
+        stableSerialize(withSynthesizedSourceBounds(after))
     )
   })
   return { added, removed, changed }
@@ -254,13 +272,24 @@ export function deriveSupportedHostEdit(
     changed.length === 0
   ) {
     // Track creation is already represented by the add_track commands above.
-  } else if (removed.length === 1 && added.length === 0 && changed.length === 0) {
-    const id = removed[0]!
-    const before = previousItems.get(id)!
-    if (before.type === 'caption_cue')
+  } else if (removed.length >= 1 && added.length === 0 && changed.length === 0) {
+    const removedItems = removed.map((id) => previousItems.get(id)!)
+    if (removedItems.some((item) => item.type === 'caption_cue'))
       return { batch: null, reason: 'Caption removal is not supported' }
-    commands.push({ command_id: `remove-${id}`, type: 'remove_item', item_id: id })
-    preconditions.push(preconditionForItem(before, fps))
+    if (commands.length + removedItems.length > MAX_COMMANDS_PER_OPERATION) {
+      return {
+        batch: null,
+        reason: `Removing ${removedItems.length} items exceeds the ${MAX_COMMANDS_PER_OPERATION}-command host operation limit`,
+      }
+    }
+    for (const before of removedItems) {
+      commands.push({
+        command_id: `remove-${before.id}`,
+        type: 'remove_item',
+        item_id: before.id,
+      })
+      preconditions.push(preconditionForItem(before, fps))
+    }
   } else if (added.length === 1 && removed.length === 0 && changed.length === 0) {
     const id = added[0]!
     const after = nextItems.get(id)!

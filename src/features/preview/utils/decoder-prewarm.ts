@@ -22,6 +22,7 @@ import {
 } from '@/infrastructure/browser/object-url-registry'
 import { blobUrlManager } from '@/infrastructure/browser/blob-url-manager'
 import { updateMedia } from '@/infrastructure/storage'
+import { getWorkspaceRoot } from '@/infrastructure/storage/workspace-fs/root'
 import {
   getKeyframeTimestamps,
   registerKeyframeIndex,
@@ -229,9 +230,12 @@ function handleWorkerMessage(event: MessageEvent): void {
     // Register in main-thread registry for the export/edit overlay path.
     registerKeyframeIndex(msg.src, msg.keyframeTimestamps)
     keyframesSentForSrc.add(msg.src)
-    // Persist to IndexedDB so future sessions don't need re-extraction
+    // Persist to IndexedDB so future sessions don't need re-extraction.
+    // Host-mounted surfaces (no <WorkspaceGate>) have no workspace root, so
+    // cross-session keyframe persistence is skipped there — the in-session
+    // registry above still serves the export/edit overlay path.
     const mediaId = blobUrlManager.getMediaIdByUrl(msg.src)
-    if (mediaId) {
+    if (mediaId && getWorkspaceRoot()) {
       void updateMedia(mediaId, { keyframeTimestamps: msg.keyframeTimestamps })
     }
     return

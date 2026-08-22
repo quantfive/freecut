@@ -28,6 +28,7 @@ import { toast } from 'sonner'
 import { useEditorHotkeys } from '@/features/editor/hooks/use-editor-hotkeys'
 import { useAutoSave } from '../hooks/use-auto-save'
 import {
+  useHostTimelineShortcuts,
   useTimelineShortcuts,
   useTransitionBreakageNotifications,
 } from '@/features/editor/deps/timeline-hooks'
@@ -429,6 +430,14 @@ const TimelineShortcutsController = memo(function TimelineShortcutsController() 
   return null
 })
 
+// Host mode mounts only the host-safe shortcut slice (playback, tools,
+// delete, zoom/snap) — undo/redo, ripple delete, clipboard, markers, and
+// nudges would mutate local stores without crossing the host bridge.
+const HostTimelineShortcutsController = memo(function HostTimelineShortcutsController() {
+  useHostTimelineShortcuts()
+  return null
+})
+
 // fallow-ignore-next-line complexity
 export const LoadedEditor = memo(function LoadedEditor({
   projectId,
@@ -746,6 +755,7 @@ export const LoadedEditor = memo(function LoadedEditor({
     >
       {!hostRuntime && <AutoSaveController onSave={handleSave} />}
       {!hostRuntime && <TimelineShortcutsController />}
+      {hostRuntime && <HostTimelineShortcutsController />}
       {!hostRuntime && (
         <LocalRouterBridge projectId={projectId} onReady={setLocalRefreshMigration} />
       )}

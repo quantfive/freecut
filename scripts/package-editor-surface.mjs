@@ -88,9 +88,9 @@ function verifyPackageInputs() {
   assertCondition(/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(packageJson.version), 'package version must be semver')
   assertCondition(
     publishConfig.registry === 'https://registry.npmjs.org',
-    'package must target the public npm registry',
+    'package must target the public npmjs registry',
   )
-  assertCondition(publishConfig.access === 'public', 'package must publish with public npm access')
+  assertCondition(publishConfig.access === 'public', 'package must enable public npm access')
   assertCondition(packageJson.exports?.['./style.css'] === './dist/style.css', 'style export must be stable')
   assertCondition(packageJson.peerDependencies?.react, 'React must remain a peer dependency')
   assertCondition(packageJson.peerDependencies?.['react-dom'], 'React DOM must remain a peer dependency')
