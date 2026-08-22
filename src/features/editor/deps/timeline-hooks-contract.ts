@@ -4,6 +4,7 @@
  */
 
 export {
+  useHostTimelineShortcuts,
   useTimelineShortcuts,
 } from '@/features/timeline/hooks/use-timeline-shortcuts'
 export {

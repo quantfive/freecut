@@ -1,0 +1,1 @@
+Pipeline config loaded from /opt/acme/pipeline/config.yaml at startup.

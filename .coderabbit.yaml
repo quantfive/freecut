@@ -3,4 +3,4 @@ reviews:
     enabled: false
     base_branches:
       - main
-      - staging
+      - codepress-main

@@ -19,6 +19,7 @@ import {
   setPreviewClipGain,
   type PreviewClipAudioGraph,
 } from '../utils/preview-audio-graph'
+import { isWebAudioSafeMediaSource } from '../utils/media-source-origin'
 import { SoundTouchWorkletAudio } from './soundtouch-worklet-audio'
 import type { AudioPlaybackProps } from './audio-playback-props'
 import { getBrowserMediaPlaybackRate } from '@/shared/state/playback/shuttle'
@@ -221,6 +222,24 @@ export const NativePitchCorrectedAudio: React.FC<PitchCorrectedAudioProps> = Rea
 
     useEffect(() => {
       const audio = acquirePreviewAudioElement(src)
+
+      // Cross-origin media without CORS approval is silenced by
+      // MediaElementAudioSourceNode (HTML spec) — host-provided signed URLs
+      // keep the element on the direct volume/muted path (driven by the sync
+      // effect below) instead of the Web Audio graph.  EQ is graph-only and
+      // does not apply on this path.
+      if (!isWebAudioSafeMediaSource(src)) {
+        audioRef.current = audio
+        return () => {
+          audioRef.current = null
+          if (preWarmTimerRef.current !== null) {
+            clearTimeout(preWarmTimerRef.current)
+            preWarmTimerRef.current = null
+          }
+          releasePreviewAudioElement(audio)
+        }
+      }
+
       // Keep the media element and graph alive across EQ toggles; the EQ stages ramp in place below.
       const graph = createPreviewClipAudioGraph()
       if (!graph) {
@@ -266,10 +285,17 @@ export const NativePitchCorrectedAudio: React.FC<PitchCorrectedAudioProps> = Rea
     }, [mediaPlaybackRate])
 
     useEffect(() => {
-      const graph = graphRef.current
-      if (!graph) return
       const clampedVolume = muted ? 0 : Math.max(0, finalVolume)
-      rampPreviewClipGain(graph, clampedVolume)
+      const graph = graphRef.current
+      if (graph) {
+        rampPreviewClipGain(graph, clampedVolume)
+        return
+      }
+      // Direct path (cross-origin source): drive the element itself.
+      const audio = audioRef.current
+      if (!audio) return
+      audio.muted = muted
+      audio.volume = Math.min(1, clampedVolume)
     }, [finalVolume, muted])
 
     useEffect(() => {

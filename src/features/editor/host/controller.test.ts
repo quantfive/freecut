@@ -437,4 +437,242 @@ describe('embedded FreeCut host controller', () => {
     })
     expect(adapter.capabilities).toEqual({})
   })
+
+  describe('host round-trip stability', () => {
+    async function flushReconcile(): Promise<void> {
+      for (let i = 0; i < 10; i += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 0))
+      }
+    }
+
+    function minimalTwoClipSnapshot(): EmbeddedEditorSnapshot {
+      const initial = snapshot()
+      const track = initial.timeline.tracks[0]!
+      return {
+        ...initial,
+        timeline: {
+          ...initial.timeline,
+          tracks: [
+            {
+              ...track,
+              items: [
+                // Minimal host clips: no volume/speed/opacity/transform keys,
+                // and clip-2 omits sourceStart/sourceEnd entirely.
+                {
+                  type: 'video',
+                  id: 'clip-1',
+                  trackId: 'track-1',
+                  mediaId: 'media-1',
+                  from: 0,
+                  durationInFrames: 60,
+                  sourceStart: 0,
+                  sourceEnd: 60,
+                },
+                {
+                  type: 'video',
+                  id: 'clip-2',
+                  trackId: 'track-1',
+                  mediaId: 'media-1',
+                  from: 60,
+                  durationInFrames: 60,
+                },
+              ],
+            },
+          ],
+        },
+      }
+    }
+
+    it('derives a move_item command for a store drag of a minimal host clip', async () => {
+      const initial = minimalTwoClipSnapshot()
+      const harness = createFakeHost(initial)
+      const runtime = new EmbeddedEditorHostRuntime(harness.host, initial)
+      runtime.mountStores()
+      try {
+        useTimelineStore.getState().moveItem('clip-1', 30)
+        await flushReconcile()
+
+        expect(harness.submitEdit).toHaveBeenCalledTimes(1)
+        const batch = harness.submitEdit.mock.calls[0]![0] as EditCommandBatch
+        expect(batch.commands).toEqual([
+          expect.objectContaining({ type: 'move_item', item_id: 'clip-1' }),
+        ])
+        // The untouched clip must not leak into the derived change set.
+        expect(batch.commands.some((command) => command.command_id.includes('clip-2'))).toBe(
+          false,
+        )
+      } finally {
+        runtime.unmountStores()
+      }
+    })
+
+    it('derives a trim_item command for a store trim of a minimal host clip', async () => {
+      const initial = minimalTwoClipSnapshot()
+      const harness = createFakeHost(initial)
+      const runtime = new EmbeddedEditorHostRuntime(harness.host, initial)
+      runtime.mountStores()
+      try {
+        useTimelineStore.getState().updateItem('clip-1', { durationInFrames: 40, sourceEnd: 40 })
+        await flushReconcile()
+
+        expect(harness.submitEdit).toHaveBeenCalledTimes(1)
+        const batch = harness.submitEdit.mock.calls[0]![0] as EditCommandBatch
+        expect(batch.commands).toEqual([
+          expect.objectContaining({ type: 'trim_item', item_id: 'clip-1', edge: 'end' }),
+        ])
+      } finally {
+        runtime.unmountStores()
+      }
+    })
+
+    it('derives a move_item command for a host text item with the default color', async () => {
+      const initial = snapshot()
+      const track = initial.timeline.tracks[0]!
+      const withText: EmbeddedEditorSnapshot = {
+        ...initial,
+        timeline: {
+          ...initial.timeline,
+          tracks: [
+            {
+              ...track,
+              items: [
+                ...track.items,
+                {
+                  type: 'text',
+                  id: 'text-1',
+                  trackId: 'track-1',
+                  from: 10,
+                  durationInFrames: 20,
+                  text: 'Hello host',
+                },
+              ],
+            },
+          ],
+        },
+      }
+      const harness = createFakeHost(withText)
+      const runtime = new EmbeddedEditorHostRuntime(harness.host, withText)
+      runtime.mountStores()
+      try {
+        // The native bridge defaults the text color to #ffffff; the round trip
+        // must not turn that default into a style mutation.
+        expect(
+          useTimelineStore.getState().items.find((item) => item.id === 'text-1'),
+        ).toMatchObject({ type: 'text', color: '#ffffff' })
+
+        useTimelineStore.getState().moveItem('text-1', 40)
+        await flushReconcile()
+
+        expect(harness.submitEdit).toHaveBeenCalledTimes(1)
+        const batch = harness.submitEdit.mock.calls[0]![0] as EditCommandBatch
+        expect(batch.commands).toEqual([
+          expect.objectContaining({ type: 'move_item', item_id: 'text-1' }),
+        ])
+      } finally {
+        runtime.unmountStores()
+      }
+    })
+
+    it('keeps a clip carrying top-level opacity movable through the round trip', async () => {
+      const initial = snapshot()
+      const track = initial.timeline.tracks[0]!
+      const clip = track.items[0]!
+      if (clip.type !== 'video') throw new Error('expected a video clip')
+      const withOpacity: EmbeddedEditorSnapshot = {
+        ...initial,
+        timeline: {
+          ...initial.timeline,
+          tracks: [
+            {
+              ...track,
+              items: [{ ...clip, opacity: 0.5 }],
+            },
+          ],
+        },
+      }
+      const harness = createFakeHost(withOpacity)
+      const runtime = new EmbeddedEditorHostRuntime(harness.host, withOpacity)
+      runtime.mountStores()
+      try {
+        useTimelineStore.getState().moveItem('clip-1', 30)
+        await flushReconcile()
+
+        expect(harness.submitEdit).toHaveBeenCalledTimes(1)
+        const batch = harness.submitEdit.mock.calls[0]![0] as EditCommandBatch
+        expect(batch.commands).toEqual([
+          expect.objectContaining({ type: 'move_item', item_id: 'clip-1' }),
+        ])
+      } finally {
+        runtime.unmountStores()
+      }
+    })
+
+    it('batches one remove_item command per removed item', () => {
+      const initial = minimalTwoClipSnapshot()
+      const next: EmbeddedEditorSnapshot = {
+        ...initial,
+        timeline: {
+          ...initial.timeline,
+          tracks: [{ ...initial.timeline.tracks[0]!, items: [] }],
+        },
+      }
+
+      const derived = deriveSupportedHostEdit(initial.timeline, next.timeline, {
+        operationId: 'operation-remove-2',
+        idempotencyKey: 'idempotency-remove-2',
+      })
+
+      expect(derived.batch?.commands).toEqual([
+        expect.objectContaining({ type: 'remove_item', item_id: 'clip-1' }),
+        expect.objectContaining({ type: 'remove_item', item_id: 'clip-2' }),
+      ])
+      expect(derived.batch?.preconditions).toHaveLength(2)
+    })
+
+    it('forwards a multi-select store removal to the host as one batched operation', async () => {
+      const initial = minimalTwoClipSnapshot()
+      const harness = createFakeHost(initial)
+      const runtime = new EmbeddedEditorHostRuntime(harness.host, initial)
+      runtime.mountStores()
+      try {
+        useTimelineStore.getState().removeItems(['clip-1', 'clip-2'])
+        await flushReconcile()
+
+        expect(harness.submitEdit).toHaveBeenCalledTimes(1)
+        const batch = harness.submitEdit.mock.calls[0]![0] as EditCommandBatch
+        expect(batch.commands).toEqual([
+          expect.objectContaining({ type: 'remove_item', item_id: 'clip-1' }),
+          expect.objectContaining({ type: 'remove_item', item_id: 'clip-2' }),
+        ])
+      } finally {
+        runtime.unmountStores()
+      }
+    })
+
+    it('rejects removals beyond the host per-operation command limit', () => {
+      const initial = snapshot()
+      const track = initial.timeline.tracks[0]!
+      const items = Array.from({ length: 65 }, (_, index) => ({
+        type: 'video' as const,
+        id: `clip-${index}`,
+        trackId: 'track-1',
+        mediaId: 'media-1',
+        from: index * 60,
+        durationInFrames: 60,
+      }))
+      const previous = {
+        ...initial.timeline,
+        tracks: [{ ...track, items }],
+      }
+      const next = {
+        ...initial.timeline,
+        tracks: [{ ...track, items: [] }],
+      }
+
+      const derived = deriveSupportedHostEdit(previous, next)
+
+      expect(derived.batch).toBeNull()
+      expect(derived.reason).toMatch(/exceeds the 64-command host operation limit/)
+    })
+  })
 })

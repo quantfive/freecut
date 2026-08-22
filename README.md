@@ -234,6 +234,13 @@ built-harness Chrome regression, every public edit operation, and generated
 media/audio rendering. Real-GPU effects remain an explicit operator/release
 gate because hosted PR CI does not provide a portable WebGPU adapter.
 
+### QA Gates
+
+Every PR to `codepress-main` runs the full QA gate set (head binding, static checks,
+provenance, consumer smoke, browser QA, redaction) and posts a canonical QA
+report; a PR stays DRAFT until a trusted judge returns PASS. See
+[docs/qa/README.md](docs/qa/README.md).
+
 ### Performance Checks
 
 - `npm run dev` is best for correctness and iteration, but includes React/Vite dev overhead, HMR, and debug instrumentation.
