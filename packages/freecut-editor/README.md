@@ -46,12 +46,16 @@ npm ci --ignore-scripts
 npm run package:editor-surface
 ```
 
-The command writes a deterministic tarball to `artifacts/`. The package is
-published to the `quantfive` GitHub Packages npm registry by the
-manual/tagged workflow in `.github/workflows/publish-editor-surface.yml`.
-The first GitHub Packages publication defaults to private; verify that
-visibility remains private and grant `quantfive/codepress` read access under
-**Manage Actions access** before CodePress installs it.
+The command writes a deterministic tarball to `artifacts/`. There are two
+release targets for that tarball:
+
+**GitHub Packages (CI).** The default target. `publishConfig.registry` in
+this manifest points at `https://npm.pkg.github.com` (enforced by
+`scripts/package-editor-surface.mjs`), and the manual/tagged workflow in
+`.github/workflows/publish-editor-surface.yml` publishes there with its
+`GITHUB_TOKEN`. The first GitHub Packages publication defaults to private;
+verify that visibility remains private and grant `quantfive/codepress` read
+access under **Manage Actions access** before CodePress installs it.
 
 For an authorized local publication, authenticate with a GitHub classic PAT
 that has `write:packages` and run:
@@ -73,6 +77,26 @@ CodePress should route the `@quantfive` scope to GitHub Packages and provide
 @quantfive:registry=https://npm.pkg.github.com
 //npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}
 ```
+
+**npmjs (manual, CodePress consumption).** CodePress installs this package
+from the public npm registry, and this repository has no `NPM_TOKEN` secret,
+so npmjs releases are a manual maintainer step run from a clean checkout of
+the merged staging commit:
+
+```bash
+npm ci --ignore-scripts
+npm run publish:editor-surface:npmjs
+```
+
+`scripts/publish-editor-surface-npmjs.mjs` runs the preflight (provenance
+verification, deterministic pack, and a fresh-consumer install + smoke of the
+exact tarball) and then publishes
+`artifacts/freecut-editor-surface-<version>.tgz` to
+`https://registry.npmjs.org` with `--access=public`, using the maintainer's
+local npm auth. The registry override is command-line only: the manifest
+keeps targeting GitHub Packages and the CI path is unchanged. Run
+`npm run publish:editor-surface:npmjs -- --dry-run` to validate without
+publishing. Versions 0.3.1 and 0.3.2 are released this way.
 
 It can then install the exact published version and keep it pinned in its
 lockfile:

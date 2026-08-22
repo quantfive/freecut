@@ -3,7 +3,7 @@
   "generatedFrom": "package.json",
   "packageName": "freecut",
   "packageVersion": "0.0.0",
-  "packageJsonSha256": "d585b800f4a701f45a5415e588c282fbb9067cbebc78316add16397052a6a493",
+  "packageJsonSha256": "fc5f67bdb87dd2cd411e2ab83c05c4066547c6db9be8130420ffec6864e04da1",
   "lockfile": {
     "path": "package-lock.json",
     "lockfileVersion": 3,
