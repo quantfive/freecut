@@ -292,6 +292,14 @@ export interface EditorHost {
     locator: MediaLocator,
   ): Promise<ResolvedMediaLocator | null> | ResolvedMediaLocator | null
   submitEdit(batch: EditCommandBatch): Promise<HostEditResult> | HostEditResult
+  /**
+   * Optional out-of-band authority push.  A host that can revise the timeline
+   * without the surface asking (an agent run, a collaborator's edit) delivers
+   * the new authoritative snapshot here; the surface adopts it in place
+   * instead of being remounted with a fresh `host`.  Returns an unsubscribe
+   * the surface calls when it tears the runtime down.
+   */
+  subscribe?(listener: (snapshot: EmbeddedEditorSnapshot) => void): () => void
   /** Optional application-issued transcript read/preview boundary. */
   transcript?: EditorTranscriptPort
   navigation?: EditorHostNavigation

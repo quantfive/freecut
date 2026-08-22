@@ -33,18 +33,28 @@ export function FreeCutEditorSurface({ host }: { host: EditorHost }) {
 
   useEffect(() => {
     let cancelled = false
+    let unsubscribe: (() => void) | undefined
     setState(null)
     setError(null)
     void Promise.all([Promise.resolve(host.load()), i18nReady])
       .then(([snapshot]) => {
         if (cancelled) return
-        setState({ snapshot, runtime: new EmbeddedEditorHostRuntime(host, snapshot) })
+        const runtime = new EmbeddedEditorHostRuntime(host, snapshot)
+        // An out-of-band host revision enters through the same controller the
+        // result of a submitted edit does, so the surface adopts it in place
+        // rather than being remounted with a new `host`.
+        unsubscribe = host.subscribe?.((next) =>
+          runtime.controller.replaceAuthoritativeSnapshot(next),
+        )
+        setState({ snapshot, runtime })
       })
       .catch((caught) => {
         if (!cancelled) setError(caught instanceof Error ? caught : new Error(String(caught)))
       })
     return () => {
       cancelled = true
+      unsubscribe?.()
+      unsubscribe = undefined
     }
   }, [host])
 
