@@ -340,6 +340,7 @@ export interface EditorHost {
     locator: MediaLocator,
   ): Promise<ResolvedMediaLocator | null> | ResolvedMediaLocator | null
   submitEdit(batch: EditCommandBatch): Promise<HostEditResult> | HostEditResult
+  subscribe?(listener: (snapshot: EmbeddedEditorSnapshot) => void): () => void
   transcript?: EditorTranscriptPort
   navigation?: EditorHostNavigation
   notify?(notice: HostNotice): void
