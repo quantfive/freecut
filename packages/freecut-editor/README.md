@@ -46,35 +46,45 @@ npm ci --ignore-scripts
 npm run package:editor-surface
 ```
 
-The command writes a deterministic tarball to `artifacts/`. The package is
-published to the `quantfive` GitHub Packages npm registry by the
-manual/tagged workflow in `.github/workflows/publish-editor-surface.yml`.
-The first GitHub Packages publication defaults to private; verify that
-visibility remains private and grant `quantfive/codepress` read access under
-**Manage Actions access** before CodePress installs it.
+The command writes a deterministic tarball to `artifacts/`. The canonical
+release target is the **public npmjs registry**: `publishConfig` in this
+manifest points at `https://registry.npmjs.org` with `"access": "public"`
+(enforced by `scripts/package-editor-surface.mjs`). GitHub Packages is no
+longer a release target for this package.
 
-For an authorized local publication, authenticate with a GitHub classic PAT
-that has `write:packages` and run:
+**CI (tag or manual dispatch).** The workflow in
+`.github/workflows/publish-editor-surface.yml` verifies provenance, builds
+the deterministic tarball, smoke-tests it as an installed consumer, and
+publishes to npmjs with `NODE_AUTH_TOKEN` from the `NPM_TOKEN` repo secret
+(npm automation token with publish rights on the `@quantfive` scope). A repo
+admin must add that secret before tag publishes work; until then, use the
+manual path below.
+
+**Manual (maintainer).** Run from a clean checkout of the merged staging
+commit with local npm auth, naming that commit explicitly:
 
 ```bash
-NODE_AUTH_TOKEN="$GITHUB_CLASSIC_PAT" npm publish \
-  artifacts/freecut-editor-surface-0.3.0.tgz \
-  --registry=https://npm.pkg.github.com
+npm ci --ignore-scripts
+npm run publish:editor-surface:npmjs -- --ref <merged-staging-sha>
 ```
 
-Do not commit a token. The workflow uses its `GITHUB_TOKEN` with
-`packages: write`; CodePress CI uses its `GITHUB_TOKEN` with `packages: read`
-after the repository has been granted package access.
+`scripts/publish-editor-surface-npmjs.mjs` refuses to package anything else:
+before the preflight it requires a clean worktree (`git status --porcelain`
+empty), HEAD equal to `--ref`, and `--ref` an ancestor of `origin/staging`
+— so the public artifact is always reproducible from the merged staging
+revision, never from uncommitted or unrelated source. The guards run in
+`--dry-run` too. After the guards it runs the preflight (provenance
+verification, deterministic pack, and a fresh-consumer install + smoke of
+the exact tarball) and then publishes
+`artifacts/freecut-editor-surface-<version>.tgz` to npmjs. Run
+`npm run publish:editor-surface:npmjs -- --ref <sha> --dry-run` to validate
+without publishing; guard behavior is covered by
+`npm run test:publish-editor-surface-guards`. Versions 0.3.1 and 0.3.2 are
+released this way.
 
-CodePress should route the `@quantfive` scope to GitHub Packages and provide
-`NODE_AUTH_TOKEN` in CI:
+Do not commit a token.
 
-```ini
-@quantfive:registry=https://npm.pkg.github.com
-//npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}
-```
-
-It can then install the exact published version and keep it pinned in its
+Consumers install the exact published version and keep it pinned in their
 lockfile:
 
 ```bash
