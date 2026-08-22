@@ -51,17 +51,18 @@ function nativeTransformToFrame(
  * A frame transform whose only non-default value is opacity round-trips
  * through the native item as a top-level `opacity` field (see
  * nativeItemFromHostItem).  Emitting a `transform` key for it would break
- * round-trip equivalence with host items that carry opacity only.
+ * round-trip equivalence with host items that carry opacity only.  The input
+ * always comes from nativeTransformToFrame, which fills every key.
  */
 function isOpacityOnlyTransform(transform: Record<string, number>): boolean {
   return (
-    (transform.x ?? 0) === 0 &&
-    (transform.y ?? 0) === 0 &&
-    (transform.width ?? 0) === 0 &&
-    (transform.height ?? 0) === 0 &&
-    (transform.anchorX ?? 0) === 0 &&
-    (transform.anchorY ?? 0) === 0 &&
-    (transform.rotation ?? 0) === 0
+    transform.x === 0 &&
+    transform.y === 0 &&
+    transform.width === 0 &&
+    transform.height === 0 &&
+    transform.anchorX === 0 &&
+    transform.anchorY === 0 &&
+    transform.rotation === 0
   )
 }
 
