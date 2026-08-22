@@ -364,6 +364,67 @@ describe('embedded FreeCut host controller', () => {
     expect(controller.getSnapshot().timeline.tracks[0]!.items[0]).toMatchObject({ from: 30 })
   })
 
+  it('submits a transcript ripple_delete batch through timeline.remove', async () => {
+    const initial = snapshot()
+    const harness = createFakeHost(initial)
+    const controller = new HostEditorController(harness.host, initial)
+    const batch: EditCommandBatch = {
+      contract_version: 1,
+      timeline_id: initial.timeline.timelineId,
+      operation_id: 'operation-ripple-1',
+      idempotency_key: 'idempotency-ripple-1',
+      base_revision: 0,
+      preconditions: [],
+      commands: [
+        {
+          command_id: 'transcript-cut-1',
+          type: 'ripple_delete',
+          start_us: 500_000,
+          end_us: 1_000_000,
+          track_ids: null,
+        },
+      ],
+    }
+
+    expect(capabilityForCommand('ripple_delete')).toBe('timeline.remove')
+
+    const result = await controller.submitEdit(batch)
+
+    expect(result.status).toBe('applied')
+    expect(harness.submitEdit).toHaveBeenCalledWith(batch)
+    expect(controller.getSnapshot().timeline.revision).toBe(1)
+  })
+
+  it('gates a ripple_delete batch when timeline.remove is off', async () => {
+    const initial = snapshot()
+    const harness = createFakeHost(initial, {
+      ...DEFAULT_HOST_CAPABILITIES,
+      'timeline.remove': false,
+    })
+    const controller = new HostEditorController(harness.host, initial)
+
+    const result = await controller.submitEdit({
+      contract_version: 1,
+      timeline_id: initial.timeline.timelineId,
+      operation_id: 'operation-ripple-2',
+      idempotency_key: 'idempotency-ripple-2',
+      base_revision: 0,
+      preconditions: [],
+      commands: [
+        {
+          command_id: 'transcript-cut-2',
+          type: 'ripple_delete',
+          start_us: 500_000,
+          end_us: 1_000_000,
+          track_ids: null,
+        },
+      ],
+    })
+
+    expect(result.status).toBe('unsupported')
+    expect(harness.submitEdit).not.toHaveBeenCalled()
+  })
+
   it('gates unsupported capabilities before calling the host', async () => {
     const initial = snapshot()
     const harness = createFakeHost(initial, {
@@ -419,6 +480,7 @@ describe('embedded FreeCut host controller', () => {
       'trim_item',
       'split_item',
       'remove_item',
+      'ripple_delete',
       'add_track',
       'update_track',
       'add_caption_track',
@@ -498,9 +560,7 @@ describe('embedded FreeCut host controller', () => {
           expect.objectContaining({ type: 'move_item', item_id: 'clip-1' }),
         ])
         // The untouched clip must not leak into the derived change set.
-        expect(batch.commands.some((command) => command.command_id.includes('clip-2'))).toBe(
-          false,
-        )
+        expect(batch.commands.some((command) => command.command_id.includes('clip-2'))).toBe(false)
       } finally {
         runtime.unmountStores()
       }

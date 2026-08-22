@@ -31,8 +31,12 @@ transcript tab by providing `EditorHost.transcript` and explicitly enabling
 `media.transcription`. The port returns a compact status receipt and bounded
 microsecond sections, and previews source-bound caption commands with
 `willMutateTimeline: false`; only an explicit user action submits that returned
-batch through `submitEdit`. Transcript IDs, asset IDs, source hashes, cursors,
-and structured errors are opaque browser data—authentication, transport,
+batch through `submitEdit`. The same preview path also produces a source-bound
+cut: `action: 'cut'` returns `ripple_delete` commands, which the surface accepts
+under the `timeline.remove` capability. A host that can start a transcription
+implements the optional `transcript.requestTranscription({ assetId, language })`;
+the surface then polls `getStatus` until the receipt is terminal. Transcript IDs,
+asset IDs, source hashes, cursors, and structured errors are opaque browser data—authentication, transport,
 provider details, URLs, paths, and media bytes remain host-owned.
 
 The same 0.3.0 surface retains the host-backed caption tracks, bounded cues,

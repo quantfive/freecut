@@ -1,6 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { AlertCircle, CheckCircle2, ChevronDown, Loader2, RefreshCw, Search } from 'lucide-react'
+import {
+  AlertCircle,
+  CheckCircle2,
+  ChevronDown,
+  Loader2,
+  RefreshCw,
+  Scissors,
+  Search,
+} from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -17,6 +25,7 @@ import {
   MAX_TRANSCRIPT_SECTION_TEXT_BYTES,
   MAX_TRANSCRIPT_SELECTIONS,
   type EditorCapabilityMap,
+  type HostTranscriptCommandAction,
   type HostTranscriptCommandPreview,
   type HostTranscriptError,
   type HostTranscriptRange,
@@ -38,6 +47,35 @@ const TRANSCRIPT_STATUSES: readonly HostTranscriptStatus[] = [
   'stale',
   'purged',
 ]
+
+/**
+ * Host transcription is asynchronous, so the surface polls `getStatus` after
+ * asking the host to start one.  Both knobs read from the environment with the
+ * production value as the default so QA can compress the wait.
+ */
+const DEFAULT_TRANSCRIBE_POLL_INTERVAL_MS = 3_000
+const DEFAULT_TRANSCRIBE_POLL_MAX_ATTEMPTS = 200
+
+function envNumber(key: string, fallback: number): number {
+  const raw =
+    typeof import.meta !== 'undefined' && typeof import.meta.env !== 'undefined'
+      ? (import.meta.env as Record<string, string | undefined>)[key]
+      : undefined
+  const parsed = raw === undefined ? Number.NaN : Number(raw)
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback
+}
+
+function transcribePollIntervalMs(): number {
+  return envNumber('VITE_HOST_TRANSCRIBE_POLL_MS', DEFAULT_TRANSCRIBE_POLL_INTERVAL_MS)
+}
+
+function transcribePollMaxAttempts(): number {
+  return envNumber('VITE_HOST_TRANSCRIBE_POLL_MAX_ATTEMPTS', DEFAULT_TRANSCRIBE_POLL_MAX_ATTEMPTS)
+}
+
+function delay(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds))
+}
 
 interface TranscriptUiError extends HostTranscriptError {
   source: 'host' | 'validation' | 'submission'
@@ -373,12 +411,79 @@ function commandIsSupported(command: EditCommand, capabilities: EditorCapability
   return capability !== null && isHostCapabilityEnabled(capabilities, capability)
 }
 
+/**
+ * The commands each transcript action is allowed to produce.  A capability
+ * check alone is not enough: `ripple_delete` is enabled for the cut flow, so a
+ * captions request whose response came back as a ripple batch would otherwise
+ * pass the capability gate and delete timeline content under an "Apply
+ * captions" label.  The preview must match the action that was asked for.
+ */
+const CUT_COMMAND_TYPES: ReadonlySet<string> = new Set(['ripple_delete'])
+const CAPTION_COMMAND_TYPES: ReadonlySet<string> = new Set([
+  'add_caption_track',
+  'update_caption_track',
+  'remove_caption_track',
+  'upsert_caption_cues',
+  'remove_caption_cues',
+  'set_caption_style',
+])
+
+/**
+ * Both the surface and the host adapter fold the aliases onto two actions.  A
+ * requested action is always one of the four known literals; an action echoed
+ * by the host is arbitrary text, and an unrecognized one folds to `null` so it
+ * can never match what was requested.
+ */
+function normalizeTranscriptAction(action: HostTranscriptCommandAction): 'cut' | 'captions'
+function normalizeTranscriptAction(action: string): 'cut' | 'captions' | null
+function normalizeTranscriptAction(action: string): 'cut' | 'captions' | null {
+  if (action === 'cut' || action === 'ripple_cut') return 'cut'
+  if (action === 'captions' || action === 'caption') return 'captions'
+  return null
+}
+
+class TranscriptPreviewMismatchError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'TranscriptPreviewMismatchError'
+  }
+}
+
+/**
+ * Fail closed unless the preview is for the action the user asked for: the
+ * echoed action (when the host sends one) and every command in the batch must
+ * belong to the requested action's family.
+ */
+function assertPreviewMatchesAction(
+  preview: HostTranscriptCommandPreview,
+  requested: 'cut' | 'captions',
+): void {
+  const echoed = preview.preview.action
+  if (typeof echoed === 'string' && normalizeTranscriptAction(echoed) !== requested) {
+    throw new TranscriptPreviewMismatchError(
+      'The host returned a transcript preview for a different action than the one requested.',
+    )
+  }
+  const allowed = requested === 'cut' ? CUT_COMMAND_TYPES : CAPTION_COMMAND_TYPES
+  if (!preview.commandBatch.commands.every((command) => allowed.has(command.type))) {
+    throw new TranscriptPreviewMismatchError(
+      requested === 'cut'
+        ? 'The host returned a transcript cut preview containing non-cut timeline commands.'
+        : 'The host returned a transcript captions preview containing non-caption timeline commands.',
+    )
+  }
+}
+
 function UnavailableTranscript({
   error,
   onRetry,
+  onTranscribe,
+  transcribing = false,
 }: {
   error: TranscriptUiError
   onRetry?: () => void
+  onTranscribe?: () => void
+  transcribing?: boolean
 }) {
   return (
     <div
@@ -391,12 +496,27 @@ function UnavailableTranscript({
         <p className="text-sm text-muted-foreground">{error.message}</p>
         <p className="text-[11px] text-muted-foreground/75">{error.code}</p>
       </div>
-      {error.retryable && onRetry ? (
-        <Button type="button" size="sm" onClick={onRetry} data-testid="host-transcript-retry">
-          <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
-          Retry
-        </Button>
-      ) : null}
+      <div className="flex items-center gap-2">
+        {error.retryable && onRetry ? (
+          <Button type="button" size="sm" onClick={onRetry} data-testid="host-transcript-retry">
+            <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
+            Retry
+          </Button>
+        ) : null}
+        {onTranscribe ? (
+          <Button
+            type="button"
+            size="sm"
+            variant={error.retryable && onRetry ? 'secondary' : 'default'}
+            onClick={onTranscribe}
+            disabled={transcribing}
+            data-testid="host-transcript-transcribe"
+          >
+            {transcribing && <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />}
+            Transcribe
+          </Button>
+        ) : null}
+      </div>
     </div>
   )
 }
@@ -426,8 +546,10 @@ export function HostTranscriptEditor({ active = true }: { active?: boolean }) {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set())
   const [selectionAnchor, setSelectionAnchor] = useState<number | null>(null)
   const [preview, setPreview] = useState<HostTranscriptCommandPreview | null>(null)
+  const [previewAction, setPreviewAction] = useState<HostTranscriptCommandAction>('captions')
   const [previewing, setPreviewing] = useState(false)
   const [applying, setApplying] = useState(false)
+  const [transcribing, setTranscribing] = useState(false)
   const [announcement, setAnnouncement] = useState('')
   const requestGeneration = useRef(0)
   const loadedSectionCount = useRef(0)
@@ -578,91 +700,109 @@ export function HostTranscriptEditor({ active = true }: { active?: boolean }) {
     [selectionAnchor, visibleSections],
   )
 
-  // fallow-ignore-next-line complexity
-  const previewSelection = useCallback(async () => {
-    if (!port || !runtime || !status || status.status !== 'succeeded' || previewing) return
-    if (!isOpaqueId(status.assetId)) {
-      setError({
-        code: 'transcript_content_unavailable',
-        message: 'The succeeded transcript no longer has an asset binding.',
-        retryable: false,
-        source: 'validation',
-      })
-      return
-    }
-    setPreviewing(true)
-    setError(null)
-    setAnnouncement('Preparing a non-mutating transcript preview…')
-    try {
-      const ranges = rangesForSelection(selectedSections)
-      const currentSnapshot = runtime.controller.getSnapshot()
-      const request = {
-        transcriptId: status.transcriptId,
-        assetId: status.assetId,
-        sourceAssetHash: status.sourceAssetHash,
-        operationId: newOperationId('transcript-preview'),
-        idempotencyKey: newOperationId('transcript-preview-key'),
-        baseRevision: currentSnapshot.timeline.revision,
-        action: 'captions' as const,
-        timestampCapability: 'section' as const,
-        ranges,
-        captionTrackId: 'host-transcript-captions',
-        captionTrackName: 'Transcript captions',
-        captionLanguage: status.language ?? null,
-        preconditions: [],
+  const previewSelection = useCallback(
+    // fallow-ignore-next-line complexity
+    async (action: HostTranscriptCommandAction) => {
+      if (!port || !runtime || !status || status.status !== 'succeeded' || previewing) return
+      if (!isOpaqueId(status.assetId)) {
+        setError({
+          code: 'transcript_content_unavailable',
+          message: 'The succeeded transcript no longer has an asset binding.',
+          retryable: false,
+          source: 'validation',
+        })
+        return
       }
-      const result = normalizePreview(await port.previewCommands(request), {
-        transcriptId: status.transcriptId,
-        assetId: status.assetId,
-        sourceAssetHash: status.sourceAssetHash,
-        timelineId: currentSnapshot.timeline.timelineId,
-        baseRevision: currentSnapshot.timeline.revision,
-      })
-      if (
-        result.commandBatch.commands.some((command) => !commandIsSupported(command, capabilities))
-      ) {
-        throw new Error('The transcript preview contains an unsupported timeline command.')
+      setPreviewAction(action)
+      setPreviewing(true)
+      setError(null)
+      setAnnouncement('Preparing a non-mutating transcript preview…')
+      try {
+        const ranges = rangesForSelection(selectedSections)
+        const currentSnapshot = runtime.controller.getSnapshot()
+        const request = {
+          transcriptId: status.transcriptId,
+          assetId: status.assetId,
+          sourceAssetHash: status.sourceAssetHash,
+          operationId: newOperationId('transcript-preview'),
+          idempotencyKey: newOperationId('transcript-preview-key'),
+          baseRevision: currentSnapshot.timeline.revision,
+          action,
+          timestampCapability: 'section' as const,
+          ranges,
+          captionTrackId: 'host-transcript-captions',
+          captionTrackName: 'Transcript captions',
+          captionLanguage: status.language ?? null,
+          preconditions: [],
+        }
+        const result = normalizePreview(await port.previewCommands(request), {
+          transcriptId: status.transcriptId,
+          assetId: status.assetId,
+          sourceAssetHash: status.sourceAssetHash,
+          timelineId: currentSnapshot.timeline.timelineId,
+          baseRevision: currentSnapshot.timeline.revision,
+        })
+        assertPreviewMatchesAction(result, normalizeTranscriptAction(action))
+        if (
+          result.commandBatch.commands.some((command) => !commandIsSupported(command, capabilities))
+        ) {
+          throw new Error('The transcript preview contains an unsupported timeline command.')
+        }
+        setPreview(result)
+        setAnnouncement(
+          result.status === 'replayed'
+            ? 'Transcript preview replayed safely.'
+            : 'Transcript preview ready. The timeline was not changed.',
+        )
+      } catch (caught) {
+        setPreview(null)
+        const nextError =
+          caught instanceof TranscriptPreviewMismatchError
+            ? errorFromHost(
+                {
+                  code: 'transcript_preview_action_mismatch',
+                  message: caught.message,
+                  retryable: false,
+                },
+                caught.message,
+                'validation',
+              )
+            : caught instanceof Error && caught.message.startsWith('Select')
+              ? errorFromHost(
+                  { code: 'invalid_selection', message: caught.message, retryable: false },
+                  caught.message,
+                  'validation',
+                )
+              : errorFromHost(
+                  caught,
+                  'The transcript preview could not be prepared.',
+                  caught instanceof Error ? 'validation' : 'host',
+                )
+        setError(nextError)
+        setAnnouncement(nextError.message)
+      } finally {
+        setPreviewing(false)
       }
-      setPreview(result)
-      setAnnouncement(
-        result.status === 'replayed'
-          ? 'Transcript preview replayed safely.'
-          : 'Transcript preview ready. The timeline was not changed.',
-      )
-    } catch (caught) {
-      setPreview(null)
-      const nextError =
-        caught instanceof Error && caught.message.startsWith('Select')
-          ? errorFromHost(
-              { code: 'invalid_selection', message: caught.message, retryable: false },
-              caught.message,
-              'validation',
-            )
-          : errorFromHost(
-              caught,
-              'The transcript preview could not be prepared.',
-              caught instanceof Error ? 'validation' : 'host',
-            )
-      setError(nextError)
-      setAnnouncement(nextError.message)
-    } finally {
-      setPreviewing(false)
-    }
-  }, [capabilities, port, previewing, runtime, selectedSections, status])
+    },
+    [capabilities, port, previewing, runtime, selectedSections, status],
+  )
 
   // fallow-ignore-next-line complexity
   const applyPreview = useCallback(async () => {
     if (!runtime || !preview || applying) return
+    const isCut = previewAction === 'cut' || previewAction === 'ripple_cut'
+    const plural = isCut ? 'cut' : 'captions'
+    const rejected = `The transcript ${isCut ? 'cut' : 'caption'} edit was rejected.`
     setApplying(true)
     setError(null)
-    setAnnouncement('Applying transcript captions…')
+    setAnnouncement(`Applying transcript ${plural}…`)
     try {
       const result = await runtime.controller.submitEdit(preview.commandBatch)
       if (result.status === 'applied' || result.status === 'replayed') {
         setAnnouncement(
           result.status === 'replayed'
-            ? 'Transcript captions replayed safely.'
-            : 'Transcript captions applied.',
+            ? `Transcript ${plural} replayed safely.`
+            : `Transcript ${plural} applied.`,
         )
         return
       }
@@ -670,8 +810,8 @@ export function HostTranscriptEditor({ active = true }: { active?: boolean }) {
         result.status === 'unsupported'
           ? result.reason
           : result.status === 'conflict' || result.status === 'rejected'
-            ? result.result.error.message || 'The transcript caption edit was rejected.'
-            : 'The transcript caption edit was rejected.'
+            ? result.result.error.message || rejected
+            : rejected
       setPreview(null)
       const nextError = errorFromHost(
         {
@@ -688,7 +828,7 @@ export function HostTranscriptEditor({ active = true }: { active?: boolean }) {
       setPreview(null)
       const nextError = errorFromHost(
         caught,
-        'The transcript caption edit could not be applied.',
+        `The transcript ${isCut ? 'cut' : 'caption'} edit could not be applied.`,
         'submission',
       )
       setError(nextError)
@@ -696,7 +836,72 @@ export function HostTranscriptEditor({ active = true }: { active?: boolean }) {
     } finally {
       setApplying(false)
     }
-  }, [applying, preview, runtime])
+  }, [applying, preview, previewAction, runtime])
+
+  const transcribeAssetId = useMemo(() => {
+    const boundAssetId = status?.assetId
+    if (isOpaqueId(boundAssetId)) return boundAssetId
+    const sourceAssetId = runtime?.controller
+      .getSnapshot()
+      .assets.find((asset) => asset.kind === 'video' || asset.kind === 'audio')?.id
+    return isOpaqueId(sourceAssetId) ? sourceAssetId : null
+  }, [runtime, status])
+
+  const canRequestTranscription =
+    canTranscribe && typeof port?.requestTranscription === 'function' && transcribeAssetId !== null
+
+  // fallow-ignore-next-line complexity
+  const startTranscription = useCallback(async () => {
+    if (!port?.requestTranscription || !transcribeAssetId || transcribing) return
+    const generation = requestGeneration.current + 1
+    requestGeneration.current = generation
+    setTranscribing(true)
+    setError(null)
+    setAnnouncement('Requesting a host transcription…')
+    try {
+      const language = status?.language ?? undefined
+      let receipt = normalizeStatus(
+        await port.requestTranscription({
+          assetId: transcribeAssetId,
+          ...(language ? { language } : {}),
+        }),
+      )
+      const intervalMs = transcribePollIntervalMs()
+      const maxAttempts = transcribePollMaxAttempts()
+      for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+        if (!receipt || (receipt.status !== 'pending' && receipt.status !== 'running')) break
+        await delay(intervalMs)
+        if (requestGeneration.current !== generation) return
+        receipt = normalizeStatus(await port.getStatus())
+      }
+      if (requestGeneration.current !== generation) return
+      if (receipt?.status === 'succeeded') {
+        setAnnouncement('Transcription finished.')
+        await refresh()
+        return
+      }
+      setStatus(receipt)
+      const failure = receipt
+        ? errorFromHost(
+            receipt.error ?? unavailableError(receipt.status),
+            'The transcription did not finish.',
+          )
+        : {
+            code: 'transcript_unavailable',
+            message: 'The host did not return a transcript.',
+            retryable: false,
+            source: 'host' as const,
+          }
+      setError(failure)
+      setAnnouncement(failure.message)
+    } catch (caught) {
+      const nextError = errorFromHost(caught, 'The transcription could not be started.')
+      setError(nextError)
+      setAnnouncement(nextError.message)
+    } finally {
+      setTranscribing(false)
+    }
+  }, [port, refresh, status, transcribeAssetId, transcribing])
 
   if (!port || !runtime || !canTranscribe) {
     return (
@@ -725,7 +930,14 @@ export function HostTranscriptEditor({ active = true }: { active?: boolean }) {
   }
 
   if (error && (!status || status.status !== 'succeeded')) {
-    return <UnavailableTranscript error={error} onRetry={error.retryable ? refresh : undefined} />
+    return (
+      <UnavailableTranscript
+        error={error}
+        onRetry={error.retryable ? refresh : undefined}
+        onTranscribe={canRequestTranscription ? () => void startTranscription() : undefined}
+        transcribing={transcribing}
+      />
+    )
   }
 
   return (
@@ -859,7 +1071,9 @@ export function HostTranscriptEditor({ active = true }: { active?: boolean }) {
                 {preview.status === 'replayed' ? 'Preview replayed safely.' : 'Preview ready.'}
               </p>
               <p className="text-[11px] leading-4 text-muted-foreground">
-                {preview.preview.captionCount ?? selectedIds.size} caption(s) · timeline unchanged
+                {previewAction === 'captions' || previewAction === 'caption'
+                  ? `${preview.preview.captionCount ?? selectedIds.size} caption(s) · timeline unchanged`
+                  : `${selectedIds.size} range(s) · timeline unchanged`}
               </p>
             </div>
           </div>
@@ -872,7 +1086,9 @@ export function HostTranscriptEditor({ active = true }: { active?: boolean }) {
             data-testid="host-transcript-apply"
           >
             {applying && <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />}
-            Apply captions
+            {previewAction === 'captions' || previewAction === 'caption'
+              ? 'Apply captions'
+              : 'Apply cut'}
           </Button>
         </div>
       ) : null}
@@ -881,18 +1097,37 @@ export function HostTranscriptEditor({ active = true }: { active?: boolean }) {
         <span className="min-w-0 text-xs text-muted-foreground">
           {selectedIds.size > 0
             ? `${selectedIds.size} section${selectedIds.size === 1 ? '' : 's'} selected`
-            : 'Select sections to preview captions'}
+            : 'Select sections to cut or caption'}
         </span>
-        <Button
-          type="button"
-          size="sm"
-          onClick={() => void previewSelection()}
-          disabled={selectedIds.size === 0 || previewing || applying}
-          data-testid="host-transcript-preview-button"
-        >
-          {previewing && <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />}
-          Preview captions
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button
+            type="button"
+            size="sm"
+            variant="secondary"
+            onClick={() => void previewSelection('cut')}
+            disabled={selectedIds.size === 0 || previewing || applying}
+            data-testid="host-transcript-cut-button"
+          >
+            {previewing && previewAction === 'cut' ? (
+              <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Scissors className="mr-1.5 h-3.5 w-3.5" />
+            )}
+            Cut selection
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            onClick={() => void previewSelection('captions')}
+            disabled={selectedIds.size === 0 || previewing || applying}
+            data-testid="host-transcript-preview-button"
+          >
+            {previewing && previewAction !== 'cut' && (
+              <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+            )}
+            Preview captions
+          </Button>
+        </div>
       </div>
 
       <span className="sr-only" aria-live="polite">
