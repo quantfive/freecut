@@ -10,7 +10,19 @@ import { HOTKEY_OPTIONS } from '@/config/hotkeys'
 import type { TimelineShortcutCallbacks } from '../use-timeline-shortcuts'
 import { useResolvedHotkeys, useSettingsStore } from '@/features/timeline/deps/settings'
 
-export function useUIShortcuts(callbacks: TimelineShortcutCallbacks) {
+export interface UIShortcutOptions {
+  /**
+   * Undo/redo mutate the timeline temporal store directly without emitting
+   * host commands, so host-embedded surfaces must mount with this disabled.
+   */
+  enableHistory?: boolean
+}
+
+export function useUIShortcuts(
+  callbacks: TimelineShortcutCallbacks,
+  options: UIShortcutOptions = {},
+) {
+  const { enableHistory = true } = options
   const hotkeys = useResolvedHotkeys()
   const toggleSnap = useTimelineStore((s) => s.toggleSnap)
   const zoomIn = useZoomStore((s) => s.zoomIn)
@@ -29,8 +41,9 @@ export function useUIShortcuts(callbacks: TimelineShortcutCallbacks) {
     {
       ...HOTKEY_OPTIONS,
       enableOnFormTags: true,
+      enabled: enableHistory,
     },
-    [callbacks],
+    [callbacks, enableHistory],
   )
 
   // History: Cmd/Ctrl+Shift+Z - Redo
@@ -46,8 +59,9 @@ export function useUIShortcuts(callbacks: TimelineShortcutCallbacks) {
     {
       ...HOTKEY_OPTIONS,
       enableOnFormTags: true,
+      enabled: enableHistory,
     },
-    [callbacks],
+    [callbacks, enableHistory],
   )
 
   // UI: S - Toggle Snap

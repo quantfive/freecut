@@ -47,6 +47,25 @@ function nativeTransformToFrame(
   }
 }
 
+/**
+ * A frame transform whose only non-default value is opacity round-trips
+ * through the native item as a top-level `opacity` field (see
+ * nativeItemFromHostItem).  Emitting a `transform` key for it would break
+ * round-trip equivalence with host items that carry opacity only.  The input
+ * always comes from nativeTransformToFrame, which fills every key.
+ */
+function isOpacityOnlyTransform(transform: Record<string, number>): boolean {
+  return (
+    transform.x === 0 &&
+    transform.y === 0 &&
+    transform.width === 0 &&
+    transform.height === 0 &&
+    transform.anchorX === 0 &&
+    transform.anchorY === 0 &&
+    transform.rotation === 0
+  )
+}
+
 function frameTransformToNative(
   transform: Record<string, number> | undefined,
 ): NonNullable<TimelineItem['transform']> | undefined {
@@ -241,6 +260,8 @@ function frameItemToNativeComparable(
   | NativeTimelineConversionFailure {
   if (item.type === 'video' || item.type === 'audio' || item.type === 'image') {
     if (!item.mediaId) return { reason: `Media item "${item.id}" has no mediaId`, itemId: item.id }
+    const transform = nativeTransformToFrame(item.transform)
+    const opacityOnly = transform !== undefined && isOpacityOnlyTransform(transform)
     return {
       type: item.type,
       id: item.id,
@@ -250,10 +271,12 @@ function frameItemToNativeComparable(
       durationInFrames: item.durationInFrames,
       sourceStart: item.sourceStart,
       sourceEnd: item.sourceEnd,
-      volume: item.volume,
-      speed: item.speed,
-      opacity: item.transform?.opacity,
-      transform: nativeTransformToFrame(item.transform),
+      // Optional fields are emitted only when set so the comparable shape
+      // matches host snapshots that omit them entirely.
+      ...(item.volume !== undefined ? { volume: item.volume } : {}),
+      ...(item.speed !== undefined ? { speed: item.speed } : {}),
+      ...(opacityOnly ? { opacity: transform.opacity } : {}),
+      ...(transform !== undefined && !opacityOnly ? { transform } : {}),
     }
   }
 
@@ -280,6 +303,14 @@ function frameItemToNativeComparable(
   }
 
   if (item.type === 'text') {
+    const style = {
+      ...(item.fontFamily ? { font_family: item.fontFamily } : {}),
+      ...(item.fontSize !== undefined ? { font_size: item.fontSize } : {}),
+      ...(item.color && item.color !== '#ffffff' ? { color: item.color } : {}),
+      ...(item.textAlign ? { alignment: item.textAlign } : {}),
+    }
+    const transform = nativeTransformToFrame(item.transform)
+    const opacityOnly = transform !== undefined && isOpacityOnlyTransform(transform)
     return {
       type: 'text',
       id: item.id,
@@ -287,14 +318,9 @@ function frameItemToNativeComparable(
       from: item.from,
       durationInFrames: item.durationInFrames,
       text: item.text,
-      style: {
-        ...(item.fontFamily ? { font_family: item.fontFamily } : {}),
-        ...(item.fontSize !== undefined ? { font_size: item.fontSize } : {}),
-        ...(item.color && item.color !== '#ffffff' ? { color: item.color } : {}),
-        ...(item.textAlign ? { alignment: item.textAlign } : {}),
-      },
-      opacity: item.transform?.opacity,
-      transform: nativeTransformToFrame(item.transform),
+      ...(Object.keys(style).length > 0 ? { style } : {}),
+      ...(opacityOnly ? { opacity: transform.opacity } : {}),
+      ...(transform !== undefined && !opacityOnly ? { transform } : {}),
     }
   }
 

@@ -1,5 +1,6 @@
 import { usePlaybackShortcuts } from './shortcuts/use-playback-shortcuts'
 import { useEditingShortcuts } from './shortcuts/use-editing-shortcuts'
+import { useDeleteShortcuts } from './shortcuts/use-delete-shortcuts'
 import { useToolShortcuts } from './shortcuts/use-tool-shortcuts'
 import { useMarkerShortcuts } from './shortcuts/use-marker-shortcuts'
 import { useInOutShortcuts } from './shortcuts/use-in-out-shortcuts'
@@ -40,4 +41,27 @@ export function useTimelineShortcuts(callbacks: TimelineShortcutCallbacks = {}) 
   useUIShortcuts(callbacks)
   useClipboardShortcuts()
   useSourceMonitorShortcuts()
+}
+
+/**
+ * Host-embedded timeline keyboard shortcuts.
+ *
+ * Composes only the bindings that are safe while a host owns the
+ * authoritative timeline document:
+ * - Playback & navigation (Space, J/K/L, arrows, Home/End, snap points) —
+ *   local playback state that never crosses the host bridge.
+ * - Tools (V/T/C/R, Shift+C split) — tool switching is pure local UI; split
+ *   flows through the bridge as a supported split_item command.
+ * - Delete/Backspace — flows through the bridge as remove_item commands.
+ * - UI zoom/snap (S, Shift+S, Cmd/Ctrl+=/-, \, Shift+\) — local view state.
+ *
+ * Deliberately excluded: undo/redo (mutate the temporal store without host
+ * commands), ripple delete, clipboard, markers, in/out points, nudges, join,
+ * freeze frame, and clear-keyframes — all unsupported by the host slice.
+ */
+export function useHostTimelineShortcuts(callbacks: TimelineShortcutCallbacks = {}) {
+  usePlaybackShortcuts(callbacks)
+  useDeleteShortcuts(callbacks)
+  useToolShortcuts(callbacks)
+  useUIShortcuts(callbacks, { enableHistory: false })
 }
