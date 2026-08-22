@@ -288,6 +288,10 @@ export interface HostTranscriptCommandPreview {
 
 export interface EditorTranscriptPort {
   getStatus(): Promise<HostTranscriptStatusReceipt | null> | HostTranscriptStatusReceipt | null
+  requestTranscription?(input: {
+    assetId: string
+    language?: string
+  }): Promise<HostTranscriptStatusReceipt> | HostTranscriptStatusReceipt
   getSections(
     request: HostTranscriptSectionsRequest,
   ): Promise<HostTranscriptSectionsPage> | HostTranscriptSectionsPage
@@ -375,6 +379,7 @@ export declare const SUPPORTED_HOST_COMMANDS: readonly [
   'trim_item',
   'split_item',
   'remove_item',
+  'ripple_delete',
   'add_track',
   'update_track',
   'add_caption_track',

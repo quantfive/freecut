@@ -31,6 +31,7 @@ import {
   type HostTranscriptCommandPreview,
   type HostTranscriptCommandPreviewRequest,
   type HostTranscriptSection,
+  type HostTranscriptStatusReceipt,
 } from './contract'
 import { EmbeddedEditorHostRuntime } from './runtime'
 import { HostTranscriptEditor } from './transcript-editor'
@@ -178,28 +179,47 @@ function createHarness(
     ],
   }
 
-  const previewCommands = vi.fn(
-    async (
-      _request: HostTranscriptCommandPreviewRequest,
-    ): Promise<HostTranscriptCommandPreview> => ({
-      status: previewStatus,
-      receiptId: 'transcript-receipt-1',
-      transcriptId: 'transcript-1',
-      assetId: 'asset-1',
-      sourceAssetHash: 'sha256:source-1',
-      timestampCapability:
-        previewTimestampCapability as HostTranscriptCommandPreview['timestampCapability'],
-      timelineId: initial.timeline.timelineId,
-      operationId: previewBatch.operation_id,
-      idempotencyKey: previewBatch.idempotency_key,
-      baseRevision: 0,
-      commandBatch: previewBatch,
-      preview: {
-        action: 'captions',
-        captionCount: 1,
-        willMutateTimeline: false,
+  // The CodePress adapter maps both `cut` and `ripple_cut` onto one normalized
+  // `cut` action whose batch is made of `ripple_delete` commands.
+  const cutBatch: EditCommandBatch = {
+    contract_version: 1,
+    timeline_id: initial.timeline.timelineId,
+    operation_id: 'transcript-preview-operation',
+    idempotency_key: 'transcript-preview-idempotency',
+    base_revision: 0,
+    preconditions: [],
+    commands: [
+      {
+        command_id: 'transcript-cut-1',
+        type: 'ripple_delete',
+        start_us: sections[0]!.startUs,
+        end_us: sections[0]!.endUs,
+        track_ids: null,
       },
-    }),
+    ],
+  }
+
+  const previewCommands = vi.fn(
+    async (request: HostTranscriptCommandPreviewRequest): Promise<HostTranscriptCommandPreview> => {
+      const isCut = request.action === 'cut' || request.action === 'ripple_cut'
+      return {
+        status: previewStatus,
+        receiptId: 'transcript-receipt-1',
+        transcriptId: 'transcript-1',
+        assetId: 'asset-1',
+        sourceAssetHash: 'sha256:source-1',
+        timestampCapability:
+          previewTimestampCapability as HostTranscriptCommandPreview['timestampCapability'],
+        timelineId: initial.timeline.timelineId,
+        operationId: previewBatch.operation_id,
+        idempotencyKey: previewBatch.idempotency_key,
+        baseRevision: 0,
+        commandBatch: isCut ? cutBatch : previewBatch,
+        preview: isCut
+          ? { action: 'cut', selectionCount: 1, willMutateTimeline: false }
+          : { action: 'captions', captionCount: 1, willMutateTimeline: false },
+      }
+    },
   )
 
   const host: EditorHost = {
@@ -275,7 +295,27 @@ function renderHostEditor(harness: ReturnType<typeof createHarness>) {
   )
 }
 
-afterEach(() => cleanup())
+function receipt(
+  status: HostTranscriptStatusReceipt['status'],
+  overrides: Partial<HostTranscriptStatusReceipt> = {},
+): HostTranscriptStatusReceipt {
+  return {
+    transcriptId: 'transcript-1',
+    assetId: 'asset-1',
+    sourceAssetHash: 'sha256:source-1',
+    status,
+    language: 'en',
+    durationUs: 10_000_000,
+    sectionCount: status === 'succeeded' ? sections.length : 0,
+    error: null,
+    ...overrides,
+  }
+}
+
+afterEach(() => {
+  cleanup()
+  vi.unstubAllEnvs()
+})
 
 describe('host-backed transcript consumer', () => {
   it('displays bounded sections, previews without mutation, then applies through submitEdit', async () => {
@@ -319,6 +359,92 @@ describe('host-backed transcript consumer', () => {
         expect.objectContaining({ type: 'upsert_caption_cues' }),
       ]),
     )
+  })
+
+  it('cuts the selection through the same preview-then-submitEdit path', async () => {
+    const harness = createHarness(snapshot())
+    renderHostEditor(harness)
+
+    expect(
+      await screen.findByTestId('host-transcript-section-transcript-section-1'),
+    ).toBeInTheDocument()
+    fireEvent.click(screen.getByTestId('host-transcript-section-transcript-section-1'))
+    fireEvent.click(screen.getByTestId('host-transcript-cut-button'))
+    await waitFor(() => expect(screen.getByTestId('host-transcript-preview')).toBeInTheDocument())
+
+    expect(harness.previewCommands).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'cut',
+        transcriptId: 'transcript-1',
+        assetId: 'asset-1',
+        timestampCapability: 'section',
+        ranges: [{ startUs: 1_000_000, endUs: 2_000_000, text: 'First bounded caption.' }],
+      }),
+    )
+    expect(harness.submitEdit).not.toHaveBeenCalled()
+
+    fireEvent.click(screen.getByTestId('host-transcript-apply'))
+    await waitFor(() => expect(harness.submitEdit).toHaveBeenCalledTimes(1))
+    expect(harness.submitEdit.mock.calls[0]?.[0].commands).toEqual([
+      expect.objectContaining({ type: 'ripple_delete' }),
+    ])
+    await waitFor(() => expect(screen.getByText('Transcript cut applied.')).toBeInTheDocument())
+  })
+
+  it('offers Transcribe only when the port implements it and polls the host to succeeded', async () => {
+    const without = createHarness(snapshot(), 'failed')
+    renderHostEditor(without)
+    expect(await screen.findByTestId('host-transcript-unavailable')).toBeInTheDocument()
+    expect(screen.queryByTestId('host-transcript-transcribe')).not.toBeInTheDocument()
+    cleanup()
+
+    vi.stubEnv('VITE_HOST_TRANSCRIBE_POLL_MS', '1')
+    const harness = createHarness(snapshot(), 'failed')
+    let requested = false
+    let polls = 0
+    harness.host.transcript!.getStatus = vi.fn(() => {
+      if (!requested) {
+        return receipt('failed', {
+          error: {
+            code: 'transcript_content_unavailable',
+            message: 'Transcript sections are no longer available.',
+            retryable: false,
+          },
+        })
+      }
+      polls += 1
+      return receipt(polls >= 2 ? 'succeeded' : 'running')
+    })
+    const requestTranscription = vi.fn(() => {
+      requested = true
+      return receipt('pending')
+    })
+    harness.host.transcript!.requestTranscription = requestTranscription
+
+    renderHostEditor(harness)
+    fireEvent.click(await screen.findByTestId('host-transcript-transcribe'))
+
+    expect(
+      await screen.findByTestId('host-transcript-section-transcript-section-1'),
+    ).toBeInTheDocument()
+    expect(requestTranscription).toHaveBeenCalledWith({ assetId: 'asset-1', language: 'en' })
+    expect(polls).toBeGreaterThanOrEqual(2)
+    expect(screen.getByTestId('host-transcript-status')).toHaveTextContent('succeeded')
+  })
+
+  it('hides Transcribe when the transcription capability is off', async () => {
+    const harness = createHarness(snapshot(), 'failed')
+    harness.host.transcript!.requestTranscription = vi.fn(() => receipt('pending'))
+    const capabilities = { ...harness.host.capabilities, 'media.transcription': false }
+    render(
+      <EditorHostProvider value={{ mode: 'host', capabilities, host: harness.host }}>
+        <HostTranscriptEditorProvider runtime={harness.runtime}>
+          <HostTranscriptEditor />
+        </HostTranscriptEditorProvider>
+      </EditorHostProvider>,
+    )
+    expect(await screen.findByTestId('host-transcript-unavailable')).toBeInTheDocument()
+    expect(screen.queryByTestId('host-transcript-transcribe')).not.toBeInTheDocument()
   })
 
   it('surfaces replay receipts and clears a stale preview on apply conflict', async () => {

@@ -256,6 +256,15 @@ export interface HostTranscriptCommandPreview {
  */
 export interface EditorTranscriptPort {
   getStatus(): Promise<HostTranscriptStatusReceipt | null> | HostTranscriptStatusReceipt | null
+  /**
+   * Optional host-owned transcription start.  The host performs the work and
+   * returns the first receipt; the surface only polls `getStatus` afterwards.
+   * Gated by the `media.transcription` capability.
+   */
+  requestTranscription?(input: {
+    assetId: string
+    language?: string
+  }): Promise<HostTranscriptStatusReceipt> | HostTranscriptStatusReceipt
   getSections(
     request: HostTranscriptSectionsRequest,
   ): Promise<HostTranscriptSectionsPage> | HostTranscriptSectionsPage
@@ -314,6 +323,7 @@ export const SUPPORTED_HOST_COMMANDS = [
   'trim_item',
   'split_item',
   'remove_item',
+  'ripple_delete',
   'add_track',
   'update_track',
   'add_caption_track',
@@ -336,6 +346,7 @@ export function capabilityForCommand(command: EditCommand['type']): EditorCapabi
     case 'split_item':
       return 'timeline.split'
     case 'remove_item':
+    case 'ripple_delete':
       return 'timeline.remove'
     case 'add_track':
       return 'timeline.track'
