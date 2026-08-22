@@ -61,19 +61,26 @@ admin must add that secret before tag publishes work; until then, use the
 manual path below.
 
 **Manual (maintainer).** Run from a clean checkout of the merged staging
-commit with local npm auth:
+commit with local npm auth, naming that commit explicitly:
 
 ```bash
 npm ci --ignore-scripts
-npm run publish:editor-surface:npmjs
+npm run publish:editor-surface:npmjs -- --ref <merged-staging-sha>
 ```
 
-`scripts/publish-editor-surface-npmjs.mjs` runs the preflight (provenance
-verification, deterministic pack, and a fresh-consumer install + smoke of the
-exact tarball) and then publishes
+`scripts/publish-editor-surface-npmjs.mjs` refuses to package anything else:
+before the preflight it requires a clean worktree (`git status --porcelain`
+empty), HEAD equal to `--ref`, and `--ref` an ancestor of `origin/staging`
+— so the public artifact is always reproducible from the merged staging
+revision, never from uncommitted or unrelated source. The guards run in
+`--dry-run` too. After the guards it runs the preflight (provenance
+verification, deterministic pack, and a fresh-consumer install + smoke of
+the exact tarball) and then publishes
 `artifacts/freecut-editor-surface-<version>.tgz` to npmjs. Run
-`npm run publish:editor-surface:npmjs -- --dry-run` to validate without
-publishing. Versions 0.3.1 and 0.3.2 are released this way.
+`npm run publish:editor-surface:npmjs -- --ref <sha> --dry-run` to validate
+without publishing; guard behavior is covered by
+`npm run test:publish-editor-surface-guards`. Versions 0.3.1 and 0.3.2 are
+released this way.
 
 Do not commit a token.
 
