@@ -411,6 +411,69 @@ function commandIsSupported(command: EditCommand, capabilities: EditorCapability
   return capability !== null && isHostCapabilityEnabled(capabilities, capability)
 }
 
+/**
+ * The commands each transcript action is allowed to produce.  A capability
+ * check alone is not enough: `ripple_delete` is enabled for the cut flow, so a
+ * captions request whose response came back as a ripple batch would otherwise
+ * pass the capability gate and delete timeline content under an "Apply
+ * captions" label.  The preview must match the action that was asked for.
+ */
+const CUT_COMMAND_TYPES: ReadonlySet<string> = new Set(['ripple_delete'])
+const CAPTION_COMMAND_TYPES: ReadonlySet<string> = new Set([
+  'add_caption_track',
+  'update_caption_track',
+  'remove_caption_track',
+  'upsert_caption_cues',
+  'remove_caption_cues',
+  'set_caption_style',
+])
+
+/**
+ * Both the surface and the host adapter fold the aliases onto two actions.  A
+ * requested action is always one of the four known literals; an action echoed
+ * by the host is arbitrary text, and an unrecognized one folds to `null` so it
+ * can never match what was requested.
+ */
+function normalizeTranscriptAction(action: HostTranscriptCommandAction): 'cut' | 'captions'
+function normalizeTranscriptAction(action: string): 'cut' | 'captions' | null
+function normalizeTranscriptAction(action: string): 'cut' | 'captions' | null {
+  if (action === 'cut' || action === 'ripple_cut') return 'cut'
+  if (action === 'captions' || action === 'caption') return 'captions'
+  return null
+}
+
+class TranscriptPreviewMismatchError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'TranscriptPreviewMismatchError'
+  }
+}
+
+/**
+ * Fail closed unless the preview is for the action the user asked for: the
+ * echoed action (when the host sends one) and every command in the batch must
+ * belong to the requested action's family.
+ */
+function assertPreviewMatchesAction(
+  preview: HostTranscriptCommandPreview,
+  requested: 'cut' | 'captions',
+): void {
+  const echoed = preview.preview.action
+  if (typeof echoed === 'string' && normalizeTranscriptAction(echoed) !== requested) {
+    throw new TranscriptPreviewMismatchError(
+      'The host returned a transcript preview for a different action than the one requested.',
+    )
+  }
+  const allowed = requested === 'cut' ? CUT_COMMAND_TYPES : CAPTION_COMMAND_TYPES
+  if (!preview.commandBatch.commands.every((command) => allowed.has(command.type))) {
+    throw new TranscriptPreviewMismatchError(
+      requested === 'cut'
+        ? 'The host returned a transcript cut preview containing non-cut timeline commands.'
+        : 'The host returned a transcript captions preview containing non-caption timeline commands.',
+    )
+  }
+}
+
 function UnavailableTranscript({
   error,
   onRetry,
@@ -679,6 +742,7 @@ export function HostTranscriptEditor({ active = true }: { active?: boolean }) {
           timelineId: currentSnapshot.timeline.timelineId,
           baseRevision: currentSnapshot.timeline.revision,
         })
+        assertPreviewMatchesAction(result, normalizeTranscriptAction(action))
         if (
           result.commandBatch.commands.some((command) => !commandIsSupported(command, capabilities))
         ) {
@@ -693,17 +757,27 @@ export function HostTranscriptEditor({ active = true }: { active?: boolean }) {
       } catch (caught) {
         setPreview(null)
         const nextError =
-          caught instanceof Error && caught.message.startsWith('Select')
+          caught instanceof TranscriptPreviewMismatchError
             ? errorFromHost(
-                { code: 'invalid_selection', message: caught.message, retryable: false },
+                {
+                  code: 'transcript_preview_action_mismatch',
+                  message: caught.message,
+                  retryable: false,
+                },
                 caught.message,
                 'validation',
               )
-            : errorFromHost(
-                caught,
-                'The transcript preview could not be prepared.',
-                caught instanceof Error ? 'validation' : 'host',
-              )
+            : caught instanceof Error && caught.message.startsWith('Select')
+              ? errorFromHost(
+                  { code: 'invalid_selection', message: caught.message, retryable: false },
+                  caught.message,
+                  'validation',
+                )
+              : errorFromHost(
+                  caught,
+                  'The transcript preview could not be prepared.',
+                  caught instanceof Error ? 'validation' : 'host',
+                )
         setError(nextError)
         setAnnouncement(nextError.message)
       } finally {

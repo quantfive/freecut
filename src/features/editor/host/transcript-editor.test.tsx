@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { readFileSync } from 'node:fs'
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vite-plus/test'
 
 // The transcript tab renders inside the real MediaSidebar; the media library
@@ -312,6 +312,14 @@ function receipt(
   }
 }
 
+function previewCommandsFor(
+  harness: ReturnType<typeof createHarness>,
+  request: HostTranscriptCommandPreviewRequest,
+  action: HostTranscriptCommandPreviewRequest['action'],
+): Promise<HostTranscriptCommandPreview> {
+  return harness.previewCommands({ ...request, action })
+}
+
 afterEach(() => {
   cleanup()
   vi.unstubAllEnvs()
@@ -389,6 +397,116 @@ describe('host-backed transcript consumer', () => {
       expect.objectContaining({ type: 'ripple_delete' }),
     ])
     await waitFor(() => expect(screen.getByText('Transcript cut applied.')).toBeInTheDocument())
+  })
+
+  it('rejects a captions preview that comes back as a ripple_delete batch', async () => {
+    const harness = createHarness(snapshot())
+    // The host answers a captions request with a cut batch. Every command in it
+    // is capability-enabled now that ripple_delete maps to timeline.remove, so
+    // the capability gate alone would let it through and label it "Apply
+    // captions" over a batch that deletes timeline content.
+    harness.host.transcript!.previewCommands = vi.fn(
+      async (
+        request: HostTranscriptCommandPreviewRequest,
+      ): Promise<HostTranscriptCommandPreview> => ({
+        status: 'preview',
+        receiptId: 'transcript-receipt-1',
+        transcriptId: 'transcript-1',
+        assetId: 'asset-1',
+        sourceAssetHash: 'sha256:source-1',
+        timestampCapability: 'section',
+        timelineId: snapshot().timeline.timelineId,
+        operationId: request.operationId,
+        idempotencyKey: request.idempotencyKey,
+        baseRevision: 0,
+        commandBatch: {
+          contract_version: 1,
+          timeline_id: snapshot().timeline.timelineId,
+          operation_id: request.operationId,
+          idempotency_key: request.idempotencyKey,
+          base_revision: 0,
+          preconditions: [],
+          commands: [
+            {
+              command_id: 'smuggled-cut',
+              type: 'ripple_delete',
+              start_us: sections[0]!.startUs,
+              end_us: sections[0]!.endUs,
+              track_ids: null,
+            },
+          ],
+        },
+        preview: { action: 'captions', captionCount: 1, willMutateTimeline: false },
+      }),
+    )
+
+    renderHostEditor(harness)
+    expect(
+      await screen.findByTestId('host-transcript-section-transcript-section-1'),
+    ).toBeInTheDocument()
+    fireEvent.click(screen.getByTestId('host-transcript-section-transcript-section-1'))
+    fireEvent.click(screen.getByTestId('host-transcript-preview-button'))
+
+    await waitFor(() =>
+      expect(screen.getByTestId('host-transcript-error')).toHaveTextContent(
+        'non-caption timeline commands',
+      ),
+    )
+    // No preview is stored, so there is nothing to apply and nothing is deleted.
+    expect(screen.queryByTestId('host-transcript-preview')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('host-transcript-apply')).not.toBeInTheDocument()
+    expect(harness.submitEdit).not.toHaveBeenCalled()
+    // The validation error is terminal — it must not offer a retry.
+    expect(within(screen.getByTestId('host-transcript-error')).queryByText('Retry')).toBeNull()
+  })
+
+  it('rejects a cut preview whose batch is not in the cut command family', async () => {
+    const harness = createHarness(snapshot())
+    // Echo the requested action back correctly so the family check — not the
+    // action echo — is what refuses this batch.
+    harness.host.transcript!.previewCommands = vi.fn(async (request) => {
+      const captions = await previewCommandsFor(harness, request, 'captions')
+      return { ...captions, preview: { ...captions.preview, action: 'cut' as const } }
+    })
+
+    renderHostEditor(harness)
+    expect(
+      await screen.findByTestId('host-transcript-section-transcript-section-1'),
+    ).toBeInTheDocument()
+    fireEvent.click(screen.getByTestId('host-transcript-section-transcript-section-1'))
+    fireEvent.click(screen.getByTestId('host-transcript-cut-button'))
+
+    await waitFor(() =>
+      expect(screen.getByTestId('host-transcript-error')).toHaveTextContent(
+        'non-cut timeline commands',
+      ),
+    )
+    expect(screen.queryByTestId('host-transcript-preview')).not.toBeInTheDocument()
+    expect(harness.submitEdit).not.toHaveBeenCalled()
+  })
+
+  it('rejects a preview whose echoed action disagrees with the requested one', async () => {
+    const harness = createHarness(snapshot())
+    // Right command family, wrong echoed action.
+    harness.host.transcript!.previewCommands = vi.fn(async (request) => {
+      const captions = await previewCommandsFor(harness, request, 'captions')
+      return { ...captions, preview: { ...captions.preview, action: 'cut' as const } }
+    })
+
+    renderHostEditor(harness)
+    expect(
+      await screen.findByTestId('host-transcript-section-transcript-section-1'),
+    ).toBeInTheDocument()
+    fireEvent.click(screen.getByTestId('host-transcript-section-transcript-section-1'))
+    fireEvent.click(screen.getByTestId('host-transcript-preview-button'))
+
+    await waitFor(() =>
+      expect(screen.getByTestId('host-transcript-error')).toHaveTextContent(
+        'different action than the one requested',
+      ),
+    )
+    expect(screen.queryByTestId('host-transcript-preview')).not.toBeInTheDocument()
+    expect(harness.submitEdit).not.toHaveBeenCalled()
   })
 
   it('offers Transcribe only when the port implements it and polls the host to succeeded', async () => {
