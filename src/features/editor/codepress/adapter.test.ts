@@ -375,6 +375,49 @@ describe('controlled command adapter', () => {
     })
   })
 
+  it('puts a clip that states no source range at the start of its media on the wire', () => {
+    const frameDocument = {
+      timelineId: 'timeline-bare-source',
+      revision: 1,
+      fps: 30,
+      durationInFrames: 180,
+      media: [videoMedia],
+      tracks: [
+        {
+          id: 'track-video',
+          kind: 'video' as const,
+          name: 'Video',
+          locked: false,
+          muted: false,
+          items: [
+            {
+              type: 'video' as const,
+              id: 'clip-bare-source',
+              trackId: 'track-video',
+              mediaId: 'media-video',
+              from: 30,
+              durationInFrames: 60,
+            },
+          ],
+        },
+      ],
+      width: 1920,
+      height: 1080,
+    }
+
+    // The wire shape requires a concrete window; the timeline position is not
+    // it.  A bound taken from `from` would be 1_000_000..3_000_000 here, and
+    // would follow the clip on every move.
+    expect(
+      freeCutDocumentToControlledDocument(frameDocument).timeline.tracks[0]?.items[0],
+    ).toMatchObject({
+      item_id: 'clip-bare-source',
+      timeline_start_us: 1_000_000,
+      source_start_us: 0,
+      source_end_us: 2_000_000,
+    })
+  })
+
   it('round-trips nonzero-start clip, text, and caption endpoints at fractional FPS', () => {
     const rates: readonly FrameRateLike[] = [
       29.97,

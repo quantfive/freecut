@@ -4,6 +4,7 @@ import type {
   ShapeItem,
   SubtitleSegmentItem,
   TextItem,
+  TimelineTrack,
   VideoItem,
 } from '@/types/timeline'
 import { resetTimelineItemsTestState } from '@/features/timeline/test-helpers'
@@ -12,6 +13,7 @@ import { selectReplaceableCaptionClipIds } from './items-store-indexes'
 import { useTimelineSettingsStore } from './timeline-settings-store'
 import { timelineToSourceFrames } from '../utils/source-calculations'
 import { rollingTrimItems } from './actions/item-actions'
+import { useEditorStore } from '@/shared/state/editor'
 
 function makeVideoItem(overrides: Partial<VideoItem> = {}): VideoItem {
   return {
@@ -799,5 +801,51 @@ describe('rolling edit', () => {
     expect(updatedLeft.durationInFrames + updatedRight.durationInFrames).toBe(140)
     // Clips remain adjacent
     expect(updatedLeft.from + updatedLeft.durationInFrames).toBe(updatedRight.from)
+  })
+})
+
+describe('items-store classic track naming', () => {
+  beforeEach(() => {
+    resetTimelineItemsTestState()
+    useEditorStore.setState({ hostMode: false })
+  })
+
+  function makeVideoTrack(id: string, name: string, order: number): TimelineTrack {
+    return {
+      id,
+      name,
+      kind: 'video',
+      height: 80,
+      locked: false,
+      syncLock: true,
+      visible: true,
+      muted: false,
+      solo: false,
+      order,
+      items: [],
+    }
+  }
+
+  const stackedVideoTracks = () => [
+    makeVideoTrack('track-top', 'V1', 0),
+    makeVideoTrack('track-bottom', 'V2', 1),
+  ]
+
+  it('renumbers classic V# labels from the stack order outside host mode', () => {
+    useItemsStore.getState().setTracks(stackedVideoTracks())
+
+    // Video numbering rises from the bottom, so the bottom lane becomes V1.
+    expect(useItemsStore.getState().tracks.map((track) => track.name)).toEqual(['V2', 'V1'])
+  })
+
+  it('leaves host-owned track names alone in host mode', () => {
+    useEditorStore.setState({ hostMode: true })
+    try {
+      useItemsStore.getState().setTracks(stackedVideoTracks())
+
+      expect(useItemsStore.getState().tracks.map((track) => track.name)).toEqual(['V1', 'V2'])
+    } finally {
+      useEditorStore.setState({ hostMode: false })
+    }
   })
 })

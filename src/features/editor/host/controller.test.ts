@@ -16,11 +16,13 @@ import {
   createLocalEditorHost,
   type EditorHost,
   type EmbeddedEditorSnapshot,
+  type HostAppliedEditResult,
   type HostEditResult,
   type HostNotice,
   type MediaLocator,
 } from './contract'
 import { HostEditorController, deriveSupportedHostEdit } from './controller'
+import { framesToMicroseconds } from '@/features/editor/codepress/timing'
 import { hostSnapshotToNativeTimeline, nativeTimelineToFrameDocument } from './document'
 import { EmbeddedEditorHostRuntime } from './runtime'
 import { useMediaLibraryStore } from '@/features/editor/deps/media-library'
@@ -587,6 +589,77 @@ describe('embedded FreeCut host controller', () => {
       }
     }
 
+    /**
+     * A host that keeps its authoritative document in the frame-native shape
+     * and applies a move by rewriting `from` alone.  Unlike `createFakeHost`
+     * it never materializes source bounds on the way through the CodePress
+     * wire shape, which is how a host that stores FreeCut frame documents
+     * behaves — and the only way to observe whether the bridge invents a
+     * source range from the timeline position.
+     */
+    function createFrameNativeHost(initial: EmbeddedEditorSnapshot) {
+      let current = initial
+      const notices: HostNotice[] = []
+      const submitEdit = vi.fn((batch: EditCommandBatch): HostEditResult => {
+        const command = batch.commands[0]
+        if (batch.commands.length !== 1 || command?.type !== 'move_item') {
+          throw new Error(`Unexpected host batch: ${batch.commands.map((one) => one.type).join()}`)
+        }
+        const from = Math.round((command.timeline_start_us * 30) / 1_000_000)
+        current = {
+          ...current,
+          timeline: {
+            ...current.timeline,
+            revision: current.timeline.revision + 1,
+            tracks: current.timeline.tracks.map((track) => ({
+              ...track,
+              items: track.items.map((item) =>
+                item.id === command.item_id ? { ...item, from } : item,
+              ),
+            })),
+          },
+        }
+        return {
+          status: 'applied',
+          snapshot: current,
+          // The runtime reads `status` and, on a rejection, the error; the
+          // full operation receipt is not what this fixture exercises.
+          result: { status: 'applied' } as HostAppliedEditResult['result'],
+        }
+      })
+      const host: EditorHost = {
+        capabilities: DEFAULT_HOST_CAPABILITIES,
+        load: () => current,
+        resolveMedia: () => null,
+        submitEdit,
+        notify: (notice) => notices.push(notice),
+      }
+      return { host, submitEdit, notices, getSnapshot: () => current }
+    }
+
+    /** Two video tracks the host itself names with classic V# labels. */
+    function classicallyNamedSnapshot(): EmbeddedEditorSnapshot {
+      const initial = snapshot()
+      const track = initial.timeline.tracks[0]!
+      return {
+        ...initial,
+        timeline: {
+          ...initial.timeline,
+          tracks: [
+            { ...track, name: 'V1' },
+            {
+              id: 'track-2',
+              kind: 'video' as const,
+              name: 'V2',
+              locked: false,
+              muted: false,
+              items: [],
+            },
+          ],
+        },
+      }
+    }
+
     it('derives a move_item command for a store drag of a minimal host clip', async () => {
       const initial = minimalTwoClipSnapshot()
       const harness = createFakeHost(initial)
@@ -941,6 +1014,163 @@ describe('embedded FreeCut host controller', () => {
               changedFields: ['volume'],
             }),
           }),
+        ])
+      } finally {
+        runtime.unmountStores()
+      }
+    })
+
+    /**
+     * The frame window of the source media a clip actually plays.  Read the
+     * same way every native renderer reads it (`sourceStart ?? 0`), so the
+     * assertion holds whether the bridge omits the bounds or materializes
+     * them — it is about what plays, not about which keys are present.
+     */
+    function effectiveSourceWindow(item: {
+      durationInFrames: number
+      sourceStart?: number
+      sourceEnd?: number
+    }): [number, number] {
+      const start = item.sourceStart ?? 0
+      return [start, item.sourceEnd ?? start + item.durationInFrames]
+    }
+
+    function nativeClip(snapshotValue: EmbeddedEditorSnapshot, id: string) {
+      return hostSnapshotToNativeTimeline(snapshotValue).items.find((item) => item.id === id)!
+    }
+
+    /** A host snapshot whose clip-2 sits at `from` and states no source range. */
+    function bareClipAt(from: number): EmbeddedEditorSnapshot {
+      const initial = minimalTwoClipSnapshot()
+      return { ...initial, timeline: withClipTwo(initial.timeline, { from }) }
+    }
+
+    it('plays a host clip that states no source range from the start of its media', () => {
+      const initial = minimalTwoClipSnapshot()
+
+      // clip-1 states 0..60 explicitly; clip-2 states nothing and sits at 60.
+      expect(effectiveSourceWindow(nativeClip(initial, 'clip-1'))).toEqual([0, 60])
+      expect(effectiveSourceWindow(nativeClip(initial, 'clip-2'))).toEqual([0, 60])
+    })
+
+    it('keeps the rendered source range of a bare host clip fixed across moves', () => {
+      // Two successive moves of the same clip.  Deriving a bound from `from`
+      // makes the played media drift with the timeline position.
+      expect(effectiveSourceWindow(nativeClip(bareClipAt(60), 'clip-2'))).toEqual([0, 60])
+      expect(effectiveSourceWindow(nativeClip(bareClipAt(120), 'clip-2'))).toEqual([0, 60])
+      expect(effectiveSourceWindow(nativeClip(bareClipAt(180), 'clip-2'))).toEqual([0, 60])
+    })
+
+    it('keeps the store source range of a bare host clip fixed across two real drags', async () => {
+      const initial = minimalTwoClipSnapshot()
+      const harness = createFrameNativeHost(initial)
+      const runtime = new EmbeddedEditorHostRuntime(harness.host, initial)
+      runtime.mountStores()
+      try {
+        const storedClipTwo = () =>
+          useTimelineStore.getState().items.find((item) => item.id === 'clip-2')!
+
+        expect(effectiveSourceWindow(storedClipTwo())).toEqual([0, 60])
+
+        useTimelineStore.getState().moveItem('clip-2', 120)
+        await flushReconcile()
+        expect(harness.submitEdit).toHaveBeenCalledTimes(1)
+        expect(storedClipTwo().from).toBe(120)
+        expect(effectiveSourceWindow(storedClipTwo())).toEqual([0, 60])
+
+        useTimelineStore.getState().moveItem('clip-2', 180)
+        await flushReconcile()
+        expect(harness.submitEdit).toHaveBeenCalledTimes(2)
+        expect(storedClipTwo().from).toBe(180)
+        expect(effectiveSourceWindow(storedClipTwo())).toEqual([0, 60])
+
+        expect(harness.notices).toEqual([])
+      } finally {
+        runtime.unmountStores()
+      }
+    })
+
+    it('trims a bare host clip against its media start, not its timeline position', () => {
+      const initial = minimalTwoClipSnapshot()
+      const derived = deriveSupportedHostEdit(
+        initial.timeline,
+        // A pure end-trim: clip-2 keeps `from: 60` and still states no bounds.
+        withClipTwo(initial.timeline, { durationInFrames: 40 }),
+        { operationId: 'op-trim-bare-source', idempotencyKey: 'idem-trim-bare-source' },
+      )
+
+      expect(derived.batch?.commands).toEqual([
+        expect.objectContaining({
+          type: 'trim_item',
+          item_id: 'clip-2',
+          edge: 'end',
+          timeline_us: framesToMicroseconds(100, 30),
+          // 40 source frames in, counted from the start of the media — not
+          // from + duration, which would trim at source frame 100.
+          source_us: framesToMicroseconds(40, 30),
+        }),
+      ])
+    })
+
+    it('does not reject the first edit after mounting a clip that states only a source end', async () => {
+      const base = minimalTwoClipSnapshot()
+      const initial: EmbeddedEditorSnapshot = {
+        ...base,
+        timeline: withClipTwo(base.timeline, { durationInFrames: 40, sourceEnd: 40 }),
+      }
+      const harness = createFakeHost(initial)
+      const notices: HostNotice[] = []
+      const runtime = new EmbeddedEditorHostRuntime(
+        { ...harness.host, notify: (notice) => notices.push(notice) },
+        initial,
+      )
+      runtime.mountStores()
+      try {
+        useTimelineStore.getState().moveItem('clip-1', 200)
+        await flushReconcile()
+
+        // The store fills the missing start with 0 (items-store-normalize);
+        // synthesizing `from` on the authoritative side instead makes clip-2
+        // look edited on mount and rejects the user's unrelated drag.
+        expect(notices).toEqual([])
+        expect(harness.submitEdit).toHaveBeenCalledTimes(1)
+      } finally {
+        runtime.unmountStores()
+      }
+    })
+
+    it('keeps host track names on mount when they are classic V# labels', () => {
+      const initial = classicallyNamedSnapshot()
+      const harness = createFakeHost(initial)
+      const runtime = new EmbeddedEditorHostRuntime(harness.host, initial)
+      runtime.mountStores()
+      try {
+        expect(useTimelineStore.getState().tracks.map((track) => track.name)).toEqual(['V1', 'V2'])
+      } finally {
+        runtime.unmountStores()
+      }
+    })
+
+    it('does not reject the first edit after mounting host tracks named V1/V2', async () => {
+      const initial = classicallyNamedSnapshot()
+      const harness = createFakeHost(initial)
+      const notices: HostNotice[] = []
+      const runtime = new EmbeddedEditorHostRuntime(
+        { ...harness.host, notify: (notice) => notices.push(notice) },
+        initial,
+      )
+      runtime.mountStores()
+      try {
+        useTimelineStore.getState().moveItem('clip-1', 90)
+        await flushReconcile()
+
+        // Mounting must not renumber host-owned track names: doing so makes
+        // every later edit fail the track-settings guard.
+        expect(notices).toEqual([])
+        expect(harness.submitEdit).toHaveBeenCalledTimes(1)
+        const batch = harness.submitEdit.mock.calls[0]![0] as EditCommandBatch
+        expect(batch.commands).toEqual([
+          expect.objectContaining({ type: 'move_item', item_id: 'clip-1' }),
         ])
       } finally {
         runtime.unmountStores()

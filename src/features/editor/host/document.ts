@@ -193,8 +193,6 @@ function nativeItemFromHostItem(
 
   const asset = assets.get(item.mediaId)
   const sourceDuration = asset ? safeDurationFrames(asset, asset.fps || 30) : undefined
-  const sourceStart = item.sourceStart ?? item.from
-  const sourceEnd = item.sourceEnd ?? sourceStart + item.durationInFrames
   const common = {
     id: item.id,
     trackId: item.trackId,
@@ -204,8 +202,16 @@ function nativeItemFromHostItem(
     mediaId: item.mediaId,
     src: '',
     ...(sourceDuration !== undefined ? { sourceDuration } : {}),
-    sourceStart,
-    sourceEnd,
+    // Carry the host's source range through exactly as stated, absence
+    // included.  A native item with no `sourceStart` plays from source frame
+    // 0 for its timeline duration (see types/timeline.ts and
+    // getSourceProperties); deriving a bound from `item.from` instead renders
+    // the wrong part of the media, and because `from` moves with the clip the
+    // invented range follows every drag.  Keeping the absence also lets the
+    // local-change classifier keep treating a missing bound as unknown rather
+    // than as the timeline position (see `sourceBoundUnchanged`).
+    ...(item.sourceStart !== undefined ? { sourceStart: item.sourceStart } : {}),
+    ...(item.sourceEnd !== undefined ? { sourceEnd: item.sourceEnd } : {}),
     ...(item.volume !== undefined ? { volume: item.volume } : {}),
     ...(item.speed !== undefined ? { speed: item.speed } : {}),
     ...(item.opacity !== undefined ? { transform: { opacity: item.opacity } } : {}),

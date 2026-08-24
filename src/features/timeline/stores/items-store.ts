@@ -18,6 +18,7 @@ import {
 } from '../utils/source-calculations'
 import { isCompositionWrapperItem, wouldCreateCompositionCycle } from '../utils/composition-graph'
 import { normalizeClassicTrackNames } from '../utils/classic-tracks'
+import { useEditorStore } from '@/shared/state/editor'
 import { pruneEmptyLayerGroups } from '../utils/group-utils'
 import { resolveTrackHeight } from '../utils/track-heights'
 import { getActiveCompositionId } from './composition-navigation-active'
@@ -182,7 +183,15 @@ export const useItemsStore = create<ItemsState & ItemsActions>()((set, get) => (
       // Re-derive classic V#/A# labels from the settled stack order so create /
       // delete history can't leave names out of sequence (e.g. V1, V5, V3, V4).
       // No-ops (and preserves references) when names already match position.
-      const nextTracks = normalizeClassicTrackNames(sortedTracks)
+      //
+      // In host mode the names belong to the host document, not to this store:
+      // renumbering a host track named V1/V2 on mount silently diverges from
+      // the authoritative snapshot, and every later edit is then rejected as
+      // "Track settings are not supported in host mode" with nothing pointing
+      // back at the rename.  The host snapshot is the authority for names.
+      const nextTracks = useEditorStore.getState().hostMode
+        ? sortedTracks
+        : normalizeClassicTrackNames(sortedTracks)
 
       // If the result is element-wise identical to the current tracks, keep the
       // same array reference so `s.tracks` selectors don't fire at all.
