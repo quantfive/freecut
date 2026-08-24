@@ -17,6 +17,7 @@ import {
   type EditorHost,
   type EmbeddedEditorSnapshot,
   type HostEditResult,
+  type HostNotice,
   type MediaLocator,
 } from './contract'
 import { HostEditorController, deriveSupportedHostEdit } from './controller'
@@ -545,6 +546,47 @@ describe('embedded FreeCut host controller', () => {
       }
     }
 
+    /** The same fixture with a second, empty track for cross-track moves. */
+    function twoTrackSnapshot(): EmbeddedEditorSnapshot {
+      const initial = minimalTwoClipSnapshot()
+      return {
+        ...initial,
+        timeline: {
+          ...initial.timeline,
+          tracks: [
+            ...initial.timeline.tracks,
+            {
+              id: 'track-2',
+              kind: 'video' as const,
+              name: 'Video 2',
+              locked: false,
+              muted: false,
+              items: [],
+            },
+          ],
+        },
+      }
+    }
+
+    /** Rewrite clip-2 — the fixture clip that states no source range. */
+    function withClipTwo(
+      timeline: EmbeddedEditorSnapshot['timeline'],
+      overrides: Record<string, unknown>,
+    ): EmbeddedEditorSnapshot['timeline'] {
+      const nextTrackId = (overrides.trackId as string | undefined) ?? 'track-1'
+      return {
+        ...timeline,
+        tracks: timeline.tracks.map((track) => {
+          const kept = track.items.filter((item) => item.id !== 'clip-2')
+          if (track.id !== nextTrackId) return { ...track, items: kept }
+          const source = timeline.tracks
+            .flatMap((candidate) => candidate.items)
+            .find((item) => item.id === 'clip-2')!
+          return { ...track, items: [...kept, { ...source, ...overrides }] }
+        }),
+      }
+    }
+
     it('derives a move_item command for a store drag of a minimal host clip', async () => {
       const initial = minimalTwoClipSnapshot()
       const harness = createFakeHost(initial)
@@ -703,6 +745,202 @@ describe('embedded FreeCut host controller', () => {
         expect(batch.commands).toEqual([
           expect.objectContaining({ type: 'remove_item', item_id: 'clip-1' }),
           expect.objectContaining({ type: 'remove_item', item_id: 'clip-2' }),
+        ])
+      } finally {
+        runtime.unmountStores()
+      }
+    })
+
+    it('classifies a same-track move of a clip that states no source range', () => {
+      const initial = minimalTwoClipSnapshot()
+      const derived = deriveSupportedHostEdit(
+        initial.timeline,
+        withClipTwo(initial.timeline, { from: 150 }),
+        { operationId: 'op-move-bare-same', idempotencyKey: 'idem-move-bare-same' },
+      )
+
+      // Inferring the source range from `from` turns this into a trim: a wrong
+      // command that the host would happily apply.
+      expect(derived.batch?.commands).toEqual([
+        expect.objectContaining({ type: 'move_item', item_id: 'clip-2', to_track_id: 'track-1' }),
+      ])
+    })
+
+    it('classifies a cross-track move of a clip that states no source range', () => {
+      const initial = twoTrackSnapshot()
+      const derived = deriveSupportedHostEdit(
+        initial.timeline,
+        withClipTwo(initial.timeline, { from: 150, trackId: 'track-2' }),
+        { operationId: 'op-move-bare-cross', idempotencyKey: 'idem-move-bare-cross' },
+      )
+
+      expect(derived.reason).toBeUndefined()
+      expect(derived.batch?.commands).toEqual([
+        expect.objectContaining({ type: 'move_item', item_id: 'clip-2', to_track_id: 'track-2' }),
+      ])
+    })
+
+    it('still trims a clip that states no source range when its duration shrinks', () => {
+      const initial = minimalTwoClipSnapshot()
+      const derived = deriveSupportedHostEdit(
+        initial.timeline,
+        // The native bridge always materializes explicit bounds on the way back.
+        withClipTwo(initial.timeline, { durationInFrames: 40, sourceStart: 60, sourceEnd: 100 }),
+        { operationId: 'op-trim-bare', idempotencyKey: 'idem-trim-bare' },
+      )
+
+      expect(derived.batch?.commands).toEqual([
+        expect.objectContaining({ type: 'trim_item', item_id: 'clip-2', edge: 'end' }),
+      ])
+    })
+
+    it('still trims a clip that carries an explicit source range', () => {
+      const initial = minimalTwoClipSnapshot()
+      const track = initial.timeline.tracks[0]!
+      const next = {
+        ...initial.timeline,
+        tracks: [
+          {
+            ...track,
+            items: [{ ...track.items[0]!, durationInFrames: 40, sourceEnd: 40 }, track.items[1]!],
+          },
+        ],
+      }
+
+      expect(
+        deriveSupportedHostEdit(initial.timeline, next, {
+          operationId: 'op-trim-explicit',
+          idempotencyKey: 'idem-trim-explicit',
+        }).batch?.commands,
+      ).toEqual([expect.objectContaining({ type: 'trim_item', item_id: 'clip-1', edge: 'end' })])
+    })
+
+    it('moves a clip whose transform key is present on only one side', () => {
+      const initial = minimalTwoClipSnapshot()
+      const withIdentity = withClipTwo(initial.timeline, {
+        transform: { x: 0, y: 0, scale_x: 1, scale_y: 1, rotation_degrees: 0 },
+      })
+
+      expect(
+        deriveSupportedHostEdit(withIdentity, withClipTwo(initial.timeline, { from: 150 }), {
+          operationId: 'op-identity-transform',
+          idempotencyKey: 'idem-identity-transform',
+        }).batch?.commands,
+      ).toEqual([expect.objectContaining({ type: 'move_item', item_id: 'clip-2' })])
+    })
+
+    it('keeps a genuinely non-identity transform change unsupported', () => {
+      const initial = minimalTwoClipSnapshot()
+      const derived = deriveSupportedHostEdit(
+        initial.timeline,
+        withClipTwo(initial.timeline, { from: 150, transform: { position_x: 24 } }),
+        { operationId: 'op-real-transform', idempotencyKey: 'idem-real-transform' },
+      )
+
+      expect(derived.batch).toBeNull()
+      expect(derived.detail?.failedPredicates).toEqual(['transform'])
+      expect(derived.detail?.changedFields).toEqual(['transform.x'])
+    })
+
+    it('names the failing predicate and the differing fields on a rejected change', () => {
+      const initial = minimalTwoClipSnapshot()
+      const derived = deriveSupportedHostEdit(
+        initial.timeline,
+        withClipTwo(initial.timeline, { from: 150, volume: 0.25 }),
+        { operationId: 'op-property-edit', idempotencyKey: 'idem-property-edit' },
+      )
+
+      expect(derived.batch).toBeNull()
+      expect(derived.reason).toMatch(
+        /^Property, effect, or animation edits are unsupported by the host slice\b/,
+      )
+      expect(derived.reason).toContain('mismatch: metadata')
+      expect(derived.reason).toContain('fields: volume')
+      expect(derived.detail).toEqual({
+        code: 'unclassified_item_change',
+        itemId: 'clip-2',
+        failedPredicates: ['metadata'],
+        changedFields: ['volume'],
+      })
+      // Field names only: no values, ids, or serialized items in the toast.
+      expect(derived.reason).not.toContain('0.25')
+    })
+
+    it('reports how many items changed when the diff is ambiguous', () => {
+      const initial = minimalTwoClipSnapshot()
+      const track = initial.timeline.tracks[0]!
+      const next = {
+        ...initial.timeline,
+        tracks: [
+          {
+            ...track,
+            items: [
+              { ...track.items[0]!, from: 200 },
+              { ...track.items[1]!, from: 400 },
+            ],
+          },
+        ],
+      }
+
+      const derived = deriveSupportedHostEdit(initial.timeline, next)
+
+      expect(derived.batch).toBeNull()
+      expect(derived.reason).toMatch(/^Multiple or ambiguous timeline changes are unsupported\b/)
+      expect(derived.reason).toContain('added 0, removed 0, changed 2')
+      expect(derived.detail).toEqual({
+        code: 'ambiguous_change',
+        changeCounts: { added: 0, removed: 0, changed: 2 },
+      })
+    })
+
+    it('derives a move_item command for a store drag of a clip carrying an identity transform', async () => {
+      const base = minimalTwoClipSnapshot()
+      const initial: EmbeddedEditorSnapshot = {
+        ...base,
+        timeline: withClipTwo(base.timeline, {
+          transform: { x: 0, y: 0, scale_x: 1, scale_y: 1, rotation_degrees: 0 },
+        }),
+      }
+      const harness = createFakeHost(initial)
+      const runtime = new EmbeddedEditorHostRuntime(harness.host, initial)
+      runtime.mountStores()
+      try {
+        useTimelineStore.getState().moveItem('clip-2', 150)
+        await flushReconcile()
+
+        expect(harness.submitEdit).toHaveBeenCalledTimes(1)
+        const batch = harness.submitEdit.mock.calls[0]![0] as EditCommandBatch
+        expect(batch.commands).toEqual([
+          expect.objectContaining({ type: 'move_item', item_id: 'clip-2' }),
+        ])
+      } finally {
+        runtime.unmountStores()
+      }
+    })
+
+    it('forwards the structured rejection detail on the host notice', async () => {
+      const initial = minimalTwoClipSnapshot()
+      const harness = createFakeHost(initial)
+      const notices: HostNotice[] = []
+      const runtime = new EmbeddedEditorHostRuntime(
+        { ...harness.host, notify: (notice) => notices.push(notice) },
+        initial,
+      )
+      runtime.mountStores()
+      try {
+        useTimelineStore.getState().updateItem('clip-2', { volume: 0.25 })
+        await flushReconcile()
+
+        expect(harness.submitEdit).not.toHaveBeenCalled()
+        expect(notices).toEqual([
+          expect.objectContaining({
+            kind: 'unsupported',
+            detail: expect.objectContaining({
+              code: 'unclassified_item_change',
+              itemId: 'clip-2',
+              changedFields: ['volume'],
+            }),
+          }),
         ])
       } finally {
         runtime.unmountStores()

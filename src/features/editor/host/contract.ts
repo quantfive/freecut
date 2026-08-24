@@ -108,10 +108,44 @@ export interface EmbeddedEditorSnapshot {
   assets: readonly EmbeddedEditorAsset[]
 }
 
+/**
+ * One predicate the local-change classifier evaluates.  A predicate is
+ * reported when it is the reason a change could not be classified:
+ *
+ * - `metadata` — a non-positional field differs
+ * - `transform` — the normalized transforms differ
+ * - `sourceRange` — both sides state a source bound and the bounds differ
+ * - `track` — the item changed track, which rules out a trim
+ * - `timelinePosition` — the timeline position and duration are unchanged,
+ *   which rules out a move
+ */
+export type HostEditPredicate =
+  | 'metadata'
+  | 'transform'
+  | 'sourceRange'
+  | 'track'
+  | 'timelinePosition'
+
+/**
+ * Value-free explanation of a rejected local change.  It carries which
+ * classifier predicates failed and which field *names* differed so a rejection
+ * is diagnosable from a screenshot or a host log.  It deliberately never
+ * carries field values, media locators, or serialized items.
+ */
+export interface HostEditRejectionDetail {
+  code: 'unclassified_item_change' | 'ambiguous_change'
+  itemId?: string
+  failedPredicates?: readonly HostEditPredicate[]
+  changedFields?: readonly string[]
+  changeCounts?: Readonly<{ added: number; removed: number; changed: number }>
+}
+
 export interface HostNotice {
   kind: 'info' | 'warning' | 'error' | 'unsupported' | 'conflict'
   message: string
   operationId?: string
+  /** Structured, value-free diagnostics for an `unsupported` rejection. */
+  detail?: HostEditRejectionDetail
 }
 
 /** Maximum section/range selection accepted by the PR9B transcript adapter. */

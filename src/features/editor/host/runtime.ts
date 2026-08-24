@@ -20,6 +20,7 @@ import {
   isHostCapabilityEnabled,
   type EmbeddedEditorSnapshot,
   type EditorHost,
+  type HostEditRejectionDetail,
   type HostNotice,
 } from './contract'
 import { HostEditorController, deriveSupportedHostEdit } from './controller'
@@ -245,7 +246,11 @@ export class EmbeddedEditorHostRuntime implements EmbeddedEditorHostRuntimeContr
       // Changes to transient view state do not constitute edits.  Anything
       // else is restored and surfaced as a visible host notice.
       if (derived.reason !== 'No supported edit was detected') {
-        this.restoreAuthoritative('unsupported', derived.reason ?? 'Unsupported host edit')
+        this.restoreAuthoritative(
+          'unsupported',
+          derived.reason ?? 'Unsupported host edit',
+          derived.detail,
+        )
       }
       return
     }
@@ -275,8 +280,12 @@ export class EmbeddedEditorHostRuntime implements EmbeddedEditorHostRuntimeContr
     }
   }
 
-  private restoreAuthoritative(kind: HostNotice['kind'], message: string): void {
-    this.host.notify?.({ kind, message })
+  private restoreAuthoritative(
+    kind: HostNotice['kind'],
+    message: string,
+    detail?: HostEditRejectionDetail,
+  ): void {
+    this.host.notify?.({ kind, message, ...(detail ? { detail } : {}) })
     this.applySnapshotToStores(this.authoritativeSnapshot)
   }
 
