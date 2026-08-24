@@ -4,6 +4,8 @@ import {
   isHostCapabilityEnabled,
   type EditorHost,
   type EmbeddedEditorSnapshot,
+  type HostEditPredicate,
+  type HostEditRejectionDetail,
   type HostEditResult,
   type HostNotice,
   type MediaLocator,
@@ -65,9 +67,26 @@ function isFrameClip(item: FreeCutFrameItem): item is FrameClip {
   return item.type === 'video' || item.type === 'audio' || item.type === 'image'
 }
 
+/**
+ * The bounds the native bridge synthesizes for a clip that carries none
+ * (see nativeItemFromHostItem).  Only use this where a concrete frame is
+ * required — representation matching and command payloads.  Never use it to
+ * decide whether the source range *changed*: `?? item.from` makes a move look
+ * like a source-range edit.  See `sourceBoundUnchanged`.
+ */
 function sourceBounds(item: FrameClip): [number, number] {
   const start = item.sourceStart ?? item.from
   return [start, item.sourceEnd ?? start + item.durationInFrames]
+}
+
+/**
+ * A source bound only counts as changed when both sides state it.  An absent
+ * bound is unknown, not "the timeline position": deriving it from `from` makes
+ * every move look like a source-range change, which rules out `move_item` on a
+ * cross-track drag and — worse — classifies a same-track drag as `trim_item`.
+ */
+function sourceBoundUnchanged(before: number | undefined, after: number | undefined): boolean {
+  return before === undefined || after === undefined || before === after
 }
 
 /**
@@ -120,6 +139,12 @@ function preconditionForItem(
   }
 }
 
+/**
+ * Everything except position, source range, and transform.  `opacity` is
+ * dropped with `transform` because the native bridge carries an otherwise
+ * identity transform as a top-level `opacity` field; `normalizedTransform`
+ * reads both carriers, so a real opacity edit is still caught there.
+ */
 function withoutPosition(item: unknown): unknown {
   if (!item || typeof item !== 'object') return item
   const copy = { ...(item as Record<string, unknown>) }
@@ -129,6 +154,7 @@ function withoutPosition(item: unknown): unknown {
   delete copy.sourceStart
   delete copy.sourceEnd
   delete copy.transform
+  delete copy.opacity
   return copy
 }
 
@@ -144,11 +170,23 @@ function firstNumericValue(
   return fallback
 }
 
-function normalizedTransform(item: unknown): Record<string, number> | null {
-  if (!item || typeof item !== 'object') return null
-  const transform = (item as Record<string, unknown>).transform
-  if (!transform || typeof transform !== 'object') return null
-  const value = transform as Record<string, unknown>
+/**
+ * Every item is normalized to the same eight-key transform, so an item that
+ * carries no `transform` key compares equal to one carrying the identity
+ * transform.  A host snapshot omits `transform` for a plain clip while the
+ * native round trip may materialize one (and vice versa); without this, the
+ * first drag of a plain clip fails both the move and the trim predicate.
+ *
+ * Opacity is read from `transform.opacity` or the item's top-level `opacity`,
+ * because the native bridge collapses an otherwise-identity transform into the
+ * latter.  A genuinely non-identity transform still compares as different.
+ */
+function normalizedTransform(item: unknown): Record<string, number> {
+  const owner: Record<string, unknown> =
+    item && typeof item === 'object' ? (item as Record<string, unknown>) : {}
+  const transform = owner.transform
+  const value =
+    transform && typeof transform === 'object' ? (transform as Record<string, unknown>) : {}
   return {
     x: firstNumericValue(value, ['x', 'position_x'], 0),
     y: firstNumericValue(value, ['y', 'position_y'], 0),
@@ -157,7 +195,7 @@ function normalizedTransform(item: unknown): Record<string, number> | null {
     rotation: firstNumericValue(value, ['rotation', 'rotation_degrees'], 0),
     anchorX: firstNumericValue(value, ['anchorX', 'anchor_x'], 0),
     anchorY: firstNumericValue(value, ['anchorY', 'anchor_y'], 0),
-    opacity: firstNumericValue(value, ['opacity'], 1),
+    opacity: firstNumericValue(value, ['opacity'], firstNumericValue(owner, ['opacity'], 1)),
   }
 }
 
@@ -174,6 +212,91 @@ function positionOnly(item: unknown): unknown {
     durationInFrames: value.durationInFrames,
     sourceStart: value.sourceStart,
     sourceEnd: value.sourceEnd,
+  }
+}
+
+/** Field names, never values, that differ between two plain objects. */
+function differingKeys(before: unknown, after: unknown): string[] {
+  const left = before && typeof before === 'object' ? (before as Record<string, unknown>) : {}
+  const right = after && typeof after === 'object' ? (after as Record<string, unknown>) : {}
+  return [...new Set([...Object.keys(left), ...Object.keys(right)])]
+    .filter((key) => stableSerialize(left[key]) !== stableSerialize(right[key]))
+    .sort()
+}
+
+/** Keep both the notice payload and the toast bounded. */
+const MAX_DETAIL_FIELDS = 24
+const MAX_MESSAGE_FIELDS = 6
+
+function describeFields(fields: readonly string[], limit: number): string {
+  if (fields.length <= limit) return fields.join(', ')
+  return `${fields.slice(0, limit).join(', ')} +${fields.length - limit} more`
+}
+
+/**
+ * Turn a structured rejection into the trailing clause of the user-facing
+ * reason.  The leading sentence is unchanged; only predicate and field *names*
+ * are appended, so a support person can tell the causes apart from a
+ * screenshot without any item content leaking into the toast.
+ */
+function describeRejection(detail: HostEditRejectionDetail): string {
+  const parts: string[] = []
+  if (detail.failedPredicates?.length) parts.push(`mismatch: ${detail.failedPredicates.join(', ')}`)
+  if (detail.changedFields?.length) {
+    parts.push(`fields: ${describeFields(detail.changedFields, MAX_MESSAGE_FIELDS)}`)
+  }
+  if (detail.changeCounts) {
+    const { added, removed, changed } = detail.changeCounts
+    parts.push(`added ${added}, removed ${removed}, changed ${changed}`)
+  }
+  return parts.length > 0 ? ` (${parts.join('; ')})` : ''
+}
+
+function sourceBoundOf(
+  item: FreeCutFrameItem,
+  key: 'sourceStart' | 'sourceEnd',
+): number | undefined {
+  return isFrameClip(item) ? item[key] : undefined
+}
+
+/** The field names a single failed predicate is about.  Names, never values. */
+function fieldsForPredicate(
+  predicate: HostEditPredicate,
+  before: FreeCutFrameItem,
+  after: FreeCutFrameItem,
+): string[] {
+  switch (predicate) {
+    case 'metadata':
+      return differingKeys(withoutPosition(before), withoutPosition(after))
+    case 'transform':
+      return differingKeys(normalizedTransform(before), normalizedTransform(after)).map(
+        (key) => `transform.${key}`,
+      )
+    case 'sourceRange':
+      return (['sourceStart', 'sourceEnd'] as const).filter(
+        (key) => !sourceBoundUnchanged(sourceBoundOf(before, key), sourceBoundOf(after, key)),
+      )
+    case 'track':
+      return ['trackId']
+    // `timelinePosition` fails because nothing moved, so it names no field.
+    default:
+      return []
+  }
+}
+
+function itemChangeRejectionDetail(
+  before: FreeCutFrameItem,
+  after: FreeCutFrameItem,
+  failedPredicates: readonly HostEditPredicate[],
+): HostEditRejectionDetail {
+  const fields = new Set(
+    failedPredicates.flatMap((predicate) => fieldsForPredicate(predicate, before, after)),
+  )
+  return {
+    code: 'unclassified_item_change',
+    itemId: before.id,
+    failedPredicates,
+    changedFields: [...fields].slice(0, MAX_DETAIL_FIELDS),
   }
 }
 
@@ -224,6 +347,8 @@ function commandIdsForChanges(
 export interface DerivedHostEdit {
   batch: EditCommandBatch | null
   reason?: string
+  /** Value-free diagnostics for a rejection, forwarded on the host notice. */
+  detail?: HostEditRejectionDetail
 }
 
 /**
@@ -358,18 +483,26 @@ export function deriveSupportedHostEdit(
     const transformUnchanged = transformsEquivalent(before, after)
     const sourceUnchanged =
       isFrameClip(before) && isFrameClip(after)
-        ? sourceBounds(before)[0] === sourceBounds(after)[0] &&
-          sourceBounds(before)[1] === sourceBounds(after)[1]
+        ? sourceBoundUnchanged(before.sourceStart, after.sourceStart) &&
+          sourceBoundUnchanged(before.sourceEnd, after.sourceEnd)
         : before.type === after.type
-    const timelineUnchanged =
-      before.from === after.from && before.durationInFrames === after.durationInFrames
+    const durationUnchanged = before.durationInFrames === after.durationInFrames
+    const timelineUnchanged = before.from === after.from && durationUnchanged
+    const sameTrack = before.trackId === after.trackId
+    // A move never changes the duration, and a trim always does *something*
+    // to the source window — either an explicit bound or the duration that
+    // stands in for one when the host states no bounds at all.
     const onlyPositionChanged =
-      metadataUnchanged && transformUnchanged && sourceUnchanged && !timelineUnchanged
+      metadataUnchanged &&
+      transformUnchanged &&
+      sourceUnchanged &&
+      durationUnchanged &&
+      !timelineUnchanged
     const onlyTrimChanged =
       metadataUnchanged &&
       transformUnchanged &&
-      before.trackId === after.trackId &&
-      !sourceUnchanged
+      sameTrack &&
+      (!sourceUnchanged || !durationUnchanged)
     const location = itemLocation(next, id)
     if (!location) return { batch: null, reason: 'The changed item no longer has a track' }
 
@@ -402,13 +535,29 @@ export function deriveSupportedHostEdit(
       })
       preconditions.push(preconditionForItem(before, fps))
     } else {
+      const failedPredicates: HostEditPredicate[] = []
+      if (!metadataUnchanged) failedPredicates.push('metadata')
+      if (!transformUnchanged) failedPredicates.push('transform')
+      if (!sourceUnchanged) failedPredicates.push('sourceRange')
+      if (!sameTrack) failedPredicates.push('track')
+      if (timelineUnchanged) failedPredicates.push('timelinePosition')
+      const detail = itemChangeRejectionDetail(before, after, failedPredicates)
       return {
         batch: null,
-        reason: 'Property, effect, or animation edits are unsupported by the host slice',
+        reason: `Property, effect, or animation edits are unsupported by the host slice${describeRejection(detail)}`,
+        detail,
       }
     }
   } else {
-    return { batch: null, reason: 'Multiple or ambiguous timeline changes are unsupported' }
+    const detail: HostEditRejectionDetail = {
+      code: 'ambiguous_change',
+      changeCounts: { added: added.length, removed: removed.length, changed: changed.length },
+    }
+    return {
+      batch: null,
+      reason: `Multiple or ambiguous timeline changes are unsupported${describeRejection(detail)}`,
+      detail,
+    }
   }
 
   if (commands.length === 0) return { batch: null, reason: 'No supported edit was detected' }

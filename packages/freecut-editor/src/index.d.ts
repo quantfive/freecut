@@ -160,10 +160,27 @@ export interface EmbeddedEditorSnapshot {
   assets: readonly EmbeddedEditorAsset[]
 }
 
+export type HostEditPredicate =
+  | 'metadata'
+  | 'transform'
+  | 'sourceRange'
+  | 'track'
+  | 'timelinePosition'
+
+export interface HostEditRejectionDetail {
+  code: 'unclassified_item_change' | 'ambiguous_change'
+  itemId?: string
+  failedPredicates?: readonly HostEditPredicate[]
+  changedFields?: readonly string[]
+  changeCounts?: Readonly<{ added: number; removed: number; changed: number }>
+}
+
 export interface HostNotice {
   kind: 'info' | 'warning' | 'error' | 'unsupported' | 'conflict'
   message: string
   operationId?: string
+  /** Structured, value-free diagnostics for an `unsupported` rejection. */
+  detail?: HostEditRejectionDetail
 }
 
 export declare const MAX_TRANSCRIPT_SELECTIONS: number

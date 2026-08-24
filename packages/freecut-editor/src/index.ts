@@ -27,6 +27,8 @@ export type {
   EditorTranscriptPort,
   HostAppliedEditResult,
   HostConflictResult,
+  HostEditPredicate,
+  HostEditRejectionDetail,
   HostEditResult,
   HostMediaKind,
   HostNotice,
