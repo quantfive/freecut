@@ -116,8 +116,8 @@ export interface EmbeddedEditorSnapshot {
  * - `transform` — the normalized transforms differ
  * - `sourceRange` — both sides state a source bound and the bounds differ
  * - `track` — the item changed track, which rules out a trim
- * - `timelinePosition` — the timeline position and duration are unchanged,
- *   which rules out a move
+ * - `timelinePosition` — the track, timeline position, and duration are all
+ *   unchanged, which rules out a move
  */
 export type HostEditPredicate =
   | 'metadata'

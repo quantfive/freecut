@@ -780,6 +780,62 @@ describe('embedded FreeCut host controller', () => {
       ])
     })
 
+    it('classifies a vertical-only drag to another track as a move', () => {
+      const initial = twoTrackSnapshot()
+      // Same start frame, same duration, different track: the timeline range
+      // is untouched, but the user still moved the clip.
+      const derived = deriveSupportedHostEdit(
+        initial.timeline,
+        withClipTwo(initial.timeline, { trackId: 'track-2' }),
+        { operationId: 'op-move-vertical', idempotencyKey: 'idem-move-vertical' },
+      )
+
+      expect(derived.reason).toBeUndefined()
+      expect(derived.batch?.commands).toEqual([
+        expect.objectContaining({
+          type: 'move_item',
+          item_id: 'clip-2',
+          to_track_id: 'track-2',
+          timeline_start_us: 2_000_000,
+        }),
+      ])
+    })
+
+    it('derives a move_item command for a store drag to another track at the same frame', async () => {
+      const initial = twoTrackSnapshot()
+      const harness = createFakeHost(initial)
+      const runtime = new EmbeddedEditorHostRuntime(harness.host, initial)
+      runtime.mountStores()
+      try {
+        useTimelineStore.getState().moveItem('clip-2', 60, 'track-2')
+        await flushReconcile()
+
+        expect(harness.submitEdit).toHaveBeenCalledTimes(1)
+        const batch = harness.submitEdit.mock.calls[0]![0] as EditCommandBatch
+        expect(batch.commands).toEqual([
+          expect.objectContaining({
+            type: 'move_item',
+            item_id: 'clip-2',
+            to_track_id: 'track-2',
+          }),
+        ])
+      } finally {
+        runtime.unmountStores()
+      }
+    })
+
+    it('still reports timelinePosition when an item changed but did not move', () => {
+      const initial = minimalTwoClipSnapshot()
+      const derived = deriveSupportedHostEdit(
+        initial.timeline,
+        withClipTwo(initial.timeline, { volume: 0.25 }),
+        { operationId: 'op-static-property', idempotencyKey: 'idem-static-property' },
+      )
+
+      expect(derived.batch).toBeNull()
+      expect(derived.detail?.failedPredicates).toEqual(['metadata', 'timelinePosition'])
+    })
+
     it('still trims a clip that states no source range when its duration shrinks', () => {
       const initial = minimalTwoClipSnapshot()
       const derived = deriveSupportedHostEdit(

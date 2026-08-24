@@ -489,6 +489,10 @@ export function deriveSupportedHostEdit(
     const durationUnchanged = before.durationInFrames === after.durationInFrames
     const timelineUnchanged = before.from === after.from && durationUnchanged
     const sameTrack = before.trackId === after.trackId
+    // A vertical-only drag — another track, same start frame and duration —
+    // leaves the timeline range untouched but is still a move, so the track
+    // counts as part of the position.
+    const positionUnchanged = timelineUnchanged && sameTrack
     // A move never changes the duration, and a trim always does *something*
     // to the source window — either an explicit bound or the duration that
     // stands in for one when the host states no bounds at all.
@@ -497,7 +501,7 @@ export function deriveSupportedHostEdit(
       transformUnchanged &&
       sourceUnchanged &&
       durationUnchanged &&
-      !timelineUnchanged
+      !positionUnchanged
     const onlyTrimChanged =
       metadataUnchanged &&
       transformUnchanged &&
@@ -540,7 +544,7 @@ export function deriveSupportedHostEdit(
       if (!transformUnchanged) failedPredicates.push('transform')
       if (!sourceUnchanged) failedPredicates.push('sourceRange')
       if (!sameTrack) failedPredicates.push('track')
-      if (timelineUnchanged) failedPredicates.push('timelinePosition')
+      if (positionUnchanged) failedPredicates.push('timelinePosition')
       const detail = itemChangeRejectionDetail(before, after, failedPredicates)
       return {
         batch: null,
