@@ -68,14 +68,18 @@ function isFrameClip(item: FreeCutFrameItem): item is FrameClip {
 }
 
 /**
- * The bounds the native bridge synthesizes for a clip that carries none
- * (see nativeItemFromHostItem).  Only use this where a concrete frame is
- * required — representation matching and command payloads.  Never use it to
- * decide whether the source range *changed*: `?? item.from` makes a move look
- * like a source-range edit.  See `sourceBoundUnchanged`.
+ * The concrete source window of a clip that states none: a clip with no
+ * source range plays from the start of its media for its timeline duration.
+ * Only use this where a concrete frame is required — representation matching
+ * and command payloads.  Never use it to decide whether the source range
+ * *changed*; see `sourceBoundUnchanged`.
+ *
+ * The default is 0, never `item.from`.  A bound derived from the timeline
+ * position moves with the clip, which made a plain drag look like a
+ * source-range edit here and made the bridge render the wrong media frames.
  */
 function sourceBounds(item: FrameClip): [number, number] {
-  const start = item.sourceStart ?? item.from
+  const start = item.sourceStart ?? 0
   return [start, item.sourceEnd ?? start + item.durationInFrames]
 }
 
@@ -90,10 +94,9 @@ function sourceBoundUnchanged(before: number | undefined, after: number | undefi
 }
 
 /**
- * Host snapshots may omit source bounds; the native bridge synthesizes them
- * (sourceStart ?? from, sourceEnd ?? sourceStart + duration).  Fill the same
- * defaults on both sides so an unchanged item compares equal regardless of
- * which side carried the explicit keys.
+ * Host snapshots may omit source bounds and so may the native round trip.
+ * Fill the same defaults on both sides so an unchanged item compares equal
+ * regardless of which side carried the explicit keys.
  */
 function withSynthesizedSourceBounds(item: FreeCutFrameItem): FreeCutFrameItem {
   if (!isFrameClip(item)) return item

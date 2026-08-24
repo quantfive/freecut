@@ -152,7 +152,11 @@ function toContractItem(item: FreeCutFrameItem, fps: FrameRateLike): TimelineIte
     }
   }
   const mediaKind = item.type
-  const sourceStart = item.sourceStart ?? item.from
+  // The wire shape requires a concrete source window, but a frame document
+  // that states none means "play from the start of the media" — source frame
+  // 0, not the timeline position.  Defaulting to `item.from` puts a different
+  // part of the media on the wire every time the clip is moved.
+  const sourceStart = item.sourceStart ?? 0
   const sourceEnd = item.sourceEnd ?? sourceStart + item.durationInFrames
   if (
     !Number.isSafeInteger(sourceStart) ||
