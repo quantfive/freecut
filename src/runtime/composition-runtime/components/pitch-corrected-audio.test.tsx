@@ -402,8 +402,7 @@ describe('PitchCorrectedAudio', () => {
     await waitFor(() => {
       expect(audioDecodeMocks.getOrDecodeAudioSliceForPlayback).toHaveBeenCalledTimes(1)
     })
-    const reverseOptions =
-      audioDecodeMocks.getOrDecodeAudioSliceForPlayback.mock.calls[0]?.[2]
+    const reverseOptions = audioDecodeMocks.getOrDecodeAudioSliceForPlayback.mock.calls[0]?.[2]
     expect(reverseOptions?.targetTimeSeconds).toBeCloseTo(10, 4)
     expect(reverseOptions?.preRollSeconds).toBe(4)
     expect(document.querySelector('[data-testid="pitch"]')).toBeInTheDocument()
@@ -503,5 +502,160 @@ describe('PitchCorrectedAudio cross-origin media', () => {
     expect(previewAudioMocks.markPreviewAudioElementUsesWebAudio).toHaveBeenCalledWith(
       previewAudioMocks.state.current,
     )
+  })
+})
+
+/**
+ * Records every write to `element.volume` in order, so a restore that happens
+ * to land on the pre-mute value by accident cannot be mistaken for a real one.
+ */
+function trackVolumeWrites(audio: HTMLAudioElement): number[] {
+  const writes: number[] = []
+  let value = audio.volume
+  Object.defineProperty(audio, 'volume', {
+    configurable: true,
+    get: () => value,
+    set: (next: number) => {
+      value = next
+      writes.push(next)
+    },
+  })
+  return writes
+}
+
+describe('PitchCorrectedAudio paused-seek pre-warm', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    clockRateMocks.current = 1
+    previewGraphMocks.graph.outputGainNode.gain.value = 1
+    playbackStateMocks.current = {
+      frame: 0,
+      fps: 30,
+      playing: false,
+      resolvedVolume: 1,
+      resolvedPitchShiftSemitones: 0,
+      resolvedAudioEqStages: [],
+    }
+  })
+
+  // Moving the playhead while paused schedules a muted play/pause that fills the
+  // decoder. Pressing play afterwards does not change resolvedVolume or muted,
+  // so the volume effect never re-runs — whatever this restores is what the user
+  // hears for the rest of the clip.
+  function scrubWhilePaused(src: string, rerender: (ui: React.ReactElement) => void) {
+    playbackStateMocks.current = { ...playbackStateMocks.current, frame: 6 }
+    rerender(
+      <PitchCorrectedAudio
+        src={src}
+        mediaId="media-1"
+        itemId="item-1"
+        durationInFrames={120}
+        playbackRate={1}
+      />,
+    )
+  }
+
+  function renderClip(src: string) {
+    return render(
+      <PitchCorrectedAudio
+        src={src}
+        mediaId="media-1"
+        itemId="item-1"
+        durationInFrames={120}
+        playbackRate={1}
+      />,
+    )
+  }
+
+  describe('on the direct path (cross-origin host source, no Web Audio graph)', () => {
+    const SRC = 'https://cdn.example.com/signed.mp3'
+
+    it('restores the clip volume after the pre-warm play resolves', async () => {
+      playbackStateMocks.current = { ...playbackStateMocks.current, resolvedVolume: 0.4 }
+      const { rerender } = renderClip(SRC)
+
+      const audio = previewAudioMocks.state.current!
+      await waitFor(() => expect(audio.volume).toBeCloseTo(0.4))
+      expect(previewGraphMocks.createPreviewClipAudioGraph).not.toHaveBeenCalled()
+
+      const writes = trackVolumeWrites(audio)
+      scrubWhilePaused(SRC, rerender)
+
+      await waitFor(() => expect(writes.length).toBeGreaterThanOrEqual(2))
+      expect(audio.play).toHaveBeenCalled()
+      expect(writes).toEqual([0, 0.4])
+      expect(audio.volume).toBeCloseTo(0.4)
+    })
+
+    it('restores the clip volume when the pre-warm play is rejected', async () => {
+      playbackStateMocks.current = { ...playbackStateMocks.current, resolvedVolume: 0.4 }
+      const { rerender } = renderClip(SRC)
+
+      const audio = previewAudioMocks.state.current!
+      await waitFor(() => expect(audio.volume).toBeCloseTo(0.4))
+      ;(audio.play as ReturnType<typeof vi.fn>).mockImplementation(() =>
+        Promise.reject(new Error('NotAllowedError')),
+      )
+
+      const writes = trackVolumeWrites(audio)
+      scrubWhilePaused(SRC, rerender)
+
+      await waitFor(() => expect(writes.length).toBeGreaterThanOrEqual(2))
+      expect(writes).toEqual([0, 0.4])
+      expect(audio.volume).toBeCloseTo(0.4)
+    })
+  })
+
+  describe('on the Web Audio graph path (same-origin source)', () => {
+    const SRC = 'blob:audio-prewarm'
+
+    it('restores the graph gain and leaves element.volume alone', async () => {
+      const { rerender } = renderClip(SRC)
+
+      await waitFor(() =>
+        expect(previewGraphMocks.graph.context.createMediaElementSource).toHaveBeenCalled(),
+      )
+      const audio = previewAudioMocks.state.current!
+      previewGraphMocks.graph.outputGainNode.gain.value = 0.42
+
+      const writes = trackVolumeWrites(audio)
+      scrubWhilePaused(SRC, rerender)
+
+      await waitFor(() =>
+        expect(previewGraphMocks.setPreviewClipGain.mock.calls.length).toBeGreaterThanOrEqual(2),
+      )
+      expect(previewGraphMocks.setPreviewClipGain.mock.calls).toEqual([
+        [previewGraphMocks.graph, 0],
+        [previewGraphMocks.graph, 0.42],
+      ])
+      expect(writes).toEqual([])
+      expect(audio.volume).toBe(1)
+    })
+
+    it('restores the graph gain when the pre-warm play is rejected', async () => {
+      const { rerender } = renderClip(SRC)
+
+      await waitFor(() =>
+        expect(previewGraphMocks.graph.context.createMediaElementSource).toHaveBeenCalled(),
+      )
+      const audio = previewAudioMocks.state.current!
+      previewGraphMocks.graph.outputGainNode.gain.value = 0.42
+      ;(audio.play as ReturnType<typeof vi.fn>).mockImplementation(() =>
+        Promise.reject(new Error('NotAllowedError')),
+      )
+
+      const writes = trackVolumeWrites(audio)
+      scrubWhilePaused(SRC, rerender)
+
+      await waitFor(() =>
+        expect(previewGraphMocks.setPreviewClipGain.mock.calls.length).toBeGreaterThanOrEqual(2),
+      )
+      expect(previewGraphMocks.setPreviewClipGain.mock.calls).toEqual([
+        [previewGraphMocks.graph, 0],
+        [previewGraphMocks.graph, 0.42],
+      ])
+      expect(writes).toEqual([])
+      expect(audio.pause).not.toHaveBeenCalled()
+    })
   })
 })

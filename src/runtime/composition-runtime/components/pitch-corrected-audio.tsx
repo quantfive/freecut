@@ -108,15 +108,7 @@ const DecodedPitchFallbackAudio: React.FC<DecodedPitchFallbackAudioProps> = ({
         Math.round((audioBuffer.duration - sourceEndSeconds) * effectiveSourceFps),
       ),
     }
-  }, [
-    audioBuffer,
-    isComplete,
-    isReversed,
-    reverseSourceEnd,
-    sourceFps,
-    timelineFps,
-    trimBefore,
-  ])
+  }, [audioBuffer, isComplete, isReversed, reverseSourceEnd, sourceFps, timelineFps, trimBefore])
   const fallbackBuffer = reversedPlayback?.buffer ?? audioBuffer
 
   useEffect(() => {
@@ -437,7 +429,12 @@ export const NativePitchCorrectedAudio: React.FC<PitchCorrectedAudioProps> = Rea
               !usePlaybackStore.getState().isPlaying
             ) {
               const graph = graphRef.current
-              const previousGain = graph?.outputGainNode.gain.value ?? 0
+              // Snapshot from whichever gain stage this clip actually uses.  On the
+              // direct path there is no graph, so element.volume — the value the
+              // volume effect above last committed — is the level to restore; a
+              // shared `?? 0` default would silence the clip until the next volume
+              // change, which never arrives just from pressing play.
+              const previousGain = graph ? graph.outputGainNode.gain.value : currentAudio.volume
               if (graph) {
                 setPreviewClipGain(graph, 0)
               } else {
