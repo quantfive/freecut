@@ -435,6 +435,20 @@ export const NativePitchCorrectedAudio: React.FC<PitchCorrectedAudioProps> = Rea
               // shared `?? 0` default would silence the clip until the next volume
               // change, which never arrives just from pressing play.
               const previousGain = graph ? graph.outputGainNode.gain.value : currentAudio.volume
+              // Restoring is unconditional: only the pause is the playback
+              // state's business.  Transport can start while play() is still
+              // pending, and skipping the restore then leaves the clip audibly
+              // silent for as long as the volume effect stays idle — its deps
+              // are [finalVolume, muted], and pressing play changes neither.
+              // Mirrors the video pre-warm in video-content.tsx, which likewise
+              // restores in `finally` and gates only the pause.
+              const restoreGain = () => {
+                if (graph) {
+                  setPreviewClipGain(graph, previousGain)
+                } else {
+                  currentAudio.volume = previousGain
+                }
+              }
               if (graph) {
                 setPreviewClipGain(graph, 0)
               } else {
@@ -445,22 +459,12 @@ export const NativePitchCorrectedAudio: React.FC<PitchCorrectedAudioProps> = Rea
                 .then(() => {
                   if (!usePlaybackStore.getState().isPlaying) {
                     currentAudio.pause()
-                    if (graph) {
-                      setPreviewClipGain(graph, previousGain)
-                    } else {
-                      currentAudio.volume = previousGain
-                    }
                   }
                 })
                 .catch(() => {
-                  if (!usePlaybackStore.getState().isPlaying) {
-                    if (graph) {
-                      setPreviewClipGain(graph, previousGain)
-                    } else {
-                      currentAudio.volume = previousGain
-                    }
-                  }
+                  // Autoplay might be blocked.
                 })
+                .finally(restoreGain)
             }
           }, 50)
         }

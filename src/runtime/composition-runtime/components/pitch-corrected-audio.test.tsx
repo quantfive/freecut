@@ -1,4 +1,4 @@
-import { render, waitFor } from '@testing-library/react'
+import { act, render, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vite-plus/test'
 import { DEFAULT_AUDIO_EQ_SETTINGS } from '@/shared/utils/audio-eq'
 
@@ -100,6 +100,10 @@ const previewGraphMocks = vi.hoisted(() => {
   }
 })
 
+const playbackStoreState = vi.hoisted(() => ({
+  current: { isPlaying: false, previewFrame: null as number | null },
+}))
+
 const storeMocks = vi.hoisted(() => {
   const gizmoState = { activeGizmo: null, preview: null }
   const useGizmoStore = Object.assign(
@@ -114,7 +118,7 @@ const storeMocks = vi.hoisted(() => {
   return {
     useGizmoStore,
     usePlaybackStore: {
-      getState: () => ({ isPlaying: false, previewFrame: null }),
+      getState: () => playbackStoreState.current,
     },
   }
 })
@@ -523,10 +527,23 @@ function trackVolumeWrites(audio: HTMLAudioElement): number[] {
   return writes
 }
 
+/**
+ * Waits for the 50ms pre-warm timer to fire, then drains the entire
+ * play()/then/catch/finally microtask chain, so assertions read a settled state
+ * and a failure reports the actual write sequence instead of a waitFor timeout.
+ */
+async function settlePreWarm(audio: HTMLAudioElement) {
+  await waitFor(() => expect(audio.play).toHaveBeenCalled())
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0))
+  })
+}
+
 describe('PitchCorrectedAudio paused-seek pre-warm', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     clockRateMocks.current = 1
+    playbackStoreState.current = { isPlaying: false, previewFrame: null }
     previewGraphMocks.graph.outputGainNode.gain.value = 1
     playbackStateMocks.current = {
       frame: 0,
@@ -581,8 +598,7 @@ describe('PitchCorrectedAudio paused-seek pre-warm', () => {
       const writes = trackVolumeWrites(audio)
       scrubWhilePaused(SRC, rerender)
 
-      await waitFor(() => expect(writes.length).toBeGreaterThanOrEqual(2))
-      expect(audio.play).toHaveBeenCalled()
+      await settlePreWarm(audio)
       expect(writes).toEqual([0, 0.4])
       expect(audio.volume).toBeCloseTo(0.4)
     })
@@ -600,7 +616,7 @@ describe('PitchCorrectedAudio paused-seek pre-warm', () => {
       const writes = trackVolumeWrites(audio)
       scrubWhilePaused(SRC, rerender)
 
-      await waitFor(() => expect(writes.length).toBeGreaterThanOrEqual(2))
+      await settlePreWarm(audio)
       expect(writes).toEqual([0, 0.4])
       expect(audio.volume).toBeCloseTo(0.4)
     })
@@ -621,9 +637,7 @@ describe('PitchCorrectedAudio paused-seek pre-warm', () => {
       const writes = trackVolumeWrites(audio)
       scrubWhilePaused(SRC, rerender)
 
-      await waitFor(() =>
-        expect(previewGraphMocks.setPreviewClipGain.mock.calls.length).toBeGreaterThanOrEqual(2),
-      )
+      await settlePreWarm(audio)
       expect(previewGraphMocks.setPreviewClipGain.mock.calls).toEqual([
         [previewGraphMocks.graph, 0],
         [previewGraphMocks.graph, 0.42],
@@ -647,15 +661,146 @@ describe('PitchCorrectedAudio paused-seek pre-warm', () => {
       const writes = trackVolumeWrites(audio)
       scrubWhilePaused(SRC, rerender)
 
-      await waitFor(() =>
-        expect(previewGraphMocks.setPreviewClipGain.mock.calls.length).toBeGreaterThanOrEqual(2),
-      )
+      await settlePreWarm(audio)
       expect(previewGraphMocks.setPreviewClipGain.mock.calls).toEqual([
         [previewGraphMocks.graph, 0],
         [previewGraphMocks.graph, 0.42],
       ])
       expect(writes).toEqual([])
       expect(audio.pause).not.toHaveBeenCalled()
+    })
+  })
+
+  // The pre-warm's play() promise is still pending when transport starts. The
+  // clip must keep playing (no pause) AND get its level back — skipping the
+  // restore here is the same silent-clip symptom, and it reaches the graph path
+  // too, so standalone FreeCut is exposed as well.
+  describe('when playback starts while the pre-warm play is still pending', () => {
+    /** Simulates the user pressing Play between play() and its promise settling. */
+    function startTransportOnPlay(audio: HTMLAudioElement, outcome: 'resolve' | 'reject') {
+      ;(audio.play as ReturnType<typeof vi.fn>).mockImplementation(() => {
+        playbackStoreState.current = { isPlaying: true, previewFrame: null }
+        if (outcome === 'reject') {
+          return Promise.reject(new Error('NotAllowedError'))
+        }
+        ;(audio as unknown as { paused: boolean }).paused = false
+        return Promise.resolve()
+      })
+    }
+
+    const DIRECT_SRC = 'https://cdn.example.com/signed.mp3'
+    const GRAPH_SRC = 'blob:audio-prewarm-transport'
+
+    it('leaves the clip audible on the direct path when the play resolves', async () => {
+      playbackStateMocks.current = { ...playbackStateMocks.current, resolvedVolume: 0.4 }
+      const { rerender } = renderClip(DIRECT_SRC)
+
+      const audio = previewAudioMocks.state.current!
+      await waitFor(() => expect(audio.volume).toBeCloseTo(0.4))
+      startTransportOnPlay(audio, 'resolve')
+
+      const writes = trackVolumeWrites(audio)
+      scrubWhilePaused(DIRECT_SRC, rerender)
+
+      await settlePreWarm(audio)
+      expect(writes).toEqual([0, 0.4])
+      expect(audio.volume).toBeCloseTo(0.4)
+      // Transport owns the element now — the pre-warm must not stop it.
+      expect(audio.pause).not.toHaveBeenCalled()
+    })
+
+    it('leaves the clip audible on the direct path when the play is rejected', async () => {
+      playbackStateMocks.current = { ...playbackStateMocks.current, resolvedVolume: 0.4 }
+      const { rerender } = renderClip(DIRECT_SRC)
+
+      const audio = previewAudioMocks.state.current!
+      await waitFor(() => expect(audio.volume).toBeCloseTo(0.4))
+      startTransportOnPlay(audio, 'reject')
+
+      const writes = trackVolumeWrites(audio)
+      scrubWhilePaused(DIRECT_SRC, rerender)
+
+      await settlePreWarm(audio)
+      expect(writes).toEqual([0, 0.4])
+      expect(audio.volume).toBeCloseTo(0.4)
+    })
+
+    it('leaves the clip audible on the graph path when the play resolves', async () => {
+      const { rerender } = renderClip(GRAPH_SRC)
+
+      await waitFor(() =>
+        expect(previewGraphMocks.graph.context.createMediaElementSource).toHaveBeenCalled(),
+      )
+      const audio = previewAudioMocks.state.current!
+      previewGraphMocks.graph.outputGainNode.gain.value = 0.42
+      startTransportOnPlay(audio, 'resolve')
+
+      scrubWhilePaused(GRAPH_SRC, rerender)
+
+      await settlePreWarm(audio)
+      expect(previewGraphMocks.setPreviewClipGain.mock.calls).toEqual([
+        [previewGraphMocks.graph, 0],
+        [previewGraphMocks.graph, 0.42],
+      ])
+      expect(audio.pause).not.toHaveBeenCalled()
+    })
+
+    it('leaves the clip audible on the graph path when the play is rejected', async () => {
+      const { rerender } = renderClip(GRAPH_SRC)
+
+      await waitFor(() =>
+        expect(previewGraphMocks.graph.context.createMediaElementSource).toHaveBeenCalled(),
+      )
+      const audio = previewAudioMocks.state.current!
+      previewGraphMocks.graph.outputGainNode.gain.value = 0.42
+      startTransportOnPlay(audio, 'reject')
+
+      scrubWhilePaused(GRAPH_SRC, rerender)
+
+      await settlePreWarm(audio)
+      expect(previewGraphMocks.setPreviewClipGain.mock.calls).toEqual([
+        [previewGraphMocks.graph, 0],
+        [previewGraphMocks.graph, 0.42],
+      ])
+    })
+
+    // Guard, not a regression witness: this holds with or without the
+    // unconditional restore. It pins that restoring while transport runs cannot
+    // un-mute a clip the user silenced — previousGain is 0 for a muted clip, so
+    // the restore writes 0 and the clip stays correctly silent.
+    it('keeps a legitimately muted clip silent rather than restoring it to audible', async () => {
+      playbackStateMocks.current = { ...playbackStateMocks.current, resolvedVolume: 0 }
+      const { rerender } = render(
+        <PitchCorrectedAudio
+          src={DIRECT_SRC}
+          mediaId="media-1"
+          itemId="item-1"
+          durationInFrames={120}
+          playbackRate={1}
+          muted
+        />,
+      )
+
+      const audio = previewAudioMocks.state.current!
+      await waitFor(() => expect(audio.muted).toBe(true))
+      expect(audio.volume).toBe(0)
+      startTransportOnPlay(audio, 'resolve')
+
+      playbackStateMocks.current = { ...playbackStateMocks.current, frame: 6 }
+      rerender(
+        <PitchCorrectedAudio
+          src={DIRECT_SRC}
+          mediaId="media-1"
+          itemId="item-1"
+          durationInFrames={120}
+          playbackRate={1}
+          muted
+        />,
+      )
+
+      await waitFor(() => expect(audio.play).toHaveBeenCalled())
+      await waitFor(() => expect(audio.volume).toBe(0))
+      expect(audio.muted).toBe(true)
     })
   })
 })
