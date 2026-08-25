@@ -21,7 +21,11 @@ import {
   type HostNotice,
   type MediaLocator,
 } from './contract'
-import { HostEditorController, deriveSupportedHostEdit } from './controller'
+import {
+  HostEditorController,
+  NO_SUPPORTED_EDIT_REASON,
+  deriveSupportedHostEdit,
+} from './controller'
 import { framesToMicroseconds } from '@/features/editor/codepress/timing'
 import { hostSnapshotToNativeTimeline, nativeTimelineToFrameDocument } from './document'
 import { EmbeddedEditorHostRuntime } from './runtime'
@@ -1243,6 +1247,37 @@ describe('embedded FreeCut host controller', () => {
 
     it('stays silent when playback scroll reconciles an untouched host document', async () => {
       await expectSilentReconcile(minimalTwoClipSnapshot())
+    })
+
+    /**
+     * The silent path is a binding between two modules, not a message:
+     * `deriveSupportedHostEdit` returns this reason and `reconcileTimeline`
+     * branches on it to skip both the notice and the snapshot restore.  Assert
+     * the reason *is* the constant the runtime imports rather than a string
+     * that happens to read the same, so re-inlining a literal on either side
+     * fails here instead of quietly restoring the snapshot on every playback
+     * scroll again.
+     */
+    it('routes the silent no-op through the constant the runtime branches on', async () => {
+      const initial = minimalTwoClipSnapshot()
+      const harness = createFakeHost(initial)
+      const notices: HostNotice[] = []
+      const runtime = new EmbeddedEditorHostRuntime(
+        { ...harness.host, notify: (notice) => notices.push(notice) },
+        initial,
+      )
+      runtime.mountStores()
+      try {
+        playbackPageFollowScroll()
+        await flushReconcile()
+
+        expect(notices).toEqual([])
+        expect(deriveSupportedHostEdit(initial.timeline, initial.timeline).reason).toBe(
+          NO_SUPPORTED_EDIT_REASON,
+        )
+      } finally {
+        runtime.unmountStores()
+      }
     })
 
     it('stays silent when playback scroll reconciles an untouched clip with a transform', async () => {

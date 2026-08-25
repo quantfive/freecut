@@ -395,6 +395,17 @@ function commandIdsForChanges(
   return { added, removed, changed }
 }
 
+/**
+ * The reason that means "this diff is not an edit at all".  The runtime
+ * branches on this exact value to stay silent — no command, no notice, and no
+ * restoration of the authoritative snapshot — so it is a binding between two
+ * modules, not a message.  Every no-op reconcile now travels this path,
+ * including the ones a playback scroll triggers, so an inlined copy that
+ * drifts by a character would silently reinstate the rejection this exists to
+ * prevent, with nothing failing to say so.  Import it; never respell it.
+ */
+export const NO_SUPPORTED_EDIT_REASON = 'No supported edit was detected'
+
 export interface DerivedHostEdit {
   batch: EditCommandBatch | null
   reason?: string
@@ -610,7 +621,7 @@ export function deriveSupportedHostEdit(
     }
   }
 
-  if (commands.length === 0) return { batch: null, reason: 'No supported edit was detected' }
+  if (commands.length === 0) return { batch: null, reason: NO_SUPPORTED_EDIT_REASON }
   return {
     batch: {
       contract_version: 1,

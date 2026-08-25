@@ -23,7 +23,11 @@ import {
   type HostEditRejectionDetail,
   type HostNotice,
 } from './contract'
-import { HostEditorController, deriveSupportedHostEdit } from './controller'
+import {
+  HostEditorController,
+  NO_SUPPORTED_EDIT_REASON,
+  deriveSupportedHostEdit,
+} from './controller'
 import {
   hostAssetsToMediaMetadata,
   hostSnapshotToNativeTimeline,
@@ -245,7 +249,7 @@ export class EmbeddedEditorHostRuntime implements EmbeddedEditorHostRuntimeContr
     if (!derived.batch) {
       // Changes to transient view state do not constitute edits.  Anything
       // else is restored and surfaced as a visible host notice.
-      if (derived.reason !== 'No supported edit was detected') {
+      if (derived.reason !== NO_SUPPORTED_EDIT_REASON) {
         this.restoreAuthoritative(
           'unsupported',
           derived.reason ?? 'Unsupported host edit',
