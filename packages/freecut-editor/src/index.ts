@@ -1,4 +1,5 @@
 export { FreeCutEditorSurface } from '@/features/editor/host/editor-surface'
+export type { FreeCutEditorSurfaceApi } from '@/features/editor/host/editor-surface'
 export { EditorHostProvider } from '@/features/editor/host/context-provider'
 export {
   DEFAULT_HOST_CAPABILITIES,
@@ -21,6 +22,7 @@ export type {
   EditorCapabilityMap,
   EditorHost,
   EditorHostNavigation,
+  EditorSidebarModule,
   EmbeddedEditorAsset,
   EmbeddedEditorProject,
   EmbeddedEditorSnapshot,

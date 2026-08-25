@@ -1,4 +1,4 @@
-import type { ComponentType, ReactNode } from 'react'
+import type { ComponentType, ReactNode, RefObject } from 'react'
 
 export type EditorCapability =
   | 'project.navigate'
@@ -354,6 +354,21 @@ export interface EditorHostNavigation {
   back(): void
 }
 
+export interface EditorSidebarModule {
+  /** Host-scoped identifier; namespaced to `host:<id>` internally. */
+  id: string
+  /** Rail tooltip and panel header label. Host-owned, already localized. */
+  label: string
+  /** Lucide-compatible rail icon. */
+  icon: ComponentType<{ className?: string }>
+  /**
+   * Rendered in the sidebar panel area. Mounted on first activation and kept
+   * mounted across tab switches so in-flight host work survives; `active`
+   * tells the panel whether its tab is currently selected.
+   */
+  Panel: ComponentType<{ active: boolean }>
+}
+
 export interface EditorHost {
   readonly capabilities: EditorCapabilityMap
   load(): Promise<EmbeddedEditorSnapshot> | EmbeddedEditorSnapshot
@@ -363,6 +378,7 @@ export interface EditorHost {
   submitEdit(batch: EditCommandBatch): Promise<HostEditResult> | HostEditResult
   subscribe?(listener: (snapshot: EmbeddedEditorSnapshot) => void): () => void
   transcript?: EditorTranscriptPort
+  sidebarModules?: readonly EditorSidebarModule[]
   navigation?: EditorHostNavigation
   notify?(notice: HostNotice): void
 }
@@ -382,8 +398,16 @@ export interface EditorHostProviderProps {
   children: ReactNode
 }
 
+export interface FreeCutEditorSurfaceApi {
+  /** Select a registered `sidebarModules` entry's tab and open the panel. */
+  openSidebarModule(id: string): void
+  /** Close the left sidebar panel. */
+  closeSidebar(): void
+}
+
 export interface FreeCutEditorSurfaceProps {
   host: EditorHost
+  apiRef?: RefObject<FreeCutEditorSurfaceApi | null>
 }
 
 export declare const FreeCutEditorSurface: ComponentType<FreeCutEditorSurfaceProps>

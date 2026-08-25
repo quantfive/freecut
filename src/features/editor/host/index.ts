@@ -1,6 +1,7 @@
 // fallow-ignore-file unused-file
 
 export { FreeCutEditorSurface } from './editor-surface'
+export type { FreeCutEditorSurfaceApi } from './editor-surface'
 export { useEditorCapability, useEditorHostContext, useEditorHostMode } from './context'
 export { EditorHostProvider } from './context-provider'
 export type { EditorHostContextValue } from './context'
@@ -24,6 +25,7 @@ export type {
   EditorCapabilityMap,
   EditorHost,
   EditorHostNavigation,
+  EditorSidebarModule,
   EmbeddedEditorAsset,
   EmbeddedEditorProject,
   EmbeddedEditorSnapshot,

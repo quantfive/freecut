@@ -42,6 +42,31 @@ provider details, URLs, paths, and media bytes remain host-owned.
 The same 0.3.0 surface retains the host-backed caption tracks, bounded cues,
 caption styles, and display toggles from 0.2.0.
 
+The 0.3.6 surface lets the host register its own modules into the editor's
+left sidebar rail. `EditorHost.sidebarModules` entries (`{ id, label, icon,
+Panel }`) appear as `host:<id>` rail tabs after the built-in categories; the
+surface renders each module's `Panel` in the sidebar panel area, mounts it on
+first activation, and keeps it mounted across tab switches and authoritative
+snapshot installs so in-flight host work survives. Icons and panels cross the
+package boundary as React components (react/react-dom are peer dependencies).
+`FreeCutEditorSurface` also accepts an optional `apiRef` that receives a
+`FreeCutEditorSurfaceApi` — `openSidebarModule(id)` selects a registered
+module's tab and opens the panel (unregistered ids fail closed), and
+`closeSidebar()` closes the panel.
+
+```tsx
+const apiRef = useRef<FreeCutEditorSurfaceApi>(null)
+
+const host: EditorHost = {
+  // ...capabilities, load, resolveMedia, submitEdit
+  sidebarModules: [
+    { id: 'transcribe', label: 'Transcribe', icon: Captions, Panel: TranscribePanel },
+  ],
+}
+
+<FreeCutEditorSurface host={host} apiRef={apiRef} />
+```
+
 This package is built from a specific FreeCut commit. To create the local
 consumer artifact from a clean checkout, run:
 

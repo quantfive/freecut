@@ -1,3 +1,4 @@
+import type { ComponentType } from 'react'
 import type {
   EditApplyResult,
   EditCommandBatch,
@@ -328,6 +329,29 @@ export interface EditorHostNavigation {
   back(): void
 }
 
+/**
+ * A host-owned module registered into the editor's left sidebar rail.  The
+ * surface namespaces the tab id to `host:<id>` internally so host tabs cannot
+ * collide with the built-in rail categories, and renders `Panel` in the
+ * sidebar panel area.  Icons and panels cross the package boundary as React
+ * components; react/react-dom are peer dependencies, so the host and the
+ * surface share one React copy.
+ */
+export interface EditorSidebarModule {
+  /** Host-scoped identifier; namespaced to `host:<id>` internally. */
+  id: string
+  /** Rail tooltip and panel header label.  Host-owned, already localized. */
+  label: string
+  /** Lucide-compatible rail icon. */
+  icon: ComponentType<{ className?: string }>
+  /**
+   * Rendered in the sidebar panel area.  Mounted on first activation and kept
+   * mounted across tab switches so in-flight host work survives; `active`
+   * tells the panel whether its tab is currently selected.
+   */
+  Panel: ComponentType<{ active: boolean }>
+}
+
 export interface EditorHost {
   readonly capabilities: EditorCapabilityMap
   load(): Promise<EmbeddedEditorSnapshot> | EmbeddedEditorSnapshot
@@ -345,6 +369,8 @@ export interface EditorHost {
   subscribe?(listener: (snapshot: EmbeddedEditorSnapshot) => void): () => void
   /** Optional application-issued transcript read/preview boundary. */
   transcript?: EditorTranscriptPort
+  /** Optional host-owned modules added to the editor's left sidebar rail. */
+  sidebarModules?: readonly EditorSidebarModule[]
   navigation?: EditorHostNavigation
   notify?(notice: HostNotice): void
 }
