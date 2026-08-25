@@ -32,6 +32,12 @@ interface MockHostRuntime {
   unmountStores(): void
 }
 
+// Whether the mock editor's store-mounting effect has actually run. The
+// runtime only subscribes to the controller inside mountStores(), so a snapshot
+// pushed before that effect flushes is silently dropped — tests must wait for
+// this rather than for the editor node appearing in the DOM.
+const editorStoreLifetime = vi.hoisted(() => ({ mounted: 0 }))
+
 vi.mock('@/features/editor/components/editor', () => ({
   LoadedEditor: ({
     projectId,
@@ -45,7 +51,11 @@ vi.mock('@/features/editor/components/editor', () => ({
     // tree is mounted; mirror it so store assertions see the host runtime.
     useEffect(() => {
       hostRuntime?.mountStores()
-      return () => hostRuntime?.unmountStores()
+      editorStoreLifetime.mounted += 1
+      return () => {
+        hostRuntime?.unmountStores()
+        editorStoreLifetime.mounted -= 1
+      }
     }, [hostRuntime])
     return (
       <div data-testid="loaded-editor">
@@ -145,7 +155,8 @@ describe('FreeCut host browser surface', () => {
     const harness = subscribableHost()
     const { unmount } = render(<FreeCutEditorSurface host={harness.host} />)
 
-    await waitFor(() => expect(screen.getByTestId('loaded-editor')).toBeInTheDocument())
+    await waitFor(() => expect(editorStoreLifetime.mounted).toBeGreaterThan(0))
+    expect(screen.getByTestId('loaded-editor')).toBeInTheDocument()
     expect(harness.host.subscribe).toHaveBeenCalledTimes(1)
     expect(useItemsStore.getState().items).toHaveLength(0)
 
