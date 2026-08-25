@@ -93,17 +93,6 @@ function sourceBoundUnchanged(before: number | undefined, after: number | undefi
   return before === undefined || after === undefined || before === after
 }
 
-/**
- * Host snapshots may omit source bounds and so may the native round trip.
- * Fill the same defaults on both sides so an unchanged item compares equal
- * regardless of which side carried the explicit keys.
- */
-function withSynthesizedSourceBounds(item: FreeCutFrameItem): FreeCutFrameItem {
-  if (!isFrameClip(item)) return item
-  const [sourceStart, sourceEnd] = sourceBounds(item)
-  return { ...item, sourceStart, sourceEnd }
-}
-
 function trackIndex(document: FreeCutFrameDocument, trackId: string): number {
   return Math.max(
     0,
@@ -174,7 +163,7 @@ function firstNumericValue(
 }
 
 /**
- * Every item is normalized to the same eight-key transform, so an item that
+ * Every item is normalized to the same transform shape, so an item that
  * carries no `transform` key compares equal to one carrying the identity
  * transform.  A host snapshot omits `transform` for a plain clip while the
  * native round trip may materialize one (and vice versa); without this, the
@@ -198,6 +187,14 @@ function normalizedTransform(item: unknown): Record<string, number> {
     rotation: firstNumericValue(value, ['rotation', 'rotation_degrees'], 0),
     anchorX: firstNumericValue(value, ['anchorX', 'anchor_x'], 0),
     anchorY: firstNumericValue(value, ['anchorY', 'anchor_y'], 0),
+    // 0 is the bridge's "unset" size on both sides (`nativeTransformToFrame`
+    // fills an absent width/height with it), so an absent transform still
+    // compares equal to an identity one.  Omitting these here would make a
+    // gizmo resize normalize away to nothing, and since the change detector
+    // now shares this normalization that resize would be silently kept local
+    // instead of being rejected by name.
+    width: firstNumericValue(value, ['width'], 0),
+    height: firstNumericValue(value, ['height'], 0),
     opacity: firstNumericValue(value, ['opacity'], firstNumericValue(owner, ['opacity'], 1)),
   }
 }
@@ -322,6 +319,60 @@ function splitLeftId(originalId: string): string {
   return `${originalId.slice(0, Math.max(1, 128 - suffix.length))}${suffix}`
 }
 
+/**
+ * Every pairwise fact the classifier decides an item change from.  This is the
+ * *only* place two versions of an item are compared: `commandIdsForChanges`
+ * enrols an item as changed exactly when one of these facts says it changed,
+ * and the classifier below routes on the same object.
+ *
+ * The single definition is the point.  A second comparison — a whole-item
+ * serialization, say — drifts out of step the moment a normalization is added
+ * here, and it has, twice: an absent transform reading as an identity one, and
+ * an absent source bound reading as unknown.  An item that the detector calls
+ * changed but every predicate calls unchanged reaches the classifier with no
+ * branch to take, and falls through to a rejection naming no actionable field.
+ */
+interface ItemChangeFacts {
+  metadataUnchanged: boolean
+  transformUnchanged: boolean
+  sourceUnchanged: boolean
+  durationUnchanged: boolean
+  timelineUnchanged: boolean
+  sameTrack: boolean
+}
+
+function itemChangeFacts(before: FreeCutFrameItem, after: FreeCutFrameItem): ItemChangeFacts {
+  const durationUnchanged = before.durationInFrames === after.durationInFrames
+  return {
+    metadataUnchanged:
+      stableSerialize(withoutPosition(before)) === stableSerialize(withoutPosition(after)),
+    transformUnchanged: transformsEquivalent(before, after),
+    sourceUnchanged:
+      isFrameClip(before) && isFrameClip(after)
+        ? sourceBoundUnchanged(before.sourceStart, after.sourceStart) &&
+          sourceBoundUnchanged(before.sourceEnd, after.sourceEnd)
+        : before.type === after.type,
+    durationUnchanged,
+    timelineUnchanged: before.from === after.from && durationUnchanged,
+    sameTrack: before.trackId === after.trackId,
+  }
+}
+
+/**
+ * The one definition of "this item changed": any fact that says so.  Duration
+ * is covered by `timelineUnchanged`, which is the conjunction of position and
+ * duration.
+ */
+function itemChanged(facts: ItemChangeFacts): boolean {
+  return !(
+    facts.metadataUnchanged &&
+    facts.transformUnchanged &&
+    facts.sourceUnchanged &&
+    facts.timelineUnchanged &&
+    facts.sameTrack
+  )
+}
+
 function commandIdsForChanges(
   previous: FreeCutFrameDocument,
   next: FreeCutFrameDocument,
@@ -338,14 +389,22 @@ function commandIdsForChanges(
     const before = previousItems.get(id)
     const after = nextItems.get(id)
     return (
-      before !== undefined &&
-      after !== undefined &&
-      stableSerialize(withSynthesizedSourceBounds(before)) !==
-        stableSerialize(withSynthesizedSourceBounds(after))
+      before !== undefined && after !== undefined && itemChanged(itemChangeFacts(before, after))
     )
   })
   return { added, removed, changed }
 }
+
+/**
+ * The reason that means "this diff is not an edit at all".  The runtime
+ * branches on this exact value to stay silent — no command, no notice, and no
+ * restoration of the authoritative snapshot — so it is a binding between two
+ * modules, not a message.  Every no-op reconcile now travels this path,
+ * including the ones a playback scroll triggers, so an inlined copy that
+ * drifts by a character would silently reinstate the rejection this exists to
+ * prevent, with nothing failing to say so.  Import it; never respell it.
+ */
+export const NO_SUPPORTED_EDIT_REASON = 'No supported edit was detected'
 
 export interface DerivedHostEdit {
   batch: EditCommandBatch | null
@@ -393,13 +452,15 @@ export function deriveSupportedHostEdit(
     preconditions.push({ type: 'track_absent', track_id: track.id })
   }
 
-  if (
-    addedTracks.length > 0 &&
-    removed.length === 0 &&
-    added.length === 0 &&
-    changed.length === 0
-  ) {
-    // Track creation is already represented by the add_track commands above.
+  if (removed.length === 0 && added.length === 0 && changed.length === 0) {
+    // Any track creation is already represented by the add_track commands
+    // above.  With no tracks added either, nothing changed at all: `commands`
+    // stays empty and the caller gets the silent "No supported edit was
+    // detected" sentinel below, which emits no command and leaves the host
+    // snapshot alone.  A reconcile is triggered by any timeline-store write,
+    // view-only state included — playback's page-following persists a scroll
+    // position — so a no-op diff must never surface as a user-visible
+    // rejection.
   } else if (removed.length >= 1 && added.length === 0 && changed.length === 0) {
     const removedItems = removed.map((id) => previousItems.get(id)!)
     if (removedItems.some((item) => item.type === 'caption_cue'))
@@ -481,17 +542,14 @@ export function deriveSupportedHostEdit(
     if (before.type === 'caption_cue' || after.type === 'caption_cue') {
       return { batch: null, reason: 'Caption edits are not supported in the first host slice' }
     }
-    const metadataUnchanged =
-      stableSerialize(withoutPosition(before)) === stableSerialize(withoutPosition(after))
-    const transformUnchanged = transformsEquivalent(before, after)
-    const sourceUnchanged =
-      isFrameClip(before) && isFrameClip(after)
-        ? sourceBoundUnchanged(before.sourceStart, after.sourceStart) &&
-          sourceBoundUnchanged(before.sourceEnd, after.sourceEnd)
-        : before.type === after.type
-    const durationUnchanged = before.durationInFrames === after.durationInFrames
-    const timelineUnchanged = before.from === after.from && durationUnchanged
-    const sameTrack = before.trackId === after.trackId
+    const {
+      metadataUnchanged,
+      transformUnchanged,
+      sourceUnchanged,
+      durationUnchanged,
+      timelineUnchanged,
+      sameTrack,
+    } = itemChangeFacts(before, after)
     // A move never changes the duration, and a trim always does *something*
     // to the source window — either an explicit bound or the duration that
     // stands in for one when the host states no bounds at all.
@@ -563,7 +621,7 @@ export function deriveSupportedHostEdit(
     }
   }
 
-  if (commands.length === 0) return { batch: null, reason: 'No supported edit was detected' }
+  if (commands.length === 0) return { batch: null, reason: NO_SUPPORTED_EDIT_REASON }
   return {
     batch: {
       contract_version: 1,
