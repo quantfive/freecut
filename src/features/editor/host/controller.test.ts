@@ -27,6 +27,7 @@ import { hostSnapshotToNativeTimeline, nativeTimelineToFrameDocument } from './d
 import { EmbeddedEditorHostRuntime } from './runtime'
 import { useMediaLibraryStore } from '@/features/editor/deps/media-library'
 import { useTimelineStore } from '@/features/editor/deps/timeline-store'
+import { usePlaybackStore } from '@/shared/state/playback'
 
 const mediaReference: MediaReference = {
   media_id: 'media-1',
@@ -1201,6 +1202,123 @@ describe('embedded FreeCut host controller', () => {
 
       expect(derived.batch).toBeNull()
       expect(derived.reason).toMatch(/exceeds the 64-command host operation limit/)
+    })
+
+    /**
+     * Playback is not an edit, but it does write to the timeline store.  The
+     * DaVinci-style page following in `timeline-content` moves the native
+     * scroll container once the playhead reaches a viewport edge, and that
+     * container's debounced scroll handler persists the new `scrollPosition`
+     * on the timeline settings store — one of the domain stores the host
+     * runtime's `useTimelineStore.subscribe` is wired to.  So roughly one
+     * viewport-page into playback a reconcile runs against a document nobody
+     * touched.  A no-op diff must stay silent there: a rejection notifies the
+     * host *and* re-applies the authoritative snapshot, which rewinds the
+     * playhead to 0 and stops playback under the user.
+     */
+    function playbackPageFollowScroll(): void {
+      useTimelineStore.getState().setScrollPosition(1280)
+    }
+
+    async function expectSilentReconcile(initial: EmbeddedEditorSnapshot): Promise<void> {
+      const harness = createFakeHost(initial)
+      const notices: HostNotice[] = []
+      const runtime = new EmbeddedEditorHostRuntime(
+        { ...harness.host, notify: (notice) => notices.push(notice) },
+        initial,
+      )
+      runtime.mountStores()
+      try {
+        usePlaybackStore.getState().setCurrentFrame(90)
+        playbackPageFollowScroll()
+        await flushReconcile()
+
+        expect(notices).toEqual([])
+        expect(harness.submitEdit).not.toHaveBeenCalled()
+        expect(usePlaybackStore.getState().currentFrame).toBe(90)
+      } finally {
+        runtime.unmountStores()
+      }
+    }
+
+    it('stays silent when playback scroll reconciles an untouched host document', async () => {
+      await expectSilentReconcile(minimalTwoClipSnapshot())
+    })
+
+    it('stays silent when playback scroll reconciles an untouched clip with a transform', async () => {
+      const base = minimalTwoClipSnapshot()
+      // A host clip whose transform is identity apart from opacity: the bridge
+      // collapses it to a top-level `opacity` key on the way back, so the
+      // item serializes differently while every classifier predicate still
+      // says nothing about it changed.
+      await expectSilentReconcile({
+        ...base,
+        timeline: withClipTwo(base.timeline, { transform: { opacity: 1 } }),
+      })
+    })
+
+    /**
+     * The invariant that keeps the two comparisons from drifting apart again:
+     * whatever the classifier normalizes away must not enrol the item as
+     * changed.  Every row below is a shape the bridge really produces, and
+     * each one used to reach the classifier with no branch to take.
+     */
+    it('never enrols an item the classifier considers unchanged', () => {
+      const initial = minimalTwoClipSnapshot()
+      const equivalent: Array<[string, Record<string, unknown>]> = [
+        // transformsEquivalent: an absent transform against a materialized
+        // identity one, in either carrier the bridge uses for it.
+        ['a materialized identity transform', { transform: { x: 0, y: 0, opacity: 1 } }],
+        ['a materialized top-level opacity', { opacity: 1 }],
+        // sourceBoundUnchanged: a bound stated on one side only.
+        ['a materialized source range', { sourceStart: 0, sourceEnd: 60 }],
+      ]
+
+      for (const [label, overrides] of equivalent) {
+        const derived = deriveSupportedHostEdit(
+          initial.timeline,
+          withClipTwo(initial.timeline, overrides),
+        )
+        expect(derived, label).toEqual({ batch: null, reason: 'No supported edit was detected' })
+      }
+    })
+
+    it('still names a real resize once identity transforms compare equal', () => {
+      const base = minimalTwoClipSnapshot()
+      const sized = withClipTwo(base.timeline, {
+        transform: {
+          x: 0,
+          y: 0,
+          width: 1920,
+          height: 1080,
+          anchorX: 0,
+          anchorY: 0,
+          rotation: 0,
+          opacity: 1,
+        },
+      })
+      const resized = withClipTwo(sized, {
+        transform: {
+          x: 0,
+          y: 0,
+          width: 1280,
+          height: 720,
+          anchorX: 0,
+          anchorY: 0,
+          rotation: 0,
+          opacity: 1,
+        },
+      })
+
+      const derived = deriveSupportedHostEdit(sized, resized)
+
+      // The normalized transform has to carry the size, or a gizmo resize is
+      // indistinguishable from an untouched clip and is silently swallowed.
+      expect(derived.batch).toBeNull()
+      // `timelinePosition` rides along on every rejection of a clip that did
+      // not also move; `transform` is the predicate this pins.
+      expect(derived.detail?.failedPredicates).toEqual(['transform', 'timelinePosition'])
+      expect(derived.detail?.changedFields).toEqual(['transform.height', 'transform.width'])
     })
   })
 })
