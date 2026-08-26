@@ -91,6 +91,56 @@ const DENSE_TIMELINE_HOVER_PREVIEW_DELAY_MS = 150
 
 type TrackScrollbarSection = 'video' | 'audio' | 'single'
 
+function shouldIgnoreTimelineContainerClick(
+  target: HTMLElement,
+  interactionJustFinished: boolean,
+): boolean {
+  return interactionJustFinished || Boolean(target.closest('[role="menu"]'))
+}
+
+function resolveTimelineContainerClickFrame(
+  clientX: number,
+  container: HTMLDivElement | null,
+  pixelsToFrame: (pixels: number) => number,
+  maxTimelineFrame: number,
+): number {
+  const playback = usePlaybackStore.getState()
+  if (playback.previewFrame !== null) return playback.previewFrame
+  if (!container) return playback.currentFrame
+
+  const localX = clientX - container.getBoundingClientRect().left + container.scrollLeft
+  return Math.max(0, Math.min(Math.round(pixelsToFrame(localX)), maxTimelineFrame))
+}
+
+function seekTimelineTrackAtPointer({
+  target,
+  clientX,
+  container,
+  pixelsToFrame,
+  maxTimelineFrame,
+}: {
+  target: HTMLElement
+  clientX: number
+  container: HTMLDivElement | null
+  pixelsToFrame: (pixels: number) => number
+  maxTimelineFrame: number
+}): void {
+  if (!target.closest('[data-track-id]')) return
+  if (useSelectionStore.getState().activeTool === 'razor') return
+  if (isMicRecordingActive(useMicRecordingStore.getState().status)) return
+
+  const playback = usePlaybackStore.getState()
+  const frame = resolveTimelineContainerClickFrame(
+    clientX,
+    container,
+    pixelsToFrame,
+    maxTimelineFrame,
+  )
+  playback.pause()
+  playback.setPreviewFrame(null)
+  playback.setCurrentFrame(frame)
+}
+
 function revealTrackInScrollContainer(container: HTMLDivElement | null, trackId: string): boolean {
   if (!container) {
     return false
@@ -1317,47 +1367,23 @@ export const TimelineContent = memo(function TimelineContent({
   // Commit the hover skimmer on a normal timeline click. Ruler clicks own their
   // own scrub path, while drag/marquee/razor gestures must not move playback.
   const handleContainerClick = (e: React.MouseEvent) => {
-    if (marqueeWasActiveRef.current || dragWasActiveRef.current || scrubWasActiveRef.current) {
-      return
-    }
-
-    // Don't deselect if clicking inside a context menu portal (Radix renders
-    // menus in a portal outside the timeline DOM, but React synthetic events
-    // still bubble through the component tree)
     const target = e.target as HTMLElement
-    if (target.closest('[role="menu"]')) {
+    const interactionJustFinished =
+      marqueeWasActiveRef.current || dragWasActiveRef.current || scrubWasActiveRef.current
+    // Radix menus render outside the timeline DOM, but their synthetic events
+    // still bubble through this component tree.
+    if (shouldIgnoreTimelineContainerClick(target, interactionJustFinished)) {
       return
     }
 
     const clickedOnItem = target.closest('[data-item-id]')
-    const clickedOnTrack = target.closest('[data-track-id]')
-
-    if (
-      clickedOnTrack &&
-      useSelectionStore.getState().activeTool !== 'razor' &&
-      !isMicRecordingActive(useMicRecordingStore.getState().status)
-    ) {
-      const playback = usePlaybackStore.getState()
-      const container = containerRef.current
-      const frame =
-        playback.previewFrame ??
-        (container
-          ? Math.max(
-              0,
-              Math.min(
-                Math.round(
-                  pixelsToFrameRef.current(
-                    e.clientX - container.getBoundingClientRect().left + container.scrollLeft,
-                  ),
-                ),
-                maxTimelineFrameRef.current,
-              ),
-            )
-          : playback.currentFrame)
-      playback.pause()
-      playback.setPreviewFrame(null)
-      playback.setCurrentFrame(frame)
-    }
+    seekTimelineTrackAtPointer({
+      target,
+      clientX: e.clientX,
+      container: containerRef.current,
+      pixelsToFrame: pixelsToFrameRef.current,
+      maxTimelineFrame: maxTimelineFrameRef.current,
+    })
 
     // Deselect items and markers if NOT clicking on a timeline item.
     if (!clickedOnItem) {
