@@ -15,6 +15,7 @@ export {
   createLocalEditorHost,
   isHostCapabilityEnabled,
 } from '@/features/editor/host/contract'
+export type { EditorSidebarTab } from '@/config/editor-workspaces'
 export type { EditorHostContextValue } from '@/features/editor/host/context'
 export type { EditorHostProviderProps } from '@/features/editor/host/context-provider'
 export type {
@@ -23,6 +24,7 @@ export type {
   EditorHost,
   EditorHostNavigation,
   EditorSidebarModule,
+  EditorSidebarModulePanelProps,
   EmbeddedEditorAsset,
   EmbeddedEditorProject,
   EmbeddedEditorSnapshot,

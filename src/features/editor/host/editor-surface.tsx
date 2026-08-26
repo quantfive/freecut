@@ -16,6 +16,7 @@ import { EditorHostProvider } from './context-provider'
 import { HostCaptionEditorProvider } from './caption-editor-context'
 import { HostTranscriptEditorProvider } from './transcript-editor-context'
 import { EmbeddedEditorHostRuntime } from './runtime'
+import { isHostRailTab } from './sidebar-rail'
 import '@/index.css'
 
 interface HostSurfaceState {
@@ -29,7 +30,12 @@ interface HostSurfaceState {
  * registered sidebar module when host-side work needs attention.
  */
 export interface FreeCutEditorSurfaceApi {
-  /** Select a registered `sidebarModules` entry's tab and open the panel. */
+  /**
+   * Select a registered `sidebarModules` entry's tab and open the panel.
+   * No-ops for an id the host never registered, and for one its `sidebarRail`
+   * suppresses — opening a tab with no rail button would strand the user, and
+   * the next authoritative snapshot would reset it anyway.
+   */
   openSidebarModule(id: string): void
   /** Close the left sidebar panel. */
   closeSidebar(): void
@@ -78,12 +84,12 @@ export function FreeCutEditorSurface({ host, apiRef }: FreeCutEditorSurfaceProps
 
   // The host drives its registered sidebar modules through `apiRef` over the
   // same editor store the MediaSidebar reads, rather than reaching into the
-  // store itself.  Opening fails closed for ids the host did not register.
+  // store itself.  Opening fails closed for any tab the rail does not show.
   useEffect(() => {
     if (!apiRef || !state) return
     apiRef.current = {
       openSidebarModule: (id) => {
-        if (!(host.sidebarModules ?? []).some((module) => module.id === id)) return
+        if (!isHostRailTab(`host:${id}`, host)) return
         const { setActiveTab, toggleLeftSidebar } = useEditorStore.getState()
         setActiveTab(`host:${id}`)
         if (!useEditorStore.getState().leftSidebarOpen) toggleLeftSidebar()

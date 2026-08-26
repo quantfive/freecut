@@ -14,16 +14,15 @@ import {
 import { usePlaybackStore } from '@/shared/state/playback'
 import { useEditorStore } from '@/shared/state/editor'
 import { useSelectionStore } from '@/shared/state/selection'
-import { isHostSidebarTab } from '@/config/editor-workspaces'
 import { useGizmoStore, useMaskEditorStore } from '@/features/editor/deps/preview'
 import { peekSharedPreviewAudioContext } from '@/features/editor/deps/composition-runtime'
 import {
-  isHostCapabilityEnabled,
   type EmbeddedEditorSnapshot,
   type EditorHost,
   type HostEditRejectionDetail,
   type HostNotice,
 } from './contract'
+import { hostRailFallbackTab, isHostRailTab } from './sidebar-rail'
 import {
   HostEditorController,
   NO_SUPPORTED_EDIT_REASON,
@@ -44,26 +43,6 @@ export interface EmbeddedEditorHostRuntimeContract {
 function scheduleMicrotask(callback: () => void): void {
   if (typeof queueMicrotask === 'function') queueMicrotask(callback)
   else void Promise.resolve().then(callback)
-}
-
-/**
- * Sidebar rail tabs host mode still shows, and which therefore survive an
- * authoritative snapshot install.  Resetting a visible tab on every snapshot
- * would unmount the transcript panel mid-apply (losing its applied/conflict
- * state before the user can see it); the same applies to a registered `host:`
- * module tab — unmounting it would abort in-flight host work such as job
- * polling.  An unregistered `host:` tab does reset to `media`.
- */
-function tabVisibleInHostMode(tab: string, host: EditorHost): boolean {
-  return (
-    tab === 'media' ||
-    (isHostSidebarTab(tab) &&
-      (host.sidebarModules ?? []).some((module) => `host:${module.id}` === tab)) ||
-    (tab === 'text' && isHostCapabilityEnabled(host.capabilities, 'timeline.add')) ||
-    (tab === 'transcript' &&
-      isHostCapabilityEnabled(host.capabilities, 'media.transcription') &&
-      host.transcript !== undefined)
-  )
 }
 
 /**
@@ -183,14 +162,19 @@ export class EmbeddedEditorHostRuntime implements EmbeddedEditorHostRuntimeContr
       // The first host slice exposes the normal Edit layout only.  Set this
       // in memory so a local user's persisted Color/Motion preference cannot
       // activate an unsupported host workspace.  Preserve the active sidebar
-      // tab when host mode still shows it (see tabVisibleInHostMode):
-      // resetting it on every authoritative snapshot would unmount the
-      // transcript panel mid-apply or a host module mid-job.
+      // tab while the rail still shows it: resetting it on every authoritative
+      // snapshot would unmount the transcript panel mid-apply or a host module
+      // mid-job.  Both the test and the fallback read the same rail resolution
+      // the sidebar renders from, so a host that reorders or suppresses tabs
+      // through `sidebarRail` cannot strand `activeTab` on a tab with no rail
+      // button — and the fallback is the rail's head, not a hardcoded `media`,
+      // since a host may drop media from its rail entirely.
       const currentTab = useEditorStore.getState().activeTab
-      const currentTabVisibleInHostMode = tabVisibleInHostMode(currentTab, this.host)
       useEditorStore.setState({
         workspace: 'edit',
-        activeTab: currentTabVisibleInHostMode ? currentTab : 'media',
+        activeTab: isHostRailTab(currentTab, this.host)
+          ? currentTab
+          : hostRailFallbackTab(this.host),
       })
 
       const mediaItems = hostAssetsToMediaMetadata(snapshot.assets)

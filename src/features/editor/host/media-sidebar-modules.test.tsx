@@ -62,6 +62,7 @@ import {
   DEFAULT_HOST_CAPABILITIES,
   type EditorHost,
   type EditorSidebarModule,
+  type EditorSidebarModulePanelProps,
   type EmbeddedEditorSnapshot,
 } from './contract'
 import { EmbeddedEditorHostRuntime } from './runtime'
@@ -94,9 +95,14 @@ function TranscribeIcon({ className }: { className?: string }) {
   return <svg className={className} data-testid="host-module-icon" />
 }
 
-function TranscribePanel({ active }: { active: boolean }) {
+function TranscribePanel({ active, collapsed, width }: EditorSidebarModulePanelProps) {
   return (
-    <div data-testid="host-module-panel" data-active={String(active)}>
+    <div
+      data-testid="host-module-panel"
+      data-active={String(active)}
+      data-collapsed={String(collapsed)}
+      data-width={String(width)}
+    >
       Host transcribe panel body
     </div>
   )
@@ -109,9 +115,17 @@ const transcribeModule: EditorSidebarModule = {
   Panel: TranscribePanel,
 }
 
+const brandKitModule: EditorSidebarModule = {
+  id: 'brand-kit',
+  label: 'Brand kit',
+  icon: TranscribeIcon,
+  Panel: () => <div data-testid="host-brand-kit-panel">Brand kit body</div>,
+}
+
 function createHarness(
   initial: EmbeddedEditorSnapshot,
   sidebarModules?: readonly EditorSidebarModule[],
+  overrides?: Partial<EditorHost>,
 ) {
   const host: EditorHost = {
     capabilities: { ...DEFAULT_HOST_CAPABILITIES },
@@ -121,11 +135,20 @@ function createHarness(
       throw new Error('not used by sidebar module tests')
     }),
     ...(sidebarModules ? { sidebarModules } : {}),
+    ...overrides,
   }
   return {
     host,
     runtime: new EmbeddedEditorHostRuntime(host, initial),
   }
+}
+
+/** Rail tooltips in DOM order — the rail as the user reads it, top to bottom. */
+function railLabels(container: HTMLElement): string[] {
+  const rail = container.querySelector('div.flex.flex-col.gap-1.py-1\\.5')
+  return [...(rail?.querySelectorAll('button') ?? [])].map(
+    (button) => button.getAttribute('data-tooltip') ?? '',
+  )
 }
 
 function renderRealSidebar(harness: ReturnType<typeof createHarness>) {
@@ -162,6 +185,22 @@ describe('host sidebar modules (real MediaSidebar path)', () => {
       expect(panel).toHaveAttribute('data-active', 'true')
       // The panel header falls back to the host-owned label.
       expect(screen.getByText('Transcribe')).toBeInTheDocument()
+
+      // Layout reaches the panel as props, so a host module can react to a
+      // collapse or a resize without measuring the sidebar itself.
+      expect(panel).toHaveAttribute('data-collapsed', 'false')
+      expect(panel).toHaveAttribute('data-width', String(useEditorStore.getState().sidebarWidth))
+      act(() => {
+        useEditorStore.getState().setSidebarWidth(377)
+      })
+      expect(screen.getByTestId('host-module-panel')).toHaveAttribute('data-width', '377')
+      act(() => {
+        useEditorStore.getState().toggleLeftSidebar()
+      })
+      expect(screen.getByTestId('host-module-panel')).toHaveAttribute('data-collapsed', 'true')
+      act(() => {
+        useEditorStore.getState().toggleLeftSidebar()
+      })
 
       // Switching tabs keeps the panel mounted (hidden) so in-flight host
       // work survives the user browsing other tabs.
@@ -269,5 +308,108 @@ describe('host sidebar modules (real MediaSidebar path)', () => {
     expect(useEditorStore.getState().leftSidebarOpen).toBe(false)
     // The latched panel stays mounted after the sidebar closes.
     expect(screen.getByTestId('host-module-panel')).toBeInTheDocument()
+  })
+})
+
+describe('sidebarRail (explicit host rail order and suppression)', () => {
+  it('renders exactly the declared rail, in the declared order', () => {
+    const harness = createHarness(snapshot(), [transcribeModule, brandKitModule], {
+      sidebarRail: ['host:brand-kit', 'media', 'host:transcribe'],
+    })
+    try {
+      const { container } = renderRealSidebar(harness)
+      expect(railLabels(container)).toEqual(['Brand kit', 'Media', 'Transcribe'])
+    } finally {
+      harness.runtime.unmountStores()
+    }
+  })
+
+  it('suppresses a built-in the rail omits', () => {
+    // The default rail for these capabilities is Media then Text; pinning only
+    // Text proves omission hides a built-in that would otherwise show.
+    const harness = createHarness(snapshot(), undefined, { sidebarRail: ['text'] })
+    try {
+      const { container } = renderRealSidebar(harness)
+      expect(railLabels(container)).toEqual(['Text'])
+    } finally {
+      harness.runtime.unmountStores()
+    }
+  })
+
+  it('cannot surface a tab the capabilities deny, and drops unknown ids and repeats', () => {
+    const harness = createHarness(snapshot(), [transcribeModule], {
+      capabilities: { ...DEFAULT_HOST_CAPABILITIES, 'timeline.add': false },
+      sidebarRail: [
+        'text', // denied by capabilities — rail cannot add it back
+        'host:nope', // no module registered behind it
+        'effects', // not a host-mode tab at all
+        'host:transcribe',
+        'media',
+        'host:transcribe', // repeat after the first mention
+      ],
+    })
+    try {
+      const { container } = renderRealSidebar(harness)
+      expect(railLabels(container)).toEqual(['Transcribe', 'Media'])
+    } finally {
+      harness.runtime.unmountStores()
+    }
+  })
+
+  it('falls back to the default rail when the declared rail matches nothing', () => {
+    const harness = createHarness(snapshot(), [transcribeModule], {
+      sidebarRail: ['host:typo', 'shapes'],
+    })
+    try {
+      const { container } = renderRealSidebar(harness)
+      expect(railLabels(container)).toEqual(['Media', 'Text', 'Transcribe'])
+    } finally {
+      harness.runtime.unmountStores()
+    }
+  })
+
+  it('falls back to the rail head, not media, when the active tab leaves the rail', () => {
+    const harness = createHarness(snapshot(), [transcribeModule], {
+      sidebarRail: ['host:transcribe'],
+    })
+    try {
+      renderRealSidebar(harness)
+      // `media` is a valid tab but this rail does not show it, so a snapshot
+      // install must not park the editor on a tab with no rail button.
+      act(() => {
+        useEditorStore.getState().setActiveTab('media')
+      })
+      const initial = snapshot()
+      act(() => {
+        harness.runtime.controller.replaceAuthoritativeSnapshot({
+          ...initial,
+          timeline: { ...initial.timeline, revision: 1 },
+        })
+      })
+      expect(useEditorStore.getState().activeTab).toBe('host:transcribe')
+    } finally {
+      harness.runtime.unmountStores()
+    }
+  })
+
+  it('fails openSidebarModule closed for a registered module the rail suppresses', async () => {
+    const harness = createHarness(snapshot(), [transcribeModule, brandKitModule], {
+      sidebarRail: ['media', 'host:transcribe'],
+    })
+    const apiRef = createRef<FreeCutEditorSurfaceApi>()
+    render(<FreeCutEditorSurface host={harness.host} apiRef={apiRef} />)
+    await waitFor(() => expect(apiRef.current).not.toBeNull())
+
+    act(() => {
+      apiRef.current!.openSidebarModule('brand-kit')
+    })
+    expect(useEditorStore.getState().activeTab).toBe('media')
+    expect(screen.queryByTestId('host-brand-kit-panel')).not.toBeInTheDocument()
+
+    // The module the rail does show still opens.
+    act(() => {
+      apiRef.current!.openSidebarModule('transcribe')
+    })
+    expect(useEditorStore.getState().activeTab).toBe('host:transcribe')
   })
 })

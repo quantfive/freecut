@@ -89,7 +89,8 @@ import {
   getEditorLayout,
 } from '@/config/editor-layout'
 import { isHostSidebarTab, type EditorSidebarTab } from '@/config/editor-workspaces'
-import type { EditorSidebarModule } from '../host/contract'
+import type { EditorHost, EditorSidebarModule } from '../host/contract'
+import { hostRailTabIds } from '../host/sidebar-rail'
 
 const logger = createLogger('MediaSidebar')
 const TEXT_TEMPLATE_PREVIEW_SHELL =
@@ -105,9 +106,13 @@ const TEXT_TEMPLATE_PREVIEW_SHELL =
 function HostModulePanels({
   modules,
   activeTab,
+  collapsed,
+  width,
 }: {
   modules: readonly EditorSidebarModule[]
   activeTab: EditorSidebarTab
+  collapsed: boolean
+  width: number
 }) {
   const [activatedTabs, setActivatedTabs] = useState<ReadonlySet<string>>(() =>
     isHostSidebarTab(activeTab) ? new Set([activeTab]) : new Set(),
@@ -127,7 +132,9 @@ function HostModulePanels({
             key={tabId}
             className={`min-h-0 flex-1 overflow-hidden ${activeTab === tabId ? 'block' : 'hidden'}`}
           >
-            {activatedTabs.has(tabId) && <module.Panel active={activeTab === tabId} />}
+            {activatedTabs.has(tabId) && (
+              <module.Panel active={activeTab === tabId} collapsed={collapsed} width={width} />
+            )}
           </div>
         )
       })}
@@ -154,24 +161,22 @@ function hostModuleRailCategories(
 }
 
 /**
- * Rail categories host mode shows: media always, text and transcript by
- * capability, host modules always (the host only registers what it supports).
+ * Rail categories host mode shows, in the order `hostRailTabIds` resolved —
+ * capability-gated built-ins plus registered modules by default, or exactly
+ * the host's `sidebarRail` when it declared one.  The local editor rail is
+ * unaffected; only host mode consults the host contract.
  */
 function visibleRailCategories(
   categories: readonly RailCategory[],
   hostMode: boolean,
-  canAddTimeline: boolean,
-  canTranscribe: boolean,
-  hasTranscriptPort: boolean,
+  host: EditorHost | undefined,
 ): readonly RailCategory[] {
-  if (!hostMode) return categories
-  return categories.filter(
-    ({ id }) =>
-      id === 'media' ||
-      (id === 'text' && canAddTimeline) ||
-      (id === 'transcript' && canTranscribe && hasTranscriptPort) ||
-      isHostSidebarTab(id),
-  )
+  if (!hostMode || !host) return categories
+  const byId = new Map(categories.map((category) => [category.id, category]))
+  return hostRailTabIds(host).flatMap((id) => {
+    const category = byId.get(id)
+    return category ? [category] : []
+  })
 }
 
 function renderTextTemplatePreview(preset?: TextStylePreset) {
@@ -391,7 +396,6 @@ export const MediaSidebar = memo(function MediaSidebar() {
   const hostMode = useEditorHostMode()
   const { host } = useEditorHostContext()
   const canAddTimeline = useEditorCapability('timeline.add')
-  const canTranscribe = useEditorCapability('media.transcription')
   const editorDensity = useSettingsStore((s) => s.editorDensity)
   const editorLayout = getEditorLayout(editorDensity)
   // Use granular selectors - Zustand v5 best practice
@@ -661,13 +665,7 @@ export const MediaSidebar = memo(function MediaSidebar() {
     ...categories,
     ...hostModuleRailCategories(host),
   ]
-  const visibleCategories = visibleRailCategories(
-    mergedCategories,
-    hostMode,
-    canAddTimeline,
-    canTranscribe,
-    !!host?.transcript,
-  )
+  const visibleCategories = visibleRailCategories(mergedCategories, hostMode, host)
 
   const shouldSuppressGeneratedItemClick = useCallback(() => {
     if (!suppressGeneratedItemClickRef.current) {
@@ -1294,7 +1292,12 @@ export const MediaSidebar = memo(function MediaSidebar() {
               )}
             </div>
 
-            <HostModulePanels modules={host?.sidebarModules ?? []} activeTab={activeTab} />
+            <HostModulePanels
+              modules={host?.sidebarModules ?? []}
+              activeTab={activeTab}
+              collapsed={!leftSidebarOpen}
+              width={sidebarWidth}
+            />
           </>
         </div>
         {/* Resize Handle */}

@@ -8,6 +8,7 @@ import type {
   TimelineRevision,
 } from '@/features/editor/codepress/contract'
 import type { FreeCutFrameDocument } from '@/features/editor/codepress/document'
+import type { EditorSidebarTab } from '@/config/editor-workspaces'
 
 /**
  * The browser surface is deliberately a port.  It knows how to render and
@@ -346,10 +347,27 @@ export interface EditorSidebarModule {
   icon: ComponentType<{ className?: string }>
   /**
    * Rendered in the sidebar panel area.  Mounted on first activation and kept
-   * mounted across tab switches so in-flight host work survives; `active`
-   * tells the panel whether its tab is currently selected.
+   * mounted across tab switches so in-flight host work survives.
    */
-  Panel: ComponentType<{ active: boolean }>
+  Panel: ComponentType<EditorSidebarModulePanelProps>
+}
+
+/**
+ * Props a host module panel receives.  A panel that only cares about `active`
+ * can keep destructuring just that — the extra fields widen the props without
+ * breaking an existing `({ active }) => …` component.
+ */
+export interface EditorSidebarModulePanelProps {
+  /** Whether this module's tab is the selected one. */
+  active: boolean
+  /**
+   * Whether the sidebar panel area is collapsed.  A latched panel keeps
+   * rendering while collapsed so its work survives; use this to pause
+   * animation or defer layout measurement rather than to unmount.
+   */
+  collapsed: boolean
+  /** Current sidebar panel width in px, so a panel can adapt to a resize. */
+  width: number
 }
 
 export interface EditorHost {
@@ -371,6 +389,20 @@ export interface EditorHost {
   transcript?: EditorTranscriptPort
   /** Optional host-owned modules added to the editor's left sidebar rail. */
   sidebarModules?: readonly EditorSidebarModule[]
+  /**
+   * Optional explicit rail: the exact tabs to show, in the exact order, as
+   * built-in ids (`'media'`, `'text'`, `'transcript'`) and registered module
+   * ids (`` `host:${id}` ``).  Anything omitted is hidden, so this is how a
+   * host both reorders the rail and suppresses built-ins it does not want.
+   *
+   * Capability gating still runs first — a rail cannot surface a tab the
+   * host's own capabilities deny — and ids that match nothing are dropped, as
+   * are repeats after the first.  Omit the field for the default rail
+   * (capability-gated built-ins, then modules in registration order).  A rail
+   * that matches nothing at all falls back to the default rather than leaving
+   * the editor with no navigation.
+   */
+  sidebarRail?: readonly EditorSidebarTab[]
   navigation?: EditorHostNavigation
   notify?(notice: HostNotice): void
 }
