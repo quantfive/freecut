@@ -5,6 +5,7 @@ import type { Transition } from '@/types/transition'
 import { makeTimelineAudioItem, makeTimelineTrack, makeTimelineVideoItem } from '../test-helpers'
 import { resetPlaybackPreviewState } from '@/shared/state/playback-preview-test-helpers'
 import { useSelectionStore } from '@/shared/state/selection'
+import { useEditorStore } from '@/shared/state/editor'
 import { useItemsStore } from '../stores/items-store'
 import { useTransitionsStore } from '../stores/transitions-store'
 import { useTimelineCommandStore } from '../stores/timeline-command-store'
@@ -24,6 +25,7 @@ let rafCallbacks: FrameRequestCallback[] = []
  * deltaFrames === deltaX in every gesture below.
  */
 function setupStores() {
+  useEditorStore.setState({ hostMode: false })
   useTimelineCommandStore.getState().clearHistory()
   useTimelineSettingsStore.setState({ fps: 30, isDirty: false, snapEnabled: false })
   useZoomStore.setState({ level: 0.3, pixelsPerSecond: 30 })
@@ -333,13 +335,7 @@ describe('useTimelineTrim', () => {
         .setItems([text, alignedVideo, alignedAudio, earlierVideo, earlierAudio])
       useSelectionStore
         .getState()
-        .selectItems([
-          'text-1',
-          'video-aligned',
-          'audio-aligned',
-          'video-earlier',
-          'audio-earlier',
-        ])
+        .selectItems(['text-1', 'video-aligned', 'audio-aligned', 'video-earlier', 'audio-earlier'])
       const { result } = renderTrimHook(text)
 
       startTrim(result, 'end')
@@ -400,13 +396,7 @@ describe('useTimelineTrim', () => {
         .setItems([text, alignedVideo, alignedAudio, earlierVideo, earlierAudio])
       useSelectionStore
         .getState()
-        .selectItems([
-          'text-1',
-          'video-aligned',
-          'audio-aligned',
-          'video-earlier',
-          'audio-earlier',
-        ])
+        .selectItems(['text-1', 'video-aligned', 'audio-aligned', 'video-earlier', 'audio-earlier'])
       const { result } = renderTrimHook(text)
 
       startTrim(result, 'start')
@@ -477,19 +467,17 @@ describe('useTimelineTrim', () => {
       }
       const video = makeTimelineVideoItem({ id: 'video-1', linkedGroupId: 'lg-1' })
       const audio = makeTimelineAudioItem({ id: 'audio-1', linkedGroupId: 'lg-1' })
-      useItemsStore
-        .getState()
-        .setTracks([
-          makeTimelineTrack({ id: 'track-v1', name: 'V1', kind: 'video', order: 0 }),
-          makeTimelineTrack({ id: 'track-v2', name: 'V2', kind: 'video', order: 1 }),
-          makeTimelineTrack({
-            id: 'track-a1',
-            name: 'A1',
-            kind: 'audio',
-            order: 2,
-            locked: true,
-          }),
-        ])
+      useItemsStore.getState().setTracks([
+        makeTimelineTrack({ id: 'track-v1', name: 'V1', kind: 'video', order: 0 }),
+        makeTimelineTrack({ id: 'track-v2', name: 'V2', kind: 'video', order: 1 }),
+        makeTimelineTrack({
+          id: 'track-a1',
+          name: 'A1',
+          kind: 'audio',
+          order: 2,
+          locked: true,
+        }),
+      ])
       useItemsStore.getState().setItems([text, video, audio])
       useSelectionStore.getState().selectItems(['text-1', 'video-1', 'audio-1'])
       const { result } = renderTrimHook(text)
@@ -563,6 +551,22 @@ describe('useTimelineTrim', () => {
 
       expect(getItem('a').durationInFrames).toBe(40)
       expect(getItem('b').from).toBe(60)
+    })
+
+    it('keeps contiguous host-mode clips locked together without a modifier', () => {
+      const a = makeTimelineVideoItem({ id: 'a' })
+      const b = makeTimelineVideoItem({ id: 'b', from: 60 })
+      useItemsStore.getState().setItems([a, b])
+      useEditorStore.setState({ hostMode: true })
+      const { result } = renderTrimHook(a)
+
+      startTrim(result, 'end')
+      moveMouse(-20)
+      expect(result.current.isRippleEdit).toBe(true)
+      releaseMouse()
+
+      expect(getItem('a').durationInFrames).toBe(40)
+      expect(getItem('b').from).toBe(40)
     })
 
     it('shrinking the start anchors from and pulls downstream clips left (forced mode)', () => {

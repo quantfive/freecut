@@ -449,6 +449,9 @@ export const TimelineHeader = memo(function TimelineHeader({
   const { t } = useTranslation()
   const hostMode = useEditorStore((s) => s.hostMode)
   const hotkeys = useResolvedHotkeys()
+  const razorShortcut = formatHotkeyBinding(hotkeys.RAZOR_TOOL)
+  const splitAtPlayheadShortcut = formatHotkeyBinding(hotkeys.SPLIT_AT_PLAYHEAD_ALT)
+  const razorTooltip = `${t('timeline.header.razorToolTooltip')} (${razorShortcut}) · ${t('projects.settings.hotkeys.items.splitAtPlayhead')} (${splitAtPlayheadShortcut})`
   const snapEnabled = useTimelineStore((s) => s.snapEnabled)
   const toggleSnap = useTimelineStore((s) => s.toggleSnap)
   const audioSkimmingEnabled = useTimelineStore((s) => s.audioSkimmingEnabled)
@@ -554,8 +557,9 @@ export const TimelineHeader = memo(function TimelineHeader({
                   : ''
               }
               onClick={() => setActiveTool(activeTool === 'razor' ? 'select' : 'razor')}
-              aria-label={t('timeline.header.razorTool')}
-              data-tooltip={t('timeline.header.razorToolTooltip')}
+              aria-label={`${t('timeline.header.razorTool')} (${razorShortcut})`}
+              aria-keyshortcuts={razorShortcut}
+              data-tooltip={razorTooltip}
             >
               <Scissors className="w-3.5 h-3.5 -rotate-90" />
             </Button>

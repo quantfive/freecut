@@ -535,6 +535,127 @@ export function deriveSupportedHostEdit(
       right_item_id: rightId,
     })
     preconditions.push(preconditionForItem(before, fps))
+  } else if (removed.length === 0 && added.length === 0 && changed.length > 1) {
+    // Host mode defaults contiguous trims to ripple edits. The native store
+    // applies that as one trimmed clip plus uniformly shifted downstream
+    // clips, so recognize the full gesture and serialize it as one command
+    // batch instead of restoring the authoritative snapshot as ambiguous.
+    const trimIds = changed.filter((id) => {
+      const before = previousItems.get(id)!
+      const after = nextItems.get(id)!
+      if (before.type === 'caption_cue' || after.type === 'caption_cue') return false
+      const facts = itemChangeFacts(before, after)
+      return (
+        facts.metadataUnchanged &&
+        facts.transformUnchanged &&
+        facts.sameTrack &&
+        (!facts.sourceUnchanged || !facts.durationUnchanged)
+      )
+    })
+    const trimId = trimIds.length === 1 ? trimIds[0] : null
+    const beforeTrim = trimId ? previousItems.get(trimId) : null
+    const afterTrim = trimId ? nextItems.get(trimId) : null
+    const shift =
+      beforeTrim && afterTrim ? afterTrim.durationInFrames - beforeTrim.durationInFrames : 0
+    const oldTrimEnd = beforeTrim ? beforeTrim.from + beforeTrim.durationInFrames : 0
+    const movedIds = trimId ? changed.filter((id) => id !== trimId) : []
+    const isUniformContiguousRipple =
+      !!trimId &&
+      !!beforeTrim &&
+      !!afterTrim &&
+      isFrameClip(beforeTrim) &&
+      isFrameClip(afterTrim) &&
+      shift !== 0 &&
+      movedIds.length > 0 &&
+      movedIds.some((id) => previousItems.get(id)!.from === oldTrimEnd) &&
+      movedIds.every((id) => {
+        const before = previousItems.get(id)!
+        const after = nextItems.get(id)!
+        const facts = itemChangeFacts(before, after)
+        return (
+          facts.metadataUnchanged &&
+          facts.transformUnchanged &&
+          facts.sourceUnchanged &&
+          facts.durationUnchanged &&
+          !facts.timelineUnchanged &&
+          facts.sameTrack &&
+          before.trackId === beforeTrim.trackId &&
+          before.from >= oldTrimEnd &&
+          after.from - before.from === shift
+        )
+      })
+
+    if (!isUniformContiguousRipple || !trimId || !beforeTrim || !afterTrim) {
+      const detail: HostEditRejectionDetail = {
+        code: 'ambiguous_change',
+        changeCounts: { added: added.length, removed: removed.length, changed: changed.length },
+      }
+      return {
+        batch: null,
+        reason: `Multiple or ambiguous timeline changes are unsupported${describeRejection(detail)}`,
+        detail,
+      }
+    }
+
+    const [beforeSourceStart, beforeSourceEnd] = sourceBounds(beforeTrim)
+    const [afterSourceStart, afterSourceEnd] = sourceBounds(afterTrim)
+    const edge =
+      afterTrim.from !== beforeTrim.from ||
+      (afterSourceStart !== beforeSourceStart && afterSourceEnd === beforeSourceEnd)
+        ? 'start'
+        : 'end'
+    const trimTimelineFrame =
+      edge === 'start' ? beforeTrim.from - shift : afterTrim.from + afterTrim.durationInFrames
+    const trimSourceFrame = edge === 'start' ? afterSourceStart : afterSourceEnd
+    const requiredCommands = changed.length + (edge === 'start' ? 1 : 0)
+    if (commands.length + requiredCommands > MAX_COMMANDS_PER_OPERATION) {
+      return {
+        batch: null,
+        reason: `Ripple trim exceeds the ${MAX_COMMANDS_PER_OPERATION}-command host operation limit`,
+      }
+    }
+
+    commands.push({
+      command_id: `trim-${trimId}`,
+      type: 'trim_item',
+      item_id: trimId,
+      edge,
+      timeline_us: framesToMicroseconds(trimTimelineFrame, fps),
+      source_us: framesToMicroseconds(trimSourceFrame, fps),
+    })
+    preconditions.push(preconditionForItem(beforeTrim, fps))
+
+    // Ripple-start anchors the trimmed item at its original timeline position.
+    // The wire trim moves its leading edge first, then this move restores the
+    // anchor while preserving the newly shortened source/timeline span.
+    if (edge === 'start') {
+      const location = itemLocation(next, trimId)
+      if (!location) return { batch: null, reason: 'The trimmed item no longer has a track' }
+      commands.push({
+        command_id: `anchor-${trimId}`,
+        type: 'move_item',
+        item_id: trimId,
+        to_track_id: afterTrim.trackId,
+        timeline_start_us: framesToMicroseconds(afterTrim.from, fps),
+        index: location.index,
+      })
+    }
+
+    for (const id of movedIds) {
+      const before = previousItems.get(id)!
+      const after = nextItems.get(id)!
+      const location = itemLocation(next, id)
+      if (!location) return { batch: null, reason: 'A rippled item no longer has a track' }
+      commands.push({
+        command_id: `move-${id}`,
+        type: 'move_item',
+        item_id: id,
+        to_track_id: after.trackId,
+        timeline_start_us: framesToMicroseconds(after.from, fps),
+        index: location.index,
+      })
+      preconditions.push(preconditionForItem(before, fps))
+    }
   } else if (removed.length === 0 && added.length === 0 && changed.length === 1) {
     const id = changed[0]!
     const before = previousItems.get(id)!

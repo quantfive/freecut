@@ -130,6 +130,17 @@ describe('TimelineHeader zoom slider', () => {
     animationFrameSpy.mockRestore()
   })
 
+  it('exposes the razor split tool shortcut in its accessible label and tooltip', () => {
+    render(<TimelineHeader />)
+
+    const razor = screen.getByRole('button', { name: /Razor tool \(C\)/i })
+    expect(razor).toHaveAttribute('aria-keyshortcuts', 'C')
+    expect(razor).toHaveAttribute(
+      'data-tooltip',
+      expect.stringMatching(/\(C\).*\((Alt|Option) \+ C\)/),
+    )
+  })
+
   it('releases a max-zoom preview when a later zoom supersedes its queued target', () => {
     sliderInput.value = 1
     const onZoomChange = vi.fn()

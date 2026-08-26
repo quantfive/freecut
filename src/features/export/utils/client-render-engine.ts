@@ -1176,6 +1176,10 @@ export async function createCompositionRenderer(
 
     const prevSrc = videoSourceByItemId.get(videoItem.id)
     if (prevSrc !== videoItem.src) {
+      // Tier 2 is keyed by item id and source time. An authoritative host
+      // refresh can retain the item id while replacing its media, so frames
+      // decoded from the old source must not survive the rebind.
+      scrubbingCache?.invalidateVideoFrames()
       useMediabunny.delete(videoItem.id)
       mediabunnyDisabledItems.delete(videoItem.id)
       mediabunnyFailureCountByItem.delete(videoItem.id)

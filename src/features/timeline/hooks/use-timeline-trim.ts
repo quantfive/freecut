@@ -190,7 +190,10 @@ export function useTimelineTrim(
       const isRollingEdit =
         forcedMode === 'rolling' ||
         (forcedMode === null && altKeyRef.current && !shiftKeyRef.current)
-      const isRippleEdit = forcedMode === 'ripple' || (forcedMode === null && shiftKeyRef.current)
+      const isRippleEdit =
+        forcedMode === 'ripple' ||
+        (forcedMode === null &&
+          (shiftKeyRef.current || (useEditorStore.getState().hostMode && !isRollingEdit)))
       const allItems = useTimelineStore.getState().items
       const transitions = useTransitionsStore.getState().transitions
       const currentItem = getItemFromStore()
@@ -280,12 +283,7 @@ export function useTimelineTrim(
       let constraintLabel: string | null = null
       const trimConstraintItems = isRollingEdit || isRippleEdit ? [currentItem] : normalTrimItems
       for (const trimConstraintItem of trimConstraintItems) {
-        const { clampedAmount } = clampTrimAmount(
-          trimConstraintItem,
-          handle!,
-          deltaFrames,
-          fps,
-        )
+        const { clampedAmount } = clampTrimAmount(trimConstraintItem, handle!, deltaFrames, fps)
         if (clampedAmount !== deltaFrames) {
           isConstrained = true
           constraintLabel = 'no handle'
@@ -830,9 +828,16 @@ export function useTimelineTrim(
       const destroyTransitionAtHandle = options?.destroyTransitionAtHandle ?? false
       const modifierRolling = e.altKey && !e.shiftKey
       const modifierRipple = e.shiftKey
+      // CodePress' controlled surface presents a compact, cut-focused editor.
+      // Keep a contiguous program contiguous by default there: a normal trim
+      // closes/opens the timeline just like an explicit Shift-ripple edit.
+      // Alt still opts into a rolling edit at an existing cut.
+      const hostRipple =
+        useEditorStore.getState().hostMode && forcedMode === null && !modifierRolling
 
       const wantsRolling = forcedMode === 'rolling' || (forcedMode === null && modifierRolling)
-      const wantsRipple = forcedMode === 'ripple' || (forcedMode === null && modifierRipple)
+      const wantsRipple =
+        forcedMode === 'ripple' || (forcedMode === null && (modifierRipple || hostRipple))
       const currentItem = getItemFromStore()
       const allItems = useTimelineStore.getState().items
       const transitions = useTransitionsStore.getState().transitions
@@ -874,10 +879,9 @@ export function useTimelineTrim(
           handle === 'start' ? trimmedItem.from : trimmedItem.from + trimmedItem.durationInFrames
         return areTrimEdgesAligned(anchorTrimEdge, trimmedItemEdge)
       })
-      const trimmedItemIds =
-        verticallyAlignedTrimItemIds.includes(currentItem.id)
-          ? verticallyAlignedTrimItemIds
-          : [currentItem.id]
+      const trimmedItemIds = verticallyAlignedTrimItemIds.includes(currentItem.id)
+        ? verticallyAlignedTrimItemIds
+        : [currentItem.id]
 
       magneticSnapTargetsRef.current = getMagneticSnapTargets()
       setDragState({

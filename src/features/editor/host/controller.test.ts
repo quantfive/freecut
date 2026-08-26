@@ -893,6 +893,72 @@ describe('embedded FreeCut host controller', () => {
       ).toEqual([expect.objectContaining({ type: 'trim_item', item_id: 'clip-1', edge: 'end' })])
     })
 
+    it('serializes a contiguous host ripple-end trim as one trim plus downstream moves', () => {
+      const initial = minimalTwoClipSnapshot()
+      const track = initial.timeline.tracks[0]!
+      const next = {
+        ...initial.timeline,
+        tracks: [
+          {
+            ...track,
+            items: [
+              { ...track.items[0]!, durationInFrames: 40, sourceEnd: 40 },
+              { ...track.items[1]!, from: 40 },
+            ],
+          },
+        ],
+      }
+
+      const derived = deriveSupportedHostEdit(initial.timeline, next, {
+        operationId: 'op-ripple-end',
+        idempotencyKey: 'idem-ripple-end',
+      })
+
+      expect(derived.batch?.commands).toEqual([
+        expect.objectContaining({ type: 'trim_item', item_id: 'clip-1', edge: 'end' }),
+        expect.objectContaining({ type: 'move_item', item_id: 'clip-2' }),
+      ])
+    })
+
+    it('anchors a contiguous host ripple-start trim before moving downstream clips', () => {
+      const initial = minimalTwoClipSnapshot()
+      const track = initial.timeline.tracks[0]!
+      const next = {
+        ...initial.timeline,
+        tracks: [
+          {
+            ...track,
+            items: [
+              {
+                ...track.items[0]!,
+                from: 0,
+                durationInFrames: 40,
+                sourceStart: 20,
+                sourceEnd: 60,
+              },
+              { ...track.items[1]!, from: 40 },
+            ],
+          },
+        ],
+      }
+
+      const derived = deriveSupportedHostEdit(initial.timeline, next, {
+        operationId: 'op-ripple-start',
+        idempotencyKey: 'idem-ripple-start',
+      })
+
+      expect(derived.batch?.commands).toEqual([
+        expect.objectContaining({
+          type: 'trim_item',
+          item_id: 'clip-1',
+          edge: 'start',
+          timeline_us: 666_667,
+        }),
+        expect.objectContaining({ type: 'move_item', item_id: 'clip-1', timeline_start_us: 0 }),
+        expect.objectContaining({ type: 'move_item', item_id: 'clip-2' }),
+      ])
+    })
+
     it('moves a clip whose transform key is present on only one side', () => {
       const initial = minimalTwoClipSnapshot()
       const withIdentity = withClipTwo(initial.timeline, {
