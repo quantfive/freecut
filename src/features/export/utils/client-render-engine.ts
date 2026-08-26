@@ -1499,6 +1499,25 @@ export async function createCompositionRenderer(
     return ids
   }
 
+  const videoItemMatchesCurrentIdentity = (itemId: string, item: VideoItem): boolean => {
+    const currentItem = videoItemsById.get(itemId)
+    return !currentItem || (currentItem.mediaId === item.mediaId && currentItem.src === item.src)
+  }
+
+  const hasCurrentVideoExtractor = (itemId: string, generation: number): boolean =>
+    videoExtractors.has(itemId) && videoExtractorGenerationByItem.get(itemId) === generation
+
+  const resolvedVideoSourceForCurrentRegistration = (
+    itemId: string,
+    item: VideoItem,
+    generation: number,
+    src: string | null,
+  ): string | null => {
+    if (isDisposed || !src) return null
+    if (videoRegistrationGenerationByItem.get(itemId) !== generation) return null
+    return videoItemMatchesCurrentIdentity(itemId, item) ? src : null
+  }
+
   const registerVideoItemOnDemand = async (
     itemId: string,
     item: VideoItem | undefined,
@@ -1506,26 +1525,19 @@ export async function createCompositionRenderer(
   ): Promise<boolean> => {
     if (!item) return false
     const registrationGeneration = videoRegistrationGenerationByItem.get(itemId) ?? 0
-    const currentItem = videoItemsById.get(itemId)
-    if (currentItem && (currentItem.mediaId !== item.mediaId || currentItem.src !== item.src))
-      return false
-    if (
-      videoExtractors.has(itemId) &&
-      videoExtractorGenerationByItem.get(itemId) === registrationGeneration
-    )
-      return true
+    if (!videoItemMatchesCurrentIdentity(itemId, item)) return false
+    if (hasCurrentVideoExtractor(itemId, registrationGeneration)) return true
     const src = await resolveRendererMediaSource(item, useProxyMedia, signal)
-    if (
-      isDisposed ||
-      !src ||
-      videoRegistrationGenerationByItem.get(itemId) !== registrationGeneration ||
-      videoItemsById.get(itemId)?.mediaId !== item.mediaId ||
-      videoItemsById.get(itemId)?.src !== item.src
+    const currentSource = resolvedVideoSourceForCurrentRegistration(
+      itemId,
+      item,
+      registrationGeneration,
+      src,
     )
-      return false
-    registerVideoItem(itemId, src)
+    if (!currentSource) return false
+    registerVideoItem(itemId, currentSource)
     videoItemsById.set(itemId, item)
-    if (hasDom && !previewStrictDecode) bindFallbackVideoElement(itemId, src)
+    if (hasDom && !previewStrictDecode) bindFallbackVideoElement(itemId, currentSource)
     return true
   }
 
