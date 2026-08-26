@@ -73,6 +73,25 @@ beforeAll(() => {
   HTMLElement.prototype.scrollIntoView = () => {}
 })
 
+/**
+ * Tailwind height classes that resolve against the viewport rather than the
+ * parent. The published surface is embedded inside host chrome, so a single one
+ * of these anywhere in its layout chain overflows the host's container by
+ * exactly the height of that chrome. `max-h-*` is excluded on purpose: a max
+ * clamps, it cannot make an element taller than its container.
+ */
+const VIEWPORT_HEIGHT_CLASS = /^(?:min-)?h-(?:screen|dvh|svh|lvh|\[[^\]]*(?:vh|dvh|svh|lvh)\])$/
+
+function viewportHeightOffenders(root: ParentNode): string[] {
+  return Array.from(root.querySelectorAll<HTMLElement>('*'))
+    .map((element) => ({
+      element,
+      claimed: Array.from(element.classList).filter((name) => VIEWPORT_HEIGHT_CLASS.test(name)),
+    }))
+    .filter(({ claimed }) => claimed.length > 0)
+    .map(({ element, claimed }) => `${element.tagName.toLowerCase()}.${claimed.join('.')}`)
+}
+
 describe('published FreeCut browser entry', () => {
   it('imports the package entry, mounts the real editor surfaces, and keeps host capability gates bounded', async () => {
     const host = fakeHost()
@@ -93,5 +112,17 @@ describe('published FreeCut browser entry', () => {
     expect(capabilityForCommand('move_item')).toBe('timeline.move')
     expect(capabilityForCommand('set_caption_style')).toBe('timeline.caption')
     expect(isHostCapabilityEnabled(host.capabilities, 'timeline.add')).toBe(false)
+  })
+
+  it('sizes the published surface against its container, never the viewport', async () => {
+    const { container } = render(<FreeCutEditorSurface host={fakeHost()} />)
+
+    await waitFor(() => expect(container.querySelector('[role="application"]')).not.toBeNull(), {
+      timeout: 10_000,
+    })
+
+    expect(viewportHeightOffenders(container)).toEqual([])
+    expect(container.querySelector('[data-freecut-editor-surface="host"]')).toHaveClass('h-full')
+    expect(container.querySelector('[role="application"]')).toHaveClass('h-full')
   })
 })

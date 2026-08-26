@@ -310,14 +310,17 @@ export const Editor = memo(function Editor({ projectId, project, migration }: Ed
     )
   }
 
+  // Standalone FreeCut owns the whole viewport; `LoadedEditor` only fills its parent.
   return (
-    <LoadedEditor
-      projectId={projectId}
-      project={project}
-      migration={migration}
-      onNavigateBack={onNavigateBack}
-      onRefreshMigration={onRefreshMigration}
-    />
+    <div data-freecut-editor-shell="standalone" className="h-screen min-h-0">
+      <LoadedEditor
+        projectId={projectId}
+        project={project}
+        migration={migration}
+        onNavigateBack={onNavigateBack}
+        onRefreshMigration={onRefreshMigration}
+      />
+    </div>
   )
 })
 
@@ -748,7 +751,11 @@ export const LoadedEditor = memo(function LoadedEditor({
 
   return (
     <div
-      className="h-screen bg-background flex flex-col overflow-hidden"
+      // Fills whatever box the entry point gives it. The standalone entry (`Editor`)
+      // supplies the viewport; an embedded host supplies its own container. Keeping
+      // the viewport out of here is what lets the surface sit under host chrome
+      // without overflowing it.
+      className="h-full bg-background flex flex-col overflow-hidden"
       style={editorLayoutCssVars as import('react').CSSProperties}
       role="application"
       aria-label={t('editor.editor.appLabel')}

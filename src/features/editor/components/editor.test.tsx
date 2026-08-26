@@ -255,7 +255,7 @@ vi.mock('@/features/editor/deps/projects', () => {
     }),
   })
 
-  return { useProjectStore }
+  return { useProjectStore, formatProjectUpgradeBackupName: () => 'Backup' }
 })
 
 vi.mock('@/features/editor/deps/export-contract', () => ({
@@ -294,7 +294,7 @@ vi.mock('@/features/projects/utils/project-helpers', () => ({
   formatProjectUpgradeBackupName: () => 'Backup',
 }))
 
-import { LoadedEditor } from './editor'
+import { Editor, LoadedEditor } from './editor'
 
 describe('LoadedEditor migration metadata refresh', () => {
   beforeAll(() => {
@@ -476,5 +476,43 @@ describe('LoadedEditor migration metadata refresh', () => {
     expect(screen.queryByTestId('timeline')).not.toBeInTheDocument()
     expect(screen.getByTestId('media-sidebar')).toBeInTheDocument()
     expect(screen.getByTestId('properties-sidebar')).toBeInTheDocument()
+  })
+})
+
+describe('editor shell height ownership', () => {
+  const project = { id: 'project-1', name: 'Project', width: 1920, height: 1080, fps: 30 }
+  const migration = { storedSchemaVersion: 9, currentSchemaVersion: 9, requiresUpgrade: false }
+
+  beforeAll(() => {
+    vi.stubGlobal('requestIdleCallback', (callback: IdleRequestCallback) => {
+      callback({ didTimeout: false, timeRemaining: () => 50 } as IdleDeadline)
+      return 1
+    })
+    vi.stubGlobal('cancelIdleCallback', vi.fn())
+  })
+
+  afterEach(() => {
+    cleanup()
+  })
+
+  // The shared shell is mounted both by standalone FreeCut and by the embedded
+  // host surface, whose container is the viewport minus the host's own chrome.
+  // Sizing the shell against the viewport overflows that container by exactly
+  // the height of the chrome, so the shell may only fill its parent.
+  it('sizes the shared shell against its parent, not the viewport', () => {
+    render(<LoadedEditor projectId="project-1" project={project} migration={migration} />)
+
+    const shell = screen.getByRole('application')
+    expect(shell).toHaveClass('h-full')
+    expect(shell).not.toHaveClass('h-screen')
+  })
+
+  // ...which means the standalone entry, and only it, has to supply the viewport.
+  it('keeps standalone FreeCut sized to the viewport', () => {
+    render(<Editor projectId="project-1" project={project} migration={migration} />)
+
+    const standalone = document.querySelector('[data-freecut-editor-shell="standalone"]')
+    expect(standalone).toHaveClass('h-screen')
+    expect(standalone).toContainElement(screen.getByRole('application'))
   })
 })
