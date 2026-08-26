@@ -205,11 +205,11 @@ fn fragmentMain(input: VertexOutput) -> @location(0) vec4f {
     outlineProgress = fract(outlineProgress - u.trimParams.z + 1.0);
     let trimStart = u.trimParams.x;
     let trimEnd = u.trimParams.y;
-    strokeVisible = select(
-      outlineProgress >= trimStart || outlineProgress < trimEnd,
-      outlineProgress >= trimStart && outlineProgress < trimEnd,
-      trimEnd >= trimStart,
-    );
+    if (trimEnd >= trimStart) {
+      strokeVisible = outlineProgress >= trimStart && outlineProgress < trimEnd;
+    } else {
+      strokeVisible = outlineProgress >= trimStart || outlineProgress < trimEnd;
+    }
     let visibleLength = select(1.0 - trimStart + trimEnd, trimEnd - trimStart, trimEnd >= trimStart);
     taperProgress = clamp(fract(outlineProgress - trimStart + 1.0) / max(visibleLength, 0.001), 0.0, 1.0);
   }

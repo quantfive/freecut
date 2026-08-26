@@ -9,6 +9,69 @@ const mockDownloadVideo = vi.fn()
 const mockResetState = vi.fn()
 const mockGetSupportedCodecs = vi.fn<(...args: unknown[]) => Promise<ClientCodec[]>>()
 
+const { mainSequence, selectedSequence, mockGetExportableSequence } = vi.hoisted(() => {
+  const sequence = (id: string | null, name: string, itemId: string) => {
+    const trackId = `track-${itemId}`
+    const item = {
+      id: itemId,
+      trackId,
+      type: 'text' as const,
+      from: 0,
+      durationInFrames: 30,
+      label: name,
+      text: name,
+      color: '#ffffff',
+    }
+    return {
+      id,
+      name,
+      tracks: [
+        {
+          id: trackId,
+          name: 'V1',
+          kind: 'video' as const,
+          height: 60,
+          locked: false,
+          visible: true,
+          muted: false,
+          solo: false,
+          order: 0,
+          items: [item],
+        },
+      ],
+      items: [item],
+      transitions: [],
+      keyframes: [],
+      fps: 30,
+      width: 1920,
+      height: 1080,
+      backgroundColor: '#000000',
+      masterBusDb: 0,
+      durationFrames: 30,
+      inPoint: null,
+      outPoint: null,
+      markers: [],
+    }
+  }
+
+  const main = sequence(null, 'Main Timeline', 'main-title')
+  const selected = sequence('agent-cut', 'Agent Cut', 'agent-title')
+  return {
+    mainSequence: main,
+    selectedSequence: selected,
+    mockGetExportableSequence: vi.fn((id: string | null) => (id === selected.id ? selected : main)),
+  }
+})
+
+vi.mock('@/features/export/deps/timeline-compositions', () => ({
+  getActiveExportSequenceId: () => null,
+  getExportableSequence: mockGetExportableSequence,
+  listExportableSequences: () => [
+    { id: null, name: mainSequence.name },
+    { id: selectedSequence.id, name: selectedSequence.name },
+  ],
+}))
+
 vi.mock('../hooks/use-client-render', () => ({
   useClientRender: () => ({
     isExporting: false,
@@ -114,5 +177,23 @@ describe('ExportDialog', () => {
 
     const h265Option = await screen.findByRole('option', { name: /H\.265/i })
     expect(h265Option).toHaveAttribute('data-disabled')
+  })
+
+  it('passes the selected sequence snapshot to direct export', async () => {
+    mockGetSupportedCodecs.mockResolvedValue(['avc'])
+    mockStartExport.mockResolvedValue(undefined)
+
+    render(<ExportDialog open onClose={() => {}} />)
+
+    fireEvent.keyDown(screen.getByLabelText('Sequence'), { key: 'ArrowDown' })
+    fireEvent.click(await screen.findByRole('option', { name: selectedSequence.name }))
+
+    const exportButton = screen.getByRole('button', { name: 'Export Video' })
+    await waitFor(() => expect(exportButton).not.toBeDisabled())
+    fireEvent.click(exportButton)
+
+    await waitFor(() => {
+      expect(mockStartExport).toHaveBeenCalledWith(expect.any(Object), selectedSequence)
+    })
   })
 })
