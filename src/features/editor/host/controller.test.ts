@@ -920,6 +920,43 @@ describe('embedded FreeCut host controller', () => {
       ])
     })
 
+    it('serializes a host ripple trim when downstream clips already have a gap', () => {
+      const initial = minimalTwoClipSnapshot()
+      const track = initial.timeline.tracks[0]!
+      const gapped = {
+        ...initial.timeline,
+        tracks: [
+          {
+            ...track,
+            items: [track.items[0]!, { ...track.items[1]!, from: 90 }],
+          },
+        ],
+      }
+      const next = {
+        ...gapped,
+        tracks: [
+          {
+            ...gapped.tracks[0]!,
+            items: [
+              { ...gapped.tracks[0]!.items[0]!, durationInFrames: 40, sourceEnd: 40 },
+              { ...gapped.tracks[0]!.items[1]!, from: 70 },
+            ],
+          },
+        ],
+      }
+
+      const derived = deriveSupportedHostEdit(gapped, next, {
+        operationId: 'op-ripple-gapped',
+        idempotencyKey: 'idem-ripple-gapped',
+      })
+
+      expect(derived.reason).toBeUndefined()
+      expect(derived.batch?.commands).toEqual([
+        expect.objectContaining({ type: 'trim_item', item_id: 'clip-1', edge: 'end' }),
+        expect.objectContaining({ type: 'move_item', item_id: 'clip-2' }),
+      ])
+    })
+
     it('anchors a contiguous host ripple-start trim before moving downstream clips', () => {
       const initial = minimalTwoClipSnapshot()
       const track = initial.timeline.tracks[0]!

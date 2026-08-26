@@ -567,7 +567,6 @@ export function deriveSupportedHostEdit(
       isFrameClip(afterTrim) &&
       shift !== 0 &&
       movedIds.length > 0 &&
-      movedIds.some((id) => previousItems.get(id)!.from === oldTrimEnd) &&
       movedIds.every((id) => {
         const before = previousItems.get(id)!
         const after = nextItems.get(id)!
