@@ -22,6 +22,27 @@ export function HostEditor({ host }: { host: EditorHost }) {
 }
 ```
 
+## Sizing
+
+The surface is an embedded component, not an app: it fills the box you give it
+(`height: 100%`) and never sizes itself against the viewport. Give the element
+you render it into a definite height. If your app has chrome of its own — a
+fixed header, a sidebar — subtract that in your own container; the surface has
+no knowledge of that chrome and must not be told about it.
+
+```tsx
+<main className="h-[calc(100dvh-73px)] overflow-hidden">
+  <FreeCutEditorSurface host={host} />
+</main>
+```
+
+The chain of definite heights has to be unbroken: any wrapper between your sized
+container and the surface (a React mount point, say) needs a height of its own,
+or the percentage stops resolving and the surface falls back to sizing itself to
+its content. A container with an indefinite height (`height: auto`) collapses
+the surface, and a container taller than its own parent scrolls it out of view —
+both are host-side layout bugs, not surface bugs.
+
 The `EditorHost` contract carries opaque media locators and authoritative
 snapshots. It never accepts filesystem paths, permanent URLs, provider keys,
 or media bytes. Supported edits are submitted through `submitEdit`; rejected

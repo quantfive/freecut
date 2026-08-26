@@ -50,6 +50,12 @@ interface FreeCutEditorSurfaceProps {
  * Importable, host-backed browser entry for the real FreeCut editor tree.
  * Consumers provide authority and ports; this component provides only the
  * FreeCut providers, i18n, CSS, and existing LoadedEditor layout.
+ *
+ * The surface is embedded, so it fills the box the host hands it (`height:100%`)
+ * instead of claiming the viewport. A host that reserves chrome of its own — a
+ * fixed app header, say — sizes its own container; the surface never needs to
+ * know that chrome exists, and never subtracts anything from `100vh`/`100dvh`.
+ * The container must therefore have a definite height.
  */
 export function FreeCutEditorSurface({ host, apiRef }: FreeCutEditorSurfaceProps) {
   const [state, setState] = useState<HostSurfaceState | null>(null)
@@ -107,7 +113,7 @@ export function FreeCutEditorSurface({ host, apiRef }: FreeCutEditorSurfaceProps
   if (error) {
     return (
       <div
-        className="flex min-h-screen items-center justify-center bg-background p-6 text-sm text-destructive"
+        className="flex h-full min-h-0 items-center justify-center bg-background p-6 text-sm text-destructive"
         role="alert"
       >
         {error.message}
@@ -118,7 +124,7 @@ export function FreeCutEditorSurface({ host, apiRef }: FreeCutEditorSurfaceProps
   if (!state) {
     return (
       <div
-        className="flex min-h-screen items-center justify-center bg-background p-6 text-sm text-muted-foreground"
+        className="flex h-full min-h-0 items-center justify-center bg-background p-6 text-sm text-muted-foreground"
         aria-busy="true"
       >
         Loading editor…
@@ -138,7 +144,7 @@ export function FreeCutEditorSurface({ host, apiRef }: FreeCutEditorSurfaceProps
           <HostCaptionEditorProvider runtime={state.runtime}>
             <HostTranscriptEditorProvider runtime={state.runtime}>
               <ErrorBoundary level="feature">
-                <div data-freecut-editor-surface="host" className="h-screen min-h-0">
+                <div data-freecut-editor-surface="host" className="h-full min-h-0">
                   <LoadedEditor
                     projectId={state.snapshot.project.id}
                     project={state.snapshot.project}
