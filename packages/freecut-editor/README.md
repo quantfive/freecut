@@ -63,7 +63,7 @@ provider details, URLs, paths, and media bytes remain host-owned.
 The same 0.3.0 surface retains the host-backed caption tracks, bounded cues,
 caption styles, and display toggles from 0.2.0.
 
-The 0.3.7 surface lets the host register its own modules into the editor's
+The 0.3.8 surface lets the host register its own modules into the editor's
 left sidebar rail. `EditorHost.sidebarModules` entries (`{ id, label, icon,
 Panel }`) appear as `host:<id>` rail tabs; the surface renders each module's
 `Panel` in the sidebar panel area, mounts it on first activation, and keeps it
