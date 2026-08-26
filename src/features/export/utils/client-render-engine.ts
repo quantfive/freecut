@@ -858,6 +858,8 @@ export async function createCompositionRenderer(
     })
   const videoExtractors = new Map<string, VideoFrameSource>()
   const videoSourceByItemId = new Map<string, string>()
+  const videoMediaIdByItemId = new Map<string, string | undefined>()
+  const videoRegistrationGenerationByItem = new Map<string, number>()
   const videoItemIdsBySource = new Map<string, Set<string>>()
   const videoItemsById = new Map<string, VideoItem>()
   // Keep video elements as fallback if mediabunny fails
@@ -866,10 +868,17 @@ export async function createCompositionRenderer(
   const fallbackVideoBySrc = new Set<string>()
   const fallbackVideoClipIdByItem = new Map<string, string>()
   let fallbackVideoClipCounter = 0
+  const bumpVideoRegistrationGeneration = (itemId: string): number => {
+    const next = (videoRegistrationGenerationByItem.get(itemId) ?? 0) + 1
+    videoRegistrationGenerationByItem.set(itemId, next)
+    return next
+  }
   const registerVideoItem = (itemId: string, src: string): void => {
     if (!src) return
     const prevSrc = videoSourceByItemId.get(itemId)
     if (prevSrc && prevSrc !== src) {
+      bumpVideoRegistrationGeneration(itemId)
+      scrubbingCache?.invalidateVideoFrames()
       const prevSet = videoItemIdsBySource.get(prevSrc)
       prevSet?.delete(itemId)
       if (prevSet && prevSet.size === 0) {
@@ -917,6 +926,8 @@ export async function createCompositionRenderer(
       if (item.type === 'video') {
         const videoItem = item as VideoItem
         videoItemsById.set(item.id, videoItem)
+        videoMediaIdByItemId.set(item.id, videoItem.mediaId)
+        videoRegistrationGenerationByItem.set(item.id, 0)
         if (videoItem.src) {
           getLog().debug('Registering shared video extractor', {
             itemId: item.id,
@@ -1171,7 +1182,36 @@ export async function createCompositionRenderer(
   const PREWARM_FAILURE_DISABLE_THRESHOLD = 3
   const inFlightInitByItem = new Map<string, Promise<boolean>>()
 
+  function resetVideoItemRegistrationForMediaChange(itemId: string): void {
+    bumpVideoRegistrationGeneration(itemId)
+    scrubbingCache?.invalidateVideoFrames()
+    useMediabunny.delete(itemId)
+    mediabunnyDisabledItems.delete(itemId)
+    mediabunnyFailureCountByItem.delete(itemId)
+    mediabunnyInitFailureCountByItem.delete(itemId)
+    inFlightInitByItem.delete(itemId)
+
+    const previousSource = videoSourceByItemId.get(itemId)
+    if (previousSource) {
+      const previousIds = videoItemIdsBySource.get(previousSource)
+      previousIds?.delete(itemId)
+      if (previousIds?.size === 0) videoItemIdsBySource.delete(previousSource)
+      sharedVideoExtractors.releaseItem(itemId, previousSource)
+    }
+    videoSourceByItemId.delete(itemId)
+    videoExtractors.delete(itemId)
+    videoElements.delete(itemId)
+  }
+
   function syncVideoItemRegistration(videoItem: VideoItem): void {
+    const hadMediaIdentity = videoMediaIdByItemId.has(videoItem.id)
+    const previousMediaId = videoMediaIdByItemId.get(videoItem.id)
+    const mediaIdentityChanged = hadMediaIdentity && previousMediaId !== videoItem.mediaId
+    videoMediaIdByItemId.set(videoItem.id, videoItem.mediaId)
+    videoItemsById.set(videoItem.id, videoItem)
+
+    if (mediaIdentityChanged) resetVideoItemRegistrationForMediaChange(videoItem.id)
+
     if (!videoItem.src) return
 
     const prevSrc = videoSourceByItemId.get(videoItem.id)
@@ -1190,8 +1230,6 @@ export async function createCompositionRenderer(
         bindFallbackVideoElement(videoItem.id, videoItem.src)
       }
     }
-
-    videoItemsById.set(videoItem.id, videoItem)
   }
 
   // Pre-computed sub-composition render data. Populated synchronously at
@@ -1408,6 +1446,7 @@ export async function createCompositionRenderer(
         // while itemResult only reports back for the explicitly requested ids.
         const allItemsForSource = videoItemIdsBySource.get(src) ?? new Set(ids)
         for (const itemId of allItemsForSource) {
+          if (videoSourceByItemId.get(itemId) !== src) continue
           if (success) {
             useMediabunny.add(itemId)
           } else {
@@ -1415,7 +1454,7 @@ export async function createCompositionRenderer(
           }
         }
         for (const itemId of ids) {
-          itemResult.set(itemId, success)
+          itemResult.set(itemId, videoSourceByItemId.get(itemId) === src && success)
         }
       }),
     )
@@ -1452,8 +1491,14 @@ export async function createCompositionRenderer(
   ): Promise<boolean> => {
     if (videoExtractors.has(itemId)) return true
     if (!item) return false
+    const registrationGeneration = videoRegistrationGenerationByItem.get(itemId) ?? 0
     const src = await resolveRendererMediaSource(item, useProxyMedia, signal)
-    if (isDisposed || !src) return false
+    if (
+      isDisposed ||
+      !src ||
+      videoRegistrationGenerationByItem.get(itemId) !== registrationGeneration
+    )
+      return false
     registerVideoItem(itemId, src)
     videoItemsById.set(itemId, item)
     if (hasDom && !previewStrictDecode) bindFallbackVideoElement(itemId, src)
@@ -1467,14 +1512,17 @@ export async function createCompositionRenderer(
   ): Promise<boolean> => {
     if (useMediabunny.has(itemId)) return true
     if (mediabunnyDisabledItems.has(itemId)) return false
-    if (!(await registerVideoItemOnDemand(itemId, item, signal))) return false
+    const currentItem = item ?? videoItemsById.get(itemId)
+    if (!(await registerVideoItemOnDemand(itemId, currentItem, signal))) return false
 
     const existing = inFlightInitByItem.get(itemId)
     if (existing) return existing
 
+    const registrationGeneration = videoRegistrationGenerationByItem.get(itemId) ?? 0
     const promise = initializeMediabunnyForItems([itemId], signal)
       .then((result) => {
-        if (isDisposed) return false
+        if (isDisposed || videoRegistrationGenerationByItem.get(itemId) !== registrationGeneration)
+          return false
         const ok = result.get(itemId) === true
         if (ok) {
           mediabunnyInitFailureCountByItem.delete(itemId)
@@ -1489,7 +1537,7 @@ export async function createCompositionRenderer(
         return false
       })
       .finally(() => {
-        inFlightInitByItem.delete(itemId)
+        if (inFlightInitByItem.get(itemId) === promise) inFlightInitByItem.delete(itemId)
       })
 
     inFlightInitByItem.set(itemId, promise)

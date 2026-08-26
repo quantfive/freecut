@@ -828,6 +828,11 @@ export function useTimelineTrim(
       const destroyTransitionAtHandle = options?.destroyTransitionAtHandle ?? false
       const modifierRolling = e.altKey && !e.shiftKey
       const modifierRipple = e.shiftKey
+      // The modifier may already be held before mousedown, in which case no
+      // keydown event arrives during the gesture. Seed the live refs from the
+      // initiating pointer event so the first mousemove preserves that mode.
+      altKeyRef.current = e.altKey
+      shiftKeyRef.current = e.shiftKey
       // CodePress' controlled surface presents a compact, cut-focused editor.
       // Keep a contiguous program contiguous by default there: a normal trim
       // closes/opens the timeline just like an explicit Shift-ripple edit.

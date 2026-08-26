@@ -611,6 +611,25 @@ describe('useTimelineTrim', () => {
       expect(right.from + right.durationInFrames).toBe(120)
     })
 
+    it('keeps a pre-held Alt gesture rolling when host mode defaults to ripple', () => {
+      const a = makeTimelineVideoItem({ id: 'a' })
+      const b = makeTimelineVideoItem({ id: 'b', from: 60 })
+      useItemsStore.getState().setItems([a, b])
+      useEditorStore.setState({ hostMode: true })
+      const { result } = renderTrimHook(a)
+
+      startTrim(result, 'end', { altKey: true })
+      moveMouse(20)
+
+      expect(result.current.isRollingEdit).toBe(true)
+      expect(result.current.isRippleEdit).toBe(false)
+      releaseMouse()
+
+      expect(getItem('a').durationInFrames).toBe(80)
+      expect(getItem('b').from).toBe(80)
+      expect(getItem('b').durationInFrames).toBe(40)
+    })
+
     it('refuses to start a rolling edit with no neighbor at the edge', () => {
       const a = makeTimelineVideoItem({ id: 'a' })
       useItemsStore.getState().setItems([a])

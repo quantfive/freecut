@@ -429,6 +429,7 @@ export class ScrubbingCache {
   private _misses = 0
   private ramGeneration = 0
   private disposed = false
+  private videoFrameGeneration = 0
   private pendingRamFrames = new Map<number, number>()
   private invalidatedPendingRamFrames = new Set<number>()
 
@@ -537,8 +538,22 @@ export class ScrubbingCache {
     return entry
   }
 
+  /** Generation token used to fence asynchronous decodes across source rebinds. */
+  getVideoFrameGeneration(): number {
+    return this.videoFrameGeneration
+  }
+
   /** Cache a decoded video frame for a specific item. */
-  putVideoFrame(itemId: string, frame: Tier2VideoFrame, sourceTime: number): void {
+  putVideoFrame(
+    itemId: string,
+    frame: Tier2VideoFrame,
+    sourceTime: number,
+    expectedGeneration = this.videoFrameGeneration,
+  ): void {
+    if (expectedGeneration !== this.videoFrameGeneration || this.disposed) {
+      frame.close()
+      return
+    }
     this.tier2.put(itemId, frame, sourceTime)
   }
 
@@ -666,6 +681,7 @@ export class ScrubbingCache {
 
   /** Clear Tier 2 (per-video last-frame). Call when timeline items change. */
   invalidateVideoFrames(): void {
+    this.videoFrameGeneration += 1
     this.tier2.clear()
   }
 

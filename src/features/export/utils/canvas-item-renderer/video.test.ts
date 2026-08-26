@@ -148,6 +148,7 @@ describe('renderVideoItem', () => {
       getDuration: vi.fn(() => 30),
     }
     const scrubbingCache = {
+      getVideoFrameGeneration: vi.fn(() => 0),
       getVideoFrameEntry: vi.fn(() => undefined),
       putVideoFrame: vi.fn(),
     }
