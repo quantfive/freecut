@@ -63,6 +63,7 @@ export class EmbeddedEditorHostRuntime implements EmbeddedEditorHostRuntimeContr
   private unsubscribeResolver: (() => void) | null = null
   private unsubscribeController: (() => void) | null = null
   private unsubscribeTimeline: (() => void) | null = null
+  private unsubscribePlayback: (() => void) | null = null
   private authoritativeSnapshot: EmbeddedEditorSnapshot
 
   constructor(host: EditorHost, snapshot: EmbeddedEditorSnapshot) {
@@ -87,6 +88,12 @@ export class EmbeddedEditorHostRuntime implements EmbeddedEditorHostRuntimeContr
     }
   }
 
+  private clearSkimPreviews(): void {
+    const editor = useEditorStore.getState()
+    editor.clearMediaSkimPreview()
+    editor.clearCompoundClipSkimPreview()
+  }
+
   mountStores(): void {
     if (this.mounted) return
     this.mounted = true
@@ -99,6 +106,7 @@ export class EmbeddedEditorHostRuntime implements EmbeddedEditorHostRuntimeContr
     useGizmoStore.getState().cancelInteraction()
     useGizmoStore.getState().clearPreview()
     useMaskEditorStore.getState().stopEditing()
+    this.clearSkimPreviews()
     this.applySnapshotToStores(this.authoritativeSnapshot)
 
     if (typeof document !== 'undefined') {
@@ -123,6 +131,9 @@ export class EmbeddedEditorHostRuntime implements EmbeddedEditorHostRuntimeContr
       this.applySnapshotToStores(snapshot)
     })
     this.unsubscribeTimeline = useTimelineStore.subscribe(() => this.scheduleReconcile())
+    this.unsubscribePlayback = usePlaybackStore.subscribe((state, previous) => {
+      if (state.isPlaying && !previous.isPlaying) this.clearSkimPreviews()
+    })
   }
 
   unmountStores(): void {
@@ -135,6 +146,8 @@ export class EmbeddedEditorHostRuntime implements EmbeddedEditorHostRuntimeContr
     }
     this.unsubscribeTimeline?.()
     this.unsubscribeTimeline = null
+    this.unsubscribePlayback?.()
+    this.unsubscribePlayback = null
     this.unsubscribeController?.()
     this.unsubscribeController = null
     this.unsubscribeResolver?.()
@@ -144,6 +157,7 @@ export class EmbeddedEditorHostRuntime implements EmbeddedEditorHostRuntimeContr
     useGizmoStore.getState().cancelInteraction()
     useGizmoStore.getState().clearPreview()
     useMaskEditorStore.getState().stopEditing()
+    this.clearSkimPreviews()
     useSelectionStore.getState().clearSelection()
     useEditorStore.setState({ hostMode: false })
     useSelectionStore.getState().setActiveTool('select')
@@ -158,6 +172,9 @@ export class EmbeddedEditorHostRuntime implements EmbeddedEditorHostRuntimeContr
     const native = hostSnapshotToNativeTimeline(snapshot)
     this.applyingAuthoritative = true
     try {
+      // Skim overlays are module-global UI state. Never let a media-card hover
+      // from an old document cover the authoritative program monitor.
+      this.clearSkimPreviews()
       useProjectStore.getState().setCurrentProject(hostSnapshotToProject(snapshot))
       // The first host slice exposes the normal Edit layout only.  Set this
       // in memory so a local user's persisted Color/Motion preference cannot

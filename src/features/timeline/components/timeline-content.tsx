@@ -867,6 +867,11 @@ export const TimelineContent = memo(function TimelineContent({
   useEffect(() => {
     return () => {
       cancelPendingHoverPreview()
+      if (marqueeReleaseRafRef.current !== null) {
+        cancelAnimationFrame(marqueeReleaseRafRef.current)
+        marqueeReleaseRafRef.current = null
+      }
+      setPreviewFrameRef.current(null)
     }
   }, [cancelPendingHoverPreview])
 
@@ -1308,9 +1313,39 @@ export const TimelineContent = memo(function TimelineContent({
     }
   }, [])
 
-  // Click empty space to deselect items and markers (but preserve track selection)
+  const handleTimelineClickCapture = useCallback((e: React.MouseEvent) => {
+    if (e.button !== 0) return
+    if (marqueeWasActiveRef.current || dragWasActiveRef.current || scrubWasActiveRef.current) {
+      return
+    }
+
+    const target = e.target as HTMLElement
+    if (
+      useSelectionStore.getState().activeTool === 'razor' ||
+      target.closest('button, input, [role="slider"], [role="menuitem"]')
+    ) {
+      return
+    }
+
+    const container = containerRef.current
+    const rect = container?.getBoundingClientRect()
+    if (!container || !rect) return
+
+    const frame = Math.max(
+      0,
+      Math.min(
+        Math.round(pixelsToFrameRef.current(e.clientX - rect.left + container.scrollLeft)),
+        maxTimelineFrameRef.current,
+      ),
+    )
+    const playback = usePlaybackStore.getState()
+    playback.pause()
+    playback.setCurrentFrame(frame)
+    playback.setPreviewFrame(null)
+  }, [])
+
+  // Click empty space to deselect items and markers (but preserve track selection).
   const handleContainerClick = (e: React.MouseEvent) => {
-    // Don't deselect if marquee selection, drag, or scrubbing just finished
     if (marqueeWasActiveRef.current || dragWasActiveRef.current || scrubWasActiveRef.current) {
       return
     }
@@ -2141,6 +2176,7 @@ export const TimelineContent = memo(function TimelineContent({
           willChange: 'scroll-position',
         }}
         onMouseDownCapture={handleTimelineMouseDownCapture}
+        onClickCapture={handleTimelineClickCapture}
         onClick={handleContainerClick}
         onMouseMove={handleTimelineMouseMove}
         onMouseLeave={handleTimelineMouseLeave}

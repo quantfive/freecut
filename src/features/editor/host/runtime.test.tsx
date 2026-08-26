@@ -32,6 +32,7 @@ vi.mock('@/features/editor/deps/composition-runtime', () => ({
 }))
 
 import { usePlaybackStore } from '@/shared/state/playback'
+import { useEditorStore } from '@/shared/state/editor'
 import type { EditorHost, EmbeddedEditorSnapshot } from './contract'
 import { EmbeddedEditorHostRuntime } from './runtime'
 
@@ -155,5 +156,24 @@ describe('EmbeddedEditorHostRuntime host audio', () => {
     compositionRuntimeMocks.previewContext = { state: 'suspended', resume }
     document.dispatchEvent(new Event('pointerdown'))
     expect(resume).toHaveBeenCalledTimes(2)
+  })
+
+  it('clears stale media skim overlays on mount and when playback starts', () => {
+    usePlaybackStore.setState({ isPlaying: false })
+    useEditorStore.getState().setMediaSkimPreview('media-1', 12)
+
+    const runtime = new EmbeddedEditorHostRuntime(createHost(snapshot()), snapshot())
+    runtime.mountStores()
+    try {
+      expect(useEditorStore.getState().mediaSkimPreviewMediaId).toBeNull()
+
+      useEditorStore.getState().setMediaSkimPreview('media-1', 18)
+      usePlaybackStore.setState({ isPlaying: true })
+
+      expect(useEditorStore.getState().mediaSkimPreviewMediaId).toBeNull()
+      expect(useEditorStore.getState().mediaSkimPreviewFrame).toBeNull()
+    } finally {
+      runtime.unmountStores()
+    }
   })
 })

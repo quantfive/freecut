@@ -858,6 +858,9 @@ export async function createCompositionRenderer(
     })
   const videoExtractors = new Map<string, VideoFrameSource>()
   const videoSourceByItemId = new Map<string, string>()
+  const videoMediaIdByItemId = new Map<string, string | undefined>()
+  const videoRegistrationGenerationByItem = new Map<string, number>()
+  const videoExtractorGenerationByItem = new Map<string, number>()
   const videoItemIdsBySource = new Map<string, Set<string>>()
   const videoItemsById = new Map<string, VideoItem>()
   // Keep video elements as fallback if mediabunny fails
@@ -866,10 +869,17 @@ export async function createCompositionRenderer(
   const fallbackVideoBySrc = new Set<string>()
   const fallbackVideoClipIdByItem = new Map<string, string>()
   let fallbackVideoClipCounter = 0
+  const bumpVideoRegistrationGeneration = (itemId: string): number => {
+    const next = (videoRegistrationGenerationByItem.get(itemId) ?? 0) + 1
+    videoRegistrationGenerationByItem.set(itemId, next)
+    return next
+  }
   const registerVideoItem = (itemId: string, src: string): void => {
     if (!src) return
     const prevSrc = videoSourceByItemId.get(itemId)
     if (prevSrc && prevSrc !== src) {
+      bumpVideoRegistrationGeneration(itemId)
+      scrubbingCache?.invalidateVideoFrames()
       const prevSet = videoItemIdsBySource.get(prevSrc)
       prevSet?.delete(itemId)
       if (prevSet && prevSet.size === 0) {
@@ -885,6 +895,7 @@ export async function createCompositionRenderer(
     }
     ids.add(itemId)
     videoExtractors.set(itemId, sharedVideoExtractors.getOrCreateItemExtractor(itemId, src))
+    videoExtractorGenerationByItem.set(itemId, videoRegistrationGenerationByItem.get(itemId) ?? 0)
   }
 
   const bindFallbackVideoElement = (itemId: string, src: string): void => {
@@ -917,6 +928,8 @@ export async function createCompositionRenderer(
       if (item.type === 'video') {
         const videoItem = item as VideoItem
         videoItemsById.set(item.id, videoItem)
+        videoMediaIdByItemId.set(item.id, videoItem.mediaId)
+        videoRegistrationGenerationByItem.set(item.id, 0)
         if (videoItem.src) {
           getLog().debug('Registering shared video extractor', {
             itemId: item.id,
@@ -1171,11 +1184,45 @@ export async function createCompositionRenderer(
   const PREWARM_FAILURE_DISABLE_THRESHOLD = 3
   const inFlightInitByItem = new Map<string, Promise<boolean>>()
 
+  function resetVideoItemRegistrationForMediaChange(itemId: string): void {
+    bumpVideoRegistrationGeneration(itemId)
+    scrubbingCache?.invalidateVideoFrames()
+    useMediabunny.delete(itemId)
+    mediabunnyDisabledItems.delete(itemId)
+    mediabunnyFailureCountByItem.delete(itemId)
+    mediabunnyInitFailureCountByItem.delete(itemId)
+    inFlightInitByItem.delete(itemId)
+
+    const previousSource = videoSourceByItemId.get(itemId)
+    if (previousSource) {
+      const previousIds = videoItemIdsBySource.get(previousSource)
+      previousIds?.delete(itemId)
+      if (previousIds?.size === 0) videoItemIdsBySource.delete(previousSource)
+      sharedVideoExtractors.releaseItem(itemId, previousSource)
+    }
+    videoSourceByItemId.delete(itemId)
+    videoExtractors.delete(itemId)
+    videoExtractorGenerationByItem.delete(itemId)
+    videoElements.delete(itemId)
+  }
+
   function syncVideoItemRegistration(videoItem: VideoItem): void {
+    const hadMediaIdentity = videoMediaIdByItemId.has(videoItem.id)
+    const previousMediaId = videoMediaIdByItemId.get(videoItem.id)
+    const mediaIdentityChanged = hadMediaIdentity && previousMediaId !== videoItem.mediaId
+    videoMediaIdByItemId.set(videoItem.id, videoItem.mediaId)
+    videoItemsById.set(videoItem.id, videoItem)
+
+    if (mediaIdentityChanged) resetVideoItemRegistrationForMediaChange(videoItem.id)
+
     if (!videoItem.src) return
 
     const prevSrc = videoSourceByItemId.get(videoItem.id)
     if (prevSrc !== videoItem.src) {
+      // Tier 2 is keyed by item id and source time. An authoritative host
+      // refresh can retain the item id while replacing its media, so frames
+      // decoded from the old source must not survive the rebind.
+      scrubbingCache?.invalidateVideoFrames()
       useMediabunny.delete(videoItem.id)
       mediabunnyDisabledItems.delete(videoItem.id)
       mediabunnyFailureCountByItem.delete(videoItem.id)
@@ -1186,8 +1233,6 @@ export async function createCompositionRenderer(
         bindFallbackVideoElement(videoItem.id, videoItem.src)
       }
     }
-
-    videoItemsById.set(videoItem.id, videoItem)
   }
 
   // Pre-computed sub-composition render data. Populated synchronously at
@@ -1379,39 +1424,52 @@ export async function createCompositionRenderer(
     if (itemIds.length === 0) return itemResult
     throwIfAborted(signal)
 
-    const bySource = new Map<string, string[]>()
+    const bySource = new Map<string, Map<string, number>>()
     for (const itemId of itemIds) {
       const src = videoSourceByItemId.get(itemId)
       if (!src) {
         itemResult.set(itemId, false)
         continue
       }
-      let ids = bySource.get(src)
-      if (!ids) {
-        ids = []
-        bySource.set(src, ids)
+      let registrations = bySource.get(src)
+      if (!registrations) {
+        registrations = new Map<string, number>()
+        bySource.set(src, registrations)
       }
-      ids.push(itemId)
+      registrations.set(itemId, videoRegistrationGenerationByItem.get(itemId) ?? 0)
     }
 
     await Promise.all(
-      [...bySource.entries()].map(async ([src, ids]) => {
+      [...bySource.entries()].map(async ([src, requestedRegistrations]) => {
         throwIfAborted(signal)
+        const sourceRegistrations = new Map<string, number>()
+        for (const itemId of videoItemIdsBySource.get(src) ?? requestedRegistrations.keys()) {
+          sourceRegistrations.set(itemId, videoRegistrationGenerationByItem.get(itemId) ?? 0)
+        }
         const success = await sharedVideoExtractors.initSource(src)
         throwIfAborted(signal)
         if (isDisposed) return
         // Intentional side effect: decode readiness is tracked per shared source,
         // while itemResult only reports back for the explicitly requested ids.
-        const allItemsForSource = videoItemIdsBySource.get(src) ?? new Set(ids)
-        for (const itemId of allItemsForSource) {
+        for (const [itemId, generation] of sourceRegistrations) {
+          if (
+            videoSourceByItemId.get(itemId) !== src ||
+            videoRegistrationGenerationByItem.get(itemId) !== generation
+          )
+            continue
           if (success) {
             useMediabunny.add(itemId)
           } else {
             useMediabunny.delete(itemId)
           }
         }
-        for (const itemId of ids) {
-          itemResult.set(itemId, success)
+        for (const [itemId, generation] of requestedRegistrations) {
+          itemResult.set(
+            itemId,
+            videoSourceByItemId.get(itemId) === src &&
+              videoRegistrationGenerationByItem.get(itemId) === generation &&
+              success,
+          )
         }
       }),
     )
@@ -1441,18 +1499,45 @@ export async function createCompositionRenderer(
     return ids
   }
 
+  const videoItemMatchesCurrentIdentity = (itemId: string, item: VideoItem): boolean => {
+    const currentItem = videoItemsById.get(itemId)
+    return !currentItem || (currentItem.mediaId === item.mediaId && currentItem.src === item.src)
+  }
+
+  const hasCurrentVideoExtractor = (itemId: string, generation: number): boolean =>
+    videoExtractors.has(itemId) && videoExtractorGenerationByItem.get(itemId) === generation
+
+  const resolvedVideoSourceForCurrentRegistration = (
+    itemId: string,
+    item: VideoItem,
+    generation: number,
+    src: string | null,
+  ): string | null => {
+    if (isDisposed || !src) return null
+    if (videoRegistrationGenerationByItem.get(itemId) !== generation) return null
+    return videoItemMatchesCurrentIdentity(itemId, item) ? src : null
+  }
+
   const registerVideoItemOnDemand = async (
     itemId: string,
     item: VideoItem | undefined,
     signal?: AbortSignal,
   ): Promise<boolean> => {
-    if (videoExtractors.has(itemId)) return true
     if (!item) return false
+    const registrationGeneration = videoRegistrationGenerationByItem.get(itemId) ?? 0
+    if (!videoItemMatchesCurrentIdentity(itemId, item)) return false
+    if (hasCurrentVideoExtractor(itemId, registrationGeneration)) return true
     const src = await resolveRendererMediaSource(item, useProxyMedia, signal)
-    if (isDisposed || !src) return false
-    registerVideoItem(itemId, src)
+    const currentSource = resolvedVideoSourceForCurrentRegistration(
+      itemId,
+      item,
+      registrationGeneration,
+      src,
+    )
+    if (!currentSource) return false
+    registerVideoItem(itemId, currentSource)
     videoItemsById.set(itemId, item)
-    if (hasDom && !previewStrictDecode) bindFallbackVideoElement(itemId, src)
+    if (hasDom && !previewStrictDecode) bindFallbackVideoElement(itemId, currentSource)
     return true
   }
 
@@ -1463,14 +1548,20 @@ export async function createCompositionRenderer(
   ): Promise<boolean> => {
     if (useMediabunny.has(itemId)) return true
     if (mediabunnyDisabledItems.has(itemId)) return false
-    if (!(await registerVideoItemOnDemand(itemId, item, signal))) return false
+    // A render already in flight may still pass the item object that preceded
+    // an authoritative media rebind. Always prefer the latest registered
+    // snapshot so old work cannot attach its source to the new generation.
+    const currentItem = videoItemsById.get(itemId) ?? item
+    if (!(await registerVideoItemOnDemand(itemId, currentItem, signal))) return false
 
     const existing = inFlightInitByItem.get(itemId)
     if (existing) return existing
 
+    const registrationGeneration = videoRegistrationGenerationByItem.get(itemId) ?? 0
     const promise = initializeMediabunnyForItems([itemId], signal)
       .then((result) => {
-        if (isDisposed) return false
+        if (isDisposed || videoRegistrationGenerationByItem.get(itemId) !== registrationGeneration)
+          return false
         const ok = result.get(itemId) === true
         if (ok) {
           mediabunnyInitFailureCountByItem.delete(itemId)
@@ -1485,7 +1576,7 @@ export async function createCompositionRenderer(
         return false
       })
       .finally(() => {
-        inFlightInitByItem.delete(itemId)
+        if (inFlightInitByItem.get(itemId) === promise) inFlightInitByItem.delete(itemId)
       })
 
     inFlightInitByItem.set(itemId, promise)

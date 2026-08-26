@@ -992,6 +992,72 @@ describe('TimelineContent playback selection behavior', () => {
     expect(usePlaybackStore.getState().previewFrame).toBe(24)
   })
 
+  it('moves the playhead to the click coordinate and clears the gray hover skimmer', () => {
+    const { container } = render(<TimelineContent duration={10} tracks={[VIDEO_TRACK]} />)
+
+    act(() => {
+      usePlaybackStore.getState().setCurrentFrame(90)
+      usePlaybackStore.getState().setPreviewFrame(24)
+    })
+
+    const track = container.querySelector(`[data-track-id="${VIDEO_TRACK.id}"]`)
+    const scrollContainer = container.querySelector('[data-timeline-scroll-container]')
+    expect(track).toBeTruthy()
+    expect(scrollContainer).toBeTruthy()
+    vi.spyOn(scrollContainer!, 'getBoundingClientRect').mockReturnValue({
+      x: 0,
+      y: 0,
+      left: 0,
+      top: 0,
+      right: 400,
+      bottom: 200,
+      width: 400,
+      height: 200,
+      toJSON: () => ({}),
+    } as DOMRect)
+
+    fireEvent.click(track!, { button: 0, clientX: 80, clientY: 100 })
+
+    expect(usePlaybackStore.getState().currentFrame).toBe(24)
+    expect(usePlaybackStore.getState().previewFrame).toBeNull()
+  })
+
+  it('seeks from a clip-body click even when the clip stops bubble propagation', () => {
+    const { container } = render(<TimelineContent duration={10} tracks={[VIDEO_TRACK]} />)
+    const track = container.querySelector(`[data-track-id="${VIDEO_TRACK.id}"]`)
+    const scrollContainer = container.querySelector('[data-timeline-scroll-container]')
+    expect(track).toBeTruthy()
+    expect(scrollContainer).toBeTruthy()
+    vi.spyOn(scrollContainer!, 'getBoundingClientRect').mockReturnValue({
+      x: 0,
+      y: 0,
+      left: 0,
+      top: 0,
+      right: 400,
+      bottom: 200,
+      width: 400,
+      height: 200,
+      toJSON: () => ({}),
+    } as DOMRect)
+    const clip = document.createElement('div')
+    clip.dataset.itemId = VIDEO_ITEM.id
+    clip.addEventListener('click', (event) => event.stopPropagation())
+    track!.appendChild(clip)
+
+    fireEvent.click(clip, { button: 0, clientX: 120, clientY: 100 })
+
+    expect(usePlaybackStore.getState().currentFrame).toBe(36)
+  })
+
+  it('clears transient timeline preview state when the timeline unmounts', () => {
+    const { unmount } = render(<TimelineContent duration={10} tracks={[VIDEO_TRACK]} />)
+    act(() => usePlaybackStore.getState().setPreviewFrame(24))
+
+    unmount()
+
+    expect(usePlaybackStore.getState().previewFrame).toBeNull()
+  })
+
   it('locks the skim preview from track mousedown until the marquee gesture ends', () => {
     const { container } = render(<TimelineContent duration={10} tracks={[VIDEO_TRACK]} />)
 

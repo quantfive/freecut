@@ -258,6 +258,10 @@ export async function renderVideoItem(
     fps,
     sourceFrameOffset,
   )
+  // A host refresh can rebind this item while an asynchronous decode is in
+  // flight. Carry the cache generation across the await so a late old-source
+  // result is closed instead of being inserted under the retained item id.
+  const videoFrameCacheGeneration = scrubbingCache?.getVideoFrameGeneration()
   const tier2ToleranceSeconds = getTier2VideoFrameToleranceSeconds(sourceFps)
   const nonBlockingToleranceSeconds = rctx.nonBlockingVideoFrameToleranceSeconds
   const previewRootFrame = rctx.previewRootTimelineFrame ?? frame
@@ -817,7 +821,12 @@ export async function renderVideoItem(
       })
       mediabunnyFailureCountByItem.set(item.id, 0)
       if (scrubbingCache && capturedFrame) {
-        scrubbingCache.putVideoFrame(item.id, capturedFrame, capturedSourceTime ?? clampedTime)
+        scrubbingCache.putVideoFrame(
+          item.id,
+          capturedFrame,
+          capturedSourceTime ?? clampedTime,
+          videoFrameCacheGeneration,
+        )
       }
       return true
     }

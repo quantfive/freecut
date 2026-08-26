@@ -269,6 +269,18 @@ describe('ScrubbingCache tier 2 video frames', () => {
     expect(frame.close).toHaveBeenCalledTimes(1)
     expect(cache.getVideoFrameEntry('item-1')).toBeUndefined()
   })
+
+  it('rejects an old-source decode that completes after invalidation', () => {
+    const cache = new ScrubbingCache()
+    const oldGeneration = cache.getVideoFrameGeneration()
+    const lateFrame = createMockFrame()
+
+    cache.invalidateVideoFrames()
+    cache.putVideoFrame('item-1', lateFrame, 1.0, oldGeneration)
+
+    expect(lateFrame.close).toHaveBeenCalledTimes(1)
+    expect(cache.getVideoFrameEntry('item-1')).toBeUndefined()
+  })
 })
 
 describe('ScrubbingCache frame invalidation', () => {
