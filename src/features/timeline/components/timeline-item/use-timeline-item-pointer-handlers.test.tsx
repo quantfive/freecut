@@ -3,6 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vite-plus/test'
 import type { CompositionItem, TextItem, VideoItem } from '@/types/timeline'
 import { useSelectionStore } from '@/shared/state/selection'
 import { useEditorStore } from '@/shared/state/editor'
+import { usePlaybackStore } from '@/shared/state/playback'
+import { useMicRecordingStore } from '@/shared/state/mic-recording-store'
 import { useSourcePlayerStore } from '@/shared/state/source-player'
 import { useTimelineStore } from '../../stores/timeline-store'
 import { useCompositionNavigationStore } from '../../stores/composition-navigation-store'
@@ -114,6 +116,13 @@ describe('useTimelineItemPointerHandlers', () => {
     vi.clearAllMocks()
     // Deterministic single-item selection (linked selection expands target ids)
     useEditorStore.getState().setLinkedSelectionEnabled(false)
+    usePlaybackStore.setState({
+      currentFrame: 0,
+      previewFrame: null,
+      previewItemId: null,
+      isPlaying: false,
+    })
+    useMicRecordingStore.setState({ status: 'idle' })
   })
 
   afterEach(() => {
@@ -139,6 +148,32 @@ describe('useTimelineItemPointerHandlers', () => {
       handlers.handleClick(makeMouseEvent())
 
       expect(selectItems).toHaveBeenCalledWith(['item-1'])
+    })
+
+    it('commits the hover preview when selecting a clip', () => {
+      usePlaybackStore.setState({ currentFrame: 0, previewFrame: 34, isPlaying: true })
+      const handlers = renderHandlers(makeInput({ activeTool: 'select' }))
+
+      handlers.handleClick(makeMouseEvent())
+
+      expect(usePlaybackStore.getState().currentFrame).toBe(34)
+      expect(usePlaybackStore.getState().previewFrame).toBeNull()
+      expect(usePlaybackStore.getState().isPlaying).toBe(false)
+    })
+
+    it('selects without seeking or pausing while a microphone take is active', () => {
+      usePlaybackStore.setState({ currentFrame: 12, previewFrame: 34, isPlaying: true })
+      useMicRecordingStore.setState({ status: 'recording' })
+      const handlers = renderHandlers(makeInput({ activeTool: 'select' }))
+
+      handlers.handleClick(makeMouseEvent())
+
+      expect(useSelectionStore.getState().selectedItemIds).toEqual(['item-1'])
+      expect(usePlaybackStore.getState()).toMatchObject({
+        currentFrame: 12,
+        previewFrame: 34,
+        isPlaying: true,
+      })
     })
 
     it('splits the item at the cursor with the razor tool', () => {

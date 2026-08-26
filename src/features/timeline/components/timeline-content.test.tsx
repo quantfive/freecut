@@ -992,34 +992,23 @@ describe('TimelineContent playback selection behavior', () => {
     expect(usePlaybackStore.getState().previewFrame).toBe(24)
   })
 
-  it('moves the playhead to the click coordinate and clears the gray hover skimmer', () => {
+  it('commits the hover preview when the timeline body is clicked', () => {
     const { container } = render(<TimelineContent duration={10} tracks={[VIDEO_TRACK]} />)
 
     act(() => {
       usePlaybackStore.getState().setCurrentFrame(90)
       usePlaybackStore.getState().setPreviewFrame(24)
+      usePlaybackStore.getState().play()
     })
 
     const track = container.querySelector(`[data-track-id="${VIDEO_TRACK.id}"]`)
-    const scrollContainer = container.querySelector('[data-timeline-scroll-container]')
     expect(track).toBeTruthy()
-    expect(scrollContainer).toBeTruthy()
-    vi.spyOn(scrollContainer!, 'getBoundingClientRect').mockReturnValue({
-      x: 0,
-      y: 0,
-      left: 0,
-      top: 0,
-      right: 400,
-      bottom: 200,
-      width: 400,
-      height: 200,
-      toJSON: () => ({}),
-    } as DOMRect)
 
     fireEvent.click(track!, { button: 0, clientX: 80, clientY: 100 })
 
     expect(usePlaybackStore.getState().currentFrame).toBe(24)
     expect(usePlaybackStore.getState().previewFrame).toBeNull()
+    expect(usePlaybackStore.getState().isPlaying).toBe(false)
   })
 
   it('seeks from a clip-body click even when the clip stops bubble propagation', () => {

@@ -1,0 +1,208 @@
+import { act, render } from '@testing-library/react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vite-plus/test'
+import { HOTKEYS } from '@/config/hotkeys'
+import { useClipboardStore } from '@/shared/state/clipboard'
+import { useSelectionStore } from '@/shared/state/selection'
+import type { AudioItem, TimelineItem, TimelineTrack, VideoItem } from '@/types/timeline'
+import { useCompositionNavigationStore } from '../../stores/composition-navigation-store'
+import { useKeyframeSelectionStore } from '../../stores/keyframe-selection-store'
+import { useTimelineStore } from '../../stores/timeline-store'
+import { useClipboardShortcuts } from './use-clipboard-shortcuts'
+
+const { addItemsMock, playbackState, useHotkeysMock } = vi.hoisted(() => ({
+  addItemsMock: vi.fn(),
+  playbackState: { currentFrame: 200 },
+  useHotkeysMock: vi.fn(),
+}))
+
+vi.mock('react-hotkeys-hook', () => ({
+  useHotkeys: useHotkeysMock,
+}))
+
+vi.mock('@/shared/state/playback', () => ({
+  usePlaybackStore: {
+    getState: () => playbackState,
+  },
+}))
+
+vi.mock('sonner', () => ({
+  toast: {
+    success: vi.fn(),
+  },
+}))
+
+vi.mock('../../stores/timeline-actions', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../stores/timeline-actions')>()
+  return {
+    ...actual,
+    addItems: addItemsMock,
+  }
+})
+
+const TARGET_TRACK: TimelineTrack = {
+  id: 'target-track',
+  name: 'V1',
+  kind: 'video',
+  order: 0,
+  height: 80,
+  locked: false,
+  visible: true,
+  muted: false,
+  solo: false,
+  items: [],
+}
+
+const AUDIO_TRACK: TimelineTrack = {
+  ...TARGET_TRACK,
+  id: 'target-audio',
+  name: 'A1',
+  kind: 'audio',
+  order: 1,
+}
+
+function makeVideoItem(overrides: Partial<VideoItem> = {}): VideoItem {
+  return {
+    id: 'clip-1',
+    type: 'video',
+    trackId: TARGET_TRACK.id,
+    from: 0,
+    durationInFrames: 10,
+    label: 'Clip',
+    src: 'clip.mp4',
+    ...overrides,
+  }
+}
+
+function makeAudioItem(overrides: Partial<AudioItem> = {}): AudioItem {
+  return {
+    id: 'audio-1',
+    type: 'audio',
+    trackId: AUDIO_TRACK.id,
+    from: 0,
+    durationInFrames: 10,
+    label: 'Audio',
+    src: 'clip.mp4',
+    ...overrides,
+  }
+}
+
+function ShortcutHarness() {
+  useClipboardShortcuts()
+  return null
+}
+
+type HotkeyCallback = (event: { preventDefault: () => void }) => void
+
+function getPasteCallback(): HotkeyCallback {
+  const registration = useHotkeysMock.mock.calls.find(([keys]) => keys === HOTKEYS.PASTE)
+  expect(registration).toBeDefined()
+  return registration?.[1] as HotkeyCallback
+}
+
+function getPlannedItems(): TimelineItem[] {
+  expect(addItemsMock).toHaveBeenCalledTimes(1)
+  return addItemsMock.mock.calls[0]?.[0] as TimelineItem[]
+}
+
+describe('useClipboardShortcuts paste placement', () => {
+  beforeEach(() => {
+    addItemsMock.mockClear()
+    useHotkeysMock.mockClear()
+    vi.spyOn(window, 'requestAnimationFrame').mockImplementation(() => 0)
+
+    useTimelineStore.setState({
+      tracks: [TARGET_TRACK],
+      items: [],
+      transitions: [],
+      keyframes: [],
+      markers: [],
+    })
+    useSelectionStore.setState({
+      selectedItemIds: [],
+      selectedItemIdSet: new Set(),
+      selectedTransitionId: null,
+      activeTrackId: TARGET_TRACK.id,
+    })
+    useKeyframeSelectionStore.setState({
+      selectedKeyframes: [],
+      clipboard: null,
+      isCut: false,
+    })
+    useCompositionNavigationStore.setState({ activeCompositionId: null })
+    useClipboardStore.setState({ itemsClipboard: null, transitionClipboard: null })
+    playbackState.currentFrame = 200
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('anchors the earliest copied item at the playhead and preserves relative offsets', () => {
+    useClipboardStore
+      .getState()
+      .copyItems(
+        [
+          makeVideoItem({ id: 'early', label: 'Early', from: 40 }),
+          makeVideoItem({ id: 'late', label: 'Late', from: 70 }),
+        ],
+        0,
+        'copy',
+      )
+
+    render(<ShortcutHarness />)
+    act(() => getPasteCallback()({ preventDefault: vi.fn() }))
+
+    expect(getPlannedItems().map((item) => ({ label: item.label, from: item.from }))).toEqual([
+      { label: 'Early', from: 200 },
+      { label: 'Late', from: 230 },
+    ])
+  })
+
+  it('checks already-planned pasted items when source tracks map to one target track', () => {
+    useClipboardStore
+      .getState()
+      .copyItems(
+        [
+          makeVideoItem({ id: 'first', label: 'First', trackId: 'missing-v1', from: 40 }),
+          makeVideoItem({ id: 'second', label: 'Second', trackId: 'missing-v2', from: 45 }),
+        ],
+        0,
+        'copy',
+      )
+
+    render(<ShortcutHarness />)
+    act(() => getPasteCallback()({ preventDefault: vi.fn() }))
+
+    const plannedItems = getPlannedItems()
+    expect(plannedItems.map((item) => item.trackId)).toEqual([TARGET_TRACK.id, TARGET_TRACK.id])
+    expect(plannedItems.map((item) => item.from)).toEqual([200, 210])
+    expect(plannedItems[0]!.from + plannedItems[0]!.durationInFrames).toBeLessThanOrEqual(
+      plannedItems[1]!.from,
+    )
+  })
+
+  it('moves a linked video/audio pair together when one target track collides', () => {
+    useTimelineStore.setState({
+      tracks: [TARGET_TRACK, AUDIO_TRACK],
+      items: [makeVideoItem({ id: 'occupied', from: 200 })],
+    })
+    useClipboardStore
+      .getState()
+      .copyItems(
+        [
+          makeVideoItem({ id: 'video', from: 40, linkedGroupId: 'linked-source' }),
+          makeAudioItem({ id: 'audio', from: 40, linkedGroupId: 'linked-source' }),
+        ],
+        0,
+        'copy',
+      )
+
+    render(<ShortcutHarness />)
+    act(() => getPasteCallback()({ preventDefault: vi.fn() }))
+
+    const plannedItems = getPlannedItems()
+    expect(plannedItems.map((item) => item.from)).toEqual([210, 210])
+    expect(plannedItems[0]!.linkedGroupId).toBeTruthy()
+    expect(plannedItems[1]!.linkedGroupId).toBe(plannedItems[0]!.linkedGroupId)
+  })
+})
