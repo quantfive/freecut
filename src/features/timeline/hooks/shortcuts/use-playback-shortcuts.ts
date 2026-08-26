@@ -34,6 +34,12 @@ function getSnapPoints(): number[] {
   return Array.from(points).sort((a, b) => a - b)
 }
 
+function getFinalTimelineFrame(): number {
+  return useItemsStore
+    .getState()
+    .items.reduce((maxFrame, item) => Math.max(maxFrame, item.from + item.durationInFrames - 1), 0)
+}
+
 export function usePlaybackShortcuts(callbacks: TimelineShortcutCallbacks) {
   const hotkeys = useResolvedHotkeys()
   const togglePlayPause = usePlaybackStore((s) => s.togglePlayPause)
@@ -170,7 +176,7 @@ export function usePlaybackShortcuts(callbacks: TimelineShortcutCallbacks) {
         return
       }
       const currentFrame = usePlaybackStore.getState().currentFrame
-      commitTimelineSeek(currentFrame + 1)
+      commitTimelineSeek(Math.min(currentFrame + 1, getFinalTimelineFrame()))
     },
     HOTKEY_OPTIONS,
     [commitTimelineSeek],
@@ -199,15 +205,10 @@ export function usePlaybackShortcuts(callbacks: TimelineShortcutCallbacks) {
       event.preventDefault()
       const { hoveredPanel, playerMethods } = useSourcePlayerStore.getState()
       if (hoveredPanel === 'source' && playerMethods) {
-        playerMethods.seek(playerMethods.getDurationInFrames() - 1)
+        playerMethods.seek(Math.max(0, playerMethods.getDurationInFrames() - 1))
         return
       }
-      const currentItems = useItemsStore.getState().items
-      const lastFrame = currentItems.reduce((max, item) => {
-        const itemEnd = item.from + item.durationInFrames
-        return Math.max(max, itemEnd)
-      }, 0)
-      commitTimelineSeek(lastFrame)
+      commitTimelineSeek(getFinalTimelineFrame())
     },
     HOTKEY_OPTIONS,
     [commitTimelineSeek],

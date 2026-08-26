@@ -992,6 +992,25 @@ describe('TimelineContent playback selection behavior', () => {
     expect(usePlaybackStore.getState().previewFrame).toBe(24)
   })
 
+  it('commits the hover preview when the timeline body is clicked', () => {
+    const { container } = render(<TimelineContent duration={10} tracks={[VIDEO_TRACK]} />)
+
+    act(() => {
+      usePlaybackStore.getState().setCurrentFrame(90)
+      usePlaybackStore.getState().setPreviewFrame(24)
+      usePlaybackStore.getState().play()
+    })
+
+    const track = container.querySelector(`[data-track-id="${VIDEO_TRACK.id}"]`)
+    expect(track).toBeTruthy()
+
+    fireEvent.click(track!, { button: 0, clientX: 80, clientY: 100 })
+
+    expect(usePlaybackStore.getState().currentFrame).toBe(24)
+    expect(usePlaybackStore.getState().previewFrame).toBeNull()
+    expect(usePlaybackStore.getState().isPlaying).toBe(false)
+  })
+
   it('locks the skim preview from track mousedown until the marquee gesture ends', () => {
     const { container } = render(<TimelineContent duration={10} tracks={[VIDEO_TRACK]} />)
 

@@ -22,6 +22,72 @@ import {
 } from '../../utils/composition-graph'
 import { handleTranscriptClipboardCopy } from '../../utils/transcript-copy-bridge'
 
+interface PastePlacementPlan {
+  itemData: Omit<TimelineItem, 'id'>
+  targetTrackId: string
+  desiredFrom: number
+  sourceIndex: number
+}
+
+function placementsOverlap(
+  left: { trackId: string; from: number; durationInFrames: number },
+  right: { trackId: string; from: number; durationInFrames: number },
+): boolean {
+  return (
+    left.trackId === right.trackId &&
+    left.from < right.from + right.durationInFrames &&
+    left.from + left.durationInFrames > right.from
+  )
+}
+
+function hasInternalPlacementOverlap(plans: PastePlacementPlan[]): boolean {
+  return plans.some((plan, index) =>
+    plans.slice(index + 1).some((candidate) =>
+      placementsOverlap(
+        {
+          trackId: plan.targetTrackId,
+          from: plan.desiredFrom,
+          durationInFrames: plan.itemData.durationInFrames,
+        },
+        {
+          trackId: candidate.targetTrackId,
+          from: candidate.desiredFrom,
+          durationInFrames: candidate.itemData.durationInFrames,
+        },
+      ),
+    ),
+  )
+}
+
+function findSharedPlacementShift(
+  plans: PastePlacementPlan[],
+  occupiedItems: TimelineItem[],
+): number {
+  let shift = 0
+  while (true) {
+    let requiredShift = 0
+    for (const plan of plans) {
+      const from = plan.desiredFrom + shift
+      for (const occupied of occupiedItems) {
+        if (
+          placementsOverlap(
+            {
+              trackId: plan.targetTrackId,
+              from,
+              durationInFrames: plan.itemData.durationInFrames,
+            },
+            occupied,
+          )
+        ) {
+          requiredShift = Math.max(requiredShift, occupied.from + occupied.durationInFrames - from)
+        }
+      }
+    }
+    if (requiredShift <= 0) return shift
+    shift += requiredShift
+  }
+}
+
 function revealPastedItems(itemIds: readonly string[]): void {
   if (itemIds.length === 0) {
     return
@@ -206,42 +272,7 @@ export function useClipboardShortcuts() {
         // single-track copy still pastes onto the active track as before.
         const preserveSourceTracks = new Set(pasteItems.map((item) => item.trackId)).size > 1
 
-        const findNextAvailableSpace = (
-          trackId: string,
-          startFrame: number,
-          duration: number,
-        ): number => {
-          const trackItems = storeItems
-            .filter((item) => item.trackId === trackId)
-            .sort((a, b) => a.from - b.from)
-
-          let candidateFrame = startFrame
-
-          for (const item of trackItems) {
-            const itemEnd = item.from + item.durationInFrames
-            if (candidateFrame < itemEnd && candidateFrame + duration > item.from) {
-              candidateFrame = itemEnd
-            }
-          }
-
-          return candidateFrame
-        }
-
-        const hasSpaceAt = (trackId: string, startFrame: number, duration: number): boolean => {
-          const trackItems = storeItems.filter((item) => item.trackId === trackId)
-          for (const item of trackItems) {
-            const itemEnd = item.from + item.durationInFrames
-            if (startFrame < itemEnd && startFrame + duration > item.from) {
-              return false
-            }
-          }
-          return true
-        }
-
-        for (const itemData of pasteItems) {
-          const newId = crypto.randomUUID()
-          newItemIds.push(newId)
-
+        const placementPlans = pasteItems.map((itemData, sourceIndex): PastePlacementPlan => {
           let targetTrackId = preserveSourceTracks ? itemData.trackId : activeTrackId
           if (!targetTrackId || !tracks.some((t) => t.id === targetTrackId)) {
             targetTrackId = itemData.trackId
@@ -250,33 +281,57 @@ export function useClipboardShortcuts() {
           if (!trackExists && tracks.length > 0) {
             targetTrackId = tracks[0]!.id
           }
-
-          const desiredFrom = currentFrame
-          const duration = itemData.durationInFrames
-
-          let newFrom: number
-          if (hasSpaceAt(targetTrackId, desiredFrom, duration)) {
-            newFrom = desiredFrom
-          } else {
-            newFrom = findNextAvailableSpace(targetTrackId, desiredFrom, duration)
+          return {
+            itemData,
+            targetTrackId,
+            desiredFrom: currentFrame + itemData.from,
+            sourceIndex,
           }
+        })
 
-          const newItem = {
-            ...itemData,
-            id: newId,
-            from: newFrom,
-            trackId: targetTrackId,
-            originId: newId,
-            linkedGroupId: itemData.linkedGroupId
-              ? (linkedGroupMap.get(itemData.linkedGroupId) ??
-                linkedGroupMap
-                  .set(itemData.linkedGroupId, crypto.randomUUID())
-                  .get(itemData.linkedGroupId))
-              : undefined,
+        // Keep an ordinary multi-item paste as one rigid block. If invalid or
+        // missing source tracks collapse overlapping items onto one target,
+        // fall back to linked groups/singletons so placement can still make
+        // progress without separating a valid linked A/V pair.
+        let placementGroups: PastePlacementPlan[][] = [placementPlans]
+        if (hasInternalPlacementOverlap(placementPlans)) {
+          const grouped = new Map<string, PastePlacementPlan[]>()
+          for (const plan of placementPlans) {
+            const key = plan.itemData.linkedGroupId
+              ? `linked:${plan.itemData.linkedGroupId}`
+              : `item:${plan.sourceIndex}`
+            const group = grouped.get(key) ?? []
+            group.push(plan)
+            grouped.set(key, group)
           }
+          placementGroups = [...grouped.values()]
+        }
 
-          newItems.push(newItem as TimelineItem)
-          usedTrackIds.add(targetTrackId)
+        const occupiedItems = [...storeItems]
+        for (const group of placementGroups) {
+          const sharedShift = findSharedPlacementShift(group, occupiedItems)
+          for (const plan of group) {
+            const { itemData, targetTrackId, desiredFrom } = plan
+            const newId = crypto.randomUUID()
+            newItemIds.push(newId)
+            const newItem = {
+              ...itemData,
+              id: newId,
+              from: desiredFrom + sharedShift,
+              trackId: targetTrackId,
+              originId: newId,
+              linkedGroupId: itemData.linkedGroupId
+                ? (linkedGroupMap.get(itemData.linkedGroupId) ??
+                  linkedGroupMap
+                    .set(itemData.linkedGroupId, crypto.randomUUID())
+                    .get(itemData.linkedGroupId))
+                : undefined,
+            } as TimelineItem
+
+            newItems.push(newItem)
+            occupiedItems.push(newItem)
+            usedTrackIds.add(targetTrackId)
+          }
         }
 
         // Add every pasted item in a single ADD_ITEMS command so one Ctrl+Z

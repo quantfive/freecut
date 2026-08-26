@@ -9,6 +9,7 @@ import { useTimelineSettingsStore } from '../stores/timeline-settings-store'
 import { useTimelineViewportStore } from '../stores/timeline-viewport-store'
 import { registerZoomTo100, useZoomStore } from '../stores/zoom-store'
 import { usePlaybackStore } from '@/shared/state/playback'
+import { isMicRecordingActive, useMicRecordingStore } from '@/shared/state/mic-recording-store'
 import { useEditorStore } from '@/shared/state/editor'
 import { useSelectionStore } from '@/shared/state/selection'
 
@@ -1308,7 +1309,8 @@ export const TimelineContent = memo(function TimelineContent({
     }
   }, [])
 
-  // Click empty space to deselect items and markers (but preserve track selection)
+  // Commit the hover skimmer on a normal timeline click. Ruler clicks own their
+  // own scrub path, while drag/marquee/razor gestures must not move playback.
   const handleContainerClick = (e: React.MouseEvent) => {
     // Don't deselect if marquee selection, drag, or scrubbing just finished
     if (marqueeWasActiveRef.current || dragWasActiveRef.current || scrubWasActiveRef.current) {
@@ -1323,9 +1325,37 @@ export const TimelineContent = memo(function TimelineContent({
       return
     }
 
-    // Deselect items and markers if NOT clicking on a timeline item
     const clickedOnItem = target.closest('[data-item-id]')
+    const clickedOnTrack = target.closest('[data-track-id]')
 
+    if (
+      clickedOnTrack &&
+      useSelectionStore.getState().activeTool !== 'razor' &&
+      !isMicRecordingActive(useMicRecordingStore.getState().status)
+    ) {
+      const playback = usePlaybackStore.getState()
+      const container = containerRef.current
+      const frame =
+        playback.previewFrame ??
+        (container
+          ? Math.max(
+              0,
+              Math.min(
+                Math.round(
+                  pixelsToFrameRef.current(
+                    e.clientX - container.getBoundingClientRect().left + container.scrollLeft,
+                  ),
+                ),
+                maxTimelineFrameRef.current,
+              ),
+            )
+          : playback.currentFrame)
+      playback.pause()
+      playback.setPreviewFrame(null)
+      playback.setCurrentFrame(frame)
+    }
+
+    // Deselect items and markers if NOT clicking on a timeline item.
     if (!clickedOnItem) {
       clearItemSelection()
       selectMarker(null) // Also clear marker selection
