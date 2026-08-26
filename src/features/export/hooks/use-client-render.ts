@@ -31,11 +31,13 @@ import { buildTranscriptSubtitleCues } from '../utils/embedded-subtitle-export'
 import { serializeSrt } from '@/shared/utils/subtitles'
 import { releaseTemporaryExportOutput } from '../utils/export-output-target'
 import { useTimelineStore } from '@/features/export/deps/timeline'
+import type { ExportableSequence } from '@/features/export/deps/timeline-compositions'
 import { useProjectStore } from '@/features/export/deps/projects'
 import { DEFAULT_PROJECT_HEIGHT, DEFAULT_PROJECT_WIDTH } from '@/shared/projects/defaults'
 import { resolveMediaUrls } from '@/features/export/deps/media-library'
 import { usePlaybackStore } from '@/shared/state/playback'
 import { createLogger, createOperationId } from '@/shared/logging/logger'
+import { resolveClientRenderSource } from './client-render-source'
 
 const log = createLogger('Export')
 
@@ -61,7 +63,10 @@ interface UseClientRenderReturn {
   result: ClientRenderResult | null
 
   // Actions
-  startExport: (settings: ExportSettings | ExtendedExportSettings) => Promise<void>
+  startExport: (
+    settings: ExportSettings | ExtendedExportSettings,
+    sequence?: ExportableSequence,
+  ) => Promise<void>
   cancelExport: () => void
   downloadVideo: () => void
   resetState: () => void
@@ -119,7 +124,7 @@ export function useClientRender(): UseClientRenderReturn {
    * Start client-side export
    */
   const startExport = useCallback(
-    async (settings: ExportSettings | ExtendedExportSettings) => {
+    async (settings: ExportSettings | ExtendedExportSettings, sequence?: ExportableSequence) => {
       const opId = createOperationId()
       const event = log.startEvent('render', opId)
 
@@ -139,16 +144,22 @@ export function useClientRender(): UseClientRenderReturn {
 
         // Read current state from stores
         const state = useTimelineStore.getState()
-        const { tracks, items, transitions, fps, inPoint, outPoint, keyframes } = state
-
-        // Get project metadata (background color and native resolution)
         const currentProject = useProjectStore.getState().currentProject
-        const busAudioEq = usePlaybackStore.getState().busAudioEq
-        const masterBusDb = usePlaybackStore.getState().masterBusDb
-        const backgroundColor = currentProject?.metadata?.backgroundColor
-        // Use PROJECT resolution for composition (transform calculations match preview)
-        const projectWidth = currentProject?.metadata?.width ?? DEFAULT_PROJECT_WIDTH
-        const projectHeight = currentProject?.metadata?.height ?? DEFAULT_PROJECT_HEIGHT
+        const playback = usePlaybackStore.getState()
+        const {
+          tracks,
+          items,
+          transitions,
+          fps,
+          inPoint,
+          outPoint,
+          keyframes,
+          busAudioEq,
+          masterBusDb,
+          backgroundColor,
+          width: projectWidth,
+          height: projectHeight,
+        } = resolveClientRenderSource(sequence, state, playback, currentProject?.metadata)
 
         const requested = mapRequestedClientSettings(settings, fps)
         // When renderWholeProject is true, ignore in/out points.
