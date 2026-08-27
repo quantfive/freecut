@@ -177,7 +177,8 @@ function VideoSource({
   const mountedRef = useRef(true)
   const sourceGenerationRef = useRef(0)
   const decoderReadyRef = useRef(false)
-  const renderInFlightRef = useRef(false)
+  const renderInFlightGenerationRef = useRef<number | null>(null)
+  const pumpLatestDecodedFrameRef = useRef<() => void>(() => {})
   const pendingTimeRef = useRef<number | null>(null)
   const latestTargetTimeRef = useRef(0)
   const consecutiveDecodeFailuresRef = useRef(0)
@@ -517,12 +518,14 @@ function VideoSource({
   )
 
   const pumpLatestDecodedFrame = useCallback(() => {
-    if (renderInFlightRef.current) return
-    renderInFlightRef.current = true
+    if (renderInFlightGenerationRef.current !== null) return
+    const generation = sourceGenerationRef.current
+    renderInFlightGenerationRef.current = generation
 
     const run = async () => {
       try {
         while (
+          sourceGenerationRef.current === generation &&
           decoderReadyRef.current &&
           pendingTimeRef.current !== null &&
           mountedRef.current &&
@@ -552,8 +555,11 @@ function VideoSource({
           }
         }
       } finally {
-        renderInFlightRef.current = false
+        if (renderInFlightGenerationRef.current === generation) {
+          renderInFlightGenerationRef.current = null
+        }
         if (
+          renderInFlightGenerationRef.current === null &&
           decoderReadyRef.current &&
           pendingTimeRef.current !== null &&
           mountedRef.current &&
@@ -561,7 +567,7 @@ function VideoSource({
         ) {
           queueMicrotask(() => {
             if (!mountedRef.current) return
-            pumpLatestDecodedFrame()
+            pumpLatestDecodedFrameRef.current()
           })
         }
       }
@@ -569,6 +575,7 @@ function VideoSource({
 
     void run()
   }, [drawDecodedFrame, queueDirectionalPrewarm])
+  pumpLatestDecodedFrameRef.current = pumpLatestDecodedFrame
 
   // Acquire/release pooled element when source changes.
   useEffect(() => {

@@ -128,8 +128,7 @@ export function getExportableSequence(sequenceId: string | null): ExportableSequ
     const root = getRootTimelineSnapshot(current)
     const metadata = useProjectStore.getState().currentProject?.metadata
     // Main's audio bus / range are live when Main is active, else held aside.
-    const busAudioEq =
-      activeTabId === null ? playback.busAudioEq : nav.mainHolder?.busAudioEq
+    const busAudioEq = activeTabId === null ? playback.busAudioEq : nav.mainHolder?.busAudioEq
     return {
       id: null,
       name: MAIN_LABEL,
