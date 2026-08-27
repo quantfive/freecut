@@ -150,6 +150,7 @@ export const TrimHandles = memo(function TrimHandles({
       <ContextMenu>
         <ContextMenuTrigger asChild disabled={trackLocked || !hasJoinableLeft}>
           <div
+            data-trim-handle="start"
             className={cn(
               'absolute left-0 top-0 bottom-0 w-3 transition-opacity duration-75',
               startCursorClass,
@@ -209,6 +210,7 @@ export const TrimHandles = memo(function TrimHandles({
       <ContextMenu>
         <ContextMenuTrigger asChild disabled={trackLocked || !hasJoinableRight}>
           <div
+            data-trim-handle="end"
             className={cn(
               'absolute right-0 top-0 bottom-0 w-3 transition-opacity duration-75',
               endCursorClass,

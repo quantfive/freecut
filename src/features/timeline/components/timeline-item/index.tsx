@@ -3,6 +3,7 @@ import type { TimelineItem as TimelineItemType } from '@/types/timeline'
 import { useShallow } from 'zustand/react/shallow'
 import { useTimelineStore } from '../../stores/timeline-store'
 import { useItemsStore } from '../../stores/items-store'
+import { rollingTrimItems } from '../../stores/actions/item-actions'
 import { selectReplaceableCaptionClipIds } from '../../stores/items-store-indexes'
 import { useKeyframesStore } from '../../stores/keyframes-store'
 import { useEffectDropPreviewStore } from '../../stores/effect-drop-preview-store'
@@ -62,6 +63,7 @@ import { useLinkedSyncPreview } from './use-linked-sync-preview'
 import { useClipReadoutLabels } from './use-clip-readout-labels'
 import { useTimelineItemPointerHandlers } from './use-timeline-item-pointer-handlers'
 import { ClipFloatingLayer } from './clip-floating-layer'
+import { SharedRollingTrimHandle } from './shared-rolling-trim-handle'
 const EMPTY_SEGMENT_OVERLAYS = [] as const
 const EMPTY_LINKED_ITEMS: TimelineItemType[] = []
 
@@ -634,6 +636,46 @@ export const TimelineItem = memo(function TimelineItem({
     hasGapBefore,
     gapBeforeFrames,
   } = useClipNeighbors(item)
+  const rightNeighborId = rightNeighbor?.id ?? null
+  const rightNeighborSelected = useSelectionStore(
+    useCallback(
+      (state) => rightNeighborId !== null && state.selectedItemIdSet.has(rightNeighborId),
+      [rightNeighborId],
+    ),
+  )
+  const canExposeSharedRollingHandle =
+    !trackLocked &&
+    (activeTool === 'select' || activeTool === 'trim-edit') &&
+    (!isAnyDragActiveRef.current || isTrimming)
+  // The clip under the pointer owns a hovered cut. For selection-only display,
+  // the incoming/right clip owns the cut when both neighbors are selected so
+  // one physical edit point never gets duplicate hit targets.
+  const showSharedRollingStart =
+    canExposeSharedRollingHandle &&
+    leftNeighbor !== null &&
+    (smartTrimIntent === 'roll-start' || (isSelected && rollHoverEdge !== 'start'))
+  const showSharedRollingEnd =
+    canExposeSharedRollingHandle &&
+    rightNeighbor !== null &&
+    (smartTrimIntent === 'roll-end' ||
+      (isSelected && !rightNeighborSelected && rollHoverEdge !== 'end'))
+  const hasSharedRollingHandle = showSharedRollingStart || showSharedRollingEnd
+
+  const handleSharedRollingTrimStart = useCallback(
+    (event: React.MouseEvent, handle: 'start' | 'end') => {
+      handleTrimStart(event, handle, { forcedMode: 'rolling' })
+    },
+    [handleTrimStart],
+  )
+  const handleSharedRollingKeyboardStep = useCallback(
+    (handle: 'start' | 'end', deltaFrames: number) => {
+      const left = handle === 'start' ? leftNeighbor : item
+      const right = handle === 'start' ? item : rightNeighbor
+      if (!left || !right) return
+      rollingTrimItems(left.id, right.id, deltaFrames)
+    },
+    [item, leftNeighbor, rightNeighbor],
+  )
 
   const {
     getCanJoinSelected,
@@ -949,7 +991,10 @@ export const TimelineItem = memo(function TimelineItem({
               // paint-containment boundary that Layerize must revisit on every
               // real-width zoom step. Full-detail buffered clips keep browser
               // layout/paint skipping while offscreen.
-              contain: useCompactClipShell ? 'layout style' : 'layout style paint',
+              contain:
+                useCompactClipShell || hasSharedRollingHandle
+                  ? 'layout style'
+                  : 'layout style paint',
               contentVisibility: useCompactClipShell ? 'visible' : 'auto',
               '--timeline-audio-volume-line-y': `${
                 item.type === 'audio' && audioVolumeEdit !== null
@@ -1213,6 +1258,31 @@ export const TimelineItem = memo(function TimelineItem({
               onTrimStart={handleSmartTrimStart}
               onJoinLeft={handleJoinLeft}
               onJoinRight={handleJoinRight}
+            />
+          )}
+
+          {showSharedRollingStart && leftNeighbor && (
+            <SharedRollingTrimHandle
+              edge="start"
+              editPointFrame={item.from}
+              minFrame={leftNeighbor.from + 1}
+              maxFrame={item.from + item.durationInFrames - 1}
+              leftLabel={leftNeighbor.label}
+              rightLabel={item.label}
+              onMouseDown={handleSharedRollingTrimStart}
+              onKeyboardStep={handleSharedRollingKeyboardStep}
+            />
+          )}
+          {showSharedRollingEnd && rightNeighbor && (
+            <SharedRollingTrimHandle
+              edge="end"
+              editPointFrame={item.from + item.durationInFrames}
+              minFrame={item.from + 1}
+              maxFrame={rightNeighbor.from + rightNeighbor.durationInFrames - 1}
+              leftLabel={item.label}
+              rightLabel={rightNeighbor.label}
+              onMouseDown={handleSharedRollingTrimStart}
+              onKeyboardStep={handleSharedRollingKeyboardStep}
             />
           )}
 
