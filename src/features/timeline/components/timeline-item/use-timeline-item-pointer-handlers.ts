@@ -1,7 +1,7 @@
 import { useCallback, type Dispatch, type RefObject, type SetStateAction } from 'react'
 import type { TimelineItem as TimelineItemType } from '@/types/timeline'
 import type { SelectionState } from '@/shared/state/selection'
-import { commitPreviewFrameToCurrentFrame, usePlaybackStore } from '@/shared/state/playback'
+import { usePlaybackStore } from '@/shared/state/playback'
 import { isMicRecordingActive, useMicRecordingStore } from '@/shared/state/mic-recording-store'
 import { useEditorStore } from '@/shared/state/editor'
 import { useSourcePlayerStore } from '@/shared/state/source-player'
@@ -158,24 +158,23 @@ export function useTimelineItemPointerHandlers({
       }
 
       // Clip clicks stop propagation for selection, so they must explicitly
-      // commit the transient hover skimmer just like a timeline-body click.
+      // seek from this click's own geometry. The hover skimmer can still hold
+      // the previous pointer event (including the next clip boundary), so it
+      // must never own the committed click frame.
       if (!isMicRecordingActive(useMicRecordingStore.getState().status)) {
         const playback = usePlaybackStore.getState()
+        const rect = e.currentTarget.getBoundingClientRect()
+        const relativeX = Math.max(0, Math.min(e.clientX - rect.left, rect.width))
+        const frameOffset =
+          rect.width > 0
+            ? Math.min(
+                Math.max(0, item.durationInFrames - 1),
+                Math.floor((relativeX / rect.width) * item.durationInFrames),
+              )
+            : 0
+        const clickedFrame = Math.max(0, item.from + frameOffset)
         playback.pause()
-        if (playback.previewFrame !== null) {
-          commitPreviewFrameToCurrentFrame()
-        } else {
-          const rect = e.currentTarget.getBoundingClientRect()
-          const relativeX = Math.max(0, Math.min(e.clientX - rect.left, rect.width))
-          const frameOffset =
-            rect.width > 0
-              ? Math.min(
-                  item.durationInFrames - 1,
-                  Math.floor((relativeX / rect.width) * item.durationInFrames),
-                )
-              : 0
-          playback.setCurrentFrame(Math.max(0, item.from + frameOffset))
-        }
+        playback.finishScrub(clickedFrame)
       }
 
       if (activeToolRef.current === 'select' || activeToolRef.current === 'trim-edit') {

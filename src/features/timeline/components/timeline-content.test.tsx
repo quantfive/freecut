@@ -59,7 +59,7 @@ vi.mock('./timeline-markers', () => ({
 }))
 
 vi.mock('./timeline-playhead', () => ({
-  TimelinePlayhead: () => <div data-testid="unified-timeline-playhead" />,
+  TimelinePlayhead: () => <div data-playhead-handle data-testid="unified-timeline-playhead" />,
 }))
 
 vi.mock('./timeline-preview-scrubber', () => ({
@@ -68,6 +68,7 @@ vi.mock('./timeline-preview-scrubber', () => ({
 
 vi.mock('./timeline-track', async () => {
   const { useState } = await import('react')
+  const { usePlaybackStore } = await import('@/shared/state/playback')
   const { createTimelineTrackContentLayerRef } = await import('../utils/timeline-live-geometry')
 
   return {
@@ -77,6 +78,14 @@ vi.mock('./timeline-track', async () => {
       return (
         <div data-track-id={track.id} style={{ height: `${track.height}px` }}>
           <div ref={contentLayerRef} data-timeline-track-content-layer />
+          <div
+            data-item-id="clip-video-1"
+            data-testid="mock-timeline-item"
+            onClick={(event) => {
+              event.stopPropagation()
+              usePlaybackStore.getState().finishScrub(1)
+            }}
+          />
         </div>
       )
     },
@@ -653,6 +662,66 @@ describe('TimelineContent playback selection behavior', () => {
     cancelAnimationFrameSpy.mockRestore()
   })
 
+  it('cancels a queued hover preview when playhead scrubbing starts', () => {
+    let nextFrameId = 1
+    const scheduledFrames = new Map<number, FrameRequestCallback>()
+    const animationFrameSpy = vi
+      .spyOn(window, 'requestAnimationFrame')
+      .mockImplementation((callback) => {
+        const id = nextFrameId++
+        scheduledFrames.set(id, callback)
+        return id
+      })
+    const cancelAnimationFrameSpy = vi
+      .spyOn(window, 'cancelAnimationFrame')
+      .mockImplementation((id) => {
+        scheduledFrames.delete(id)
+      })
+
+    const { container, getByTestId, unmount } = render(
+      <TimelineContent duration={10} tracks={[VIDEO_TRACK]} />,
+    )
+    const scrollContainer = container.querySelector('[data-timeline-scroll-container]')
+    if (!(scrollContainer instanceof HTMLDivElement)) {
+      throw new Error('Expected timeline scroll container')
+    }
+
+    Object.defineProperty(scrollContainer, 'getBoundingClientRect', {
+      configurable: true,
+      value: () => ({
+        left: 0,
+        top: 0,
+        right: 400,
+        bottom: 200,
+        width: 400,
+        height: 200,
+        x: 0,
+        y: 0,
+        toJSON: () => ({}),
+      }),
+    })
+    scheduledFrames.clear()
+
+    fireEvent.mouseMove(scrollContainer, { clientX: 180, clientY: 48 })
+    const previewFrameId = [...scheduledFrames.keys()].at(-1)
+    expect(previewFrameId).toBeDefined()
+
+    fireEvent.mouseDown(getByTestId('unified-timeline-playhead'), { button: 0 })
+
+    expect(cancelAnimationFrameSpy).toHaveBeenCalledWith(previewFrameId)
+    act(() => {
+      for (const [id, callback] of [...scheduledFrames]) {
+        scheduledFrames.delete(id)
+        callback(performance.now())
+      }
+    })
+    expect(usePlaybackStore.getState().previewFrame).toBeNull()
+
+    unmount()
+    animationFrameSpy.mockRestore()
+    cancelAnimationFrameSpy.mockRestore()
+  })
+
   it('gives dense timelines a short window to cancel hover preview before zoom', () => {
     vi.useFakeTimers()
     const denseItems = Array.from({ length: 80 }, (_, index) => ({
@@ -1011,6 +1080,111 @@ describe('TimelineContent playback selection behavior', () => {
     expect(usePlaybackStore.getState().currentFrame).toBe(24)
     expect(usePlaybackStore.getState().previewFrame).toBeNull()
     expect(usePlaybackStore.getState().isPlaying).toBe(false)
+  })
+
+  it('rejects a deferred hover from the click interaction but allows a new move', () => {
+    vi.useFakeTimers()
+    const denseItems = Array.from({ length: 80 }, (_, index) => ({
+      ...VIDEO_ITEM,
+      id: `clip-video-${index}`,
+      from: index * VIDEO_ITEM.durationInFrames,
+    }))
+    act(() => {
+      useItemsStore.getState().setItems(denseItems)
+    })
+
+    const frameCallbacks: FrameRequestCallback[] = []
+    const animationFrameSpy = vi
+      .spyOn(window, 'requestAnimationFrame')
+      .mockImplementation((callback) => {
+        frameCallbacks.push(callback)
+        return frameCallbacks.length
+      })
+    const cancelAnimationFrameSpy = vi
+      .spyOn(window, 'cancelAnimationFrame')
+      .mockImplementation(() => {
+        // Model a callback that was already dequeued when cancellation arrived.
+      })
+
+    const { container, getByTestId, unmount } = render(
+      <TimelineContent duration={10} tracks={[VIDEO_TRACK]} />,
+    )
+    const scrollContainer = container.querySelector('[data-timeline-scroll-container]')
+    if (!(scrollContainer instanceof HTMLDivElement)) {
+      throw new Error('Expected timeline scroll container')
+    }
+    vi.spyOn(scrollContainer, 'getBoundingClientRect').mockReturnValue({
+      x: 0,
+      y: 0,
+      left: 0,
+      top: 0,
+      right: 400,
+      bottom: 200,
+      width: 400,
+      height: 200,
+      toJSON: () => ({}),
+    } as DOMRect)
+    frameCallbacks.length = 0
+
+    const item = getByTestId('mock-timeline-item')
+    act(() => {
+      usePlaybackStore.getState().setCurrentFrame(91)
+      usePlaybackStore.getState().setPreviewFrame(91, VIDEO_ITEM.id)
+    })
+
+    fireEvent.mouseMove(item, { clientX: 7, clientY: 48 })
+    act(() => vi.advanceTimersByTime(150))
+    const staleClickPreview = frameCallbacks.at(-1)
+    expect(staleClickPreview).toBeDefined()
+    frameCallbacks.length = 0
+
+    fireEvent.mouseDown(item, { button: 0, clientX: 3, clientY: 48 })
+    fireEvent.click(item, { button: 0, clientX: 3, clientY: 48 })
+    expect(usePlaybackStore.getState()).toMatchObject({
+      currentFrame: 1,
+      previewFrame: null,
+      previewItemId: null,
+    })
+
+    act(() => staleClickPreview?.(performance.now()))
+    expect(usePlaybackStore.getState()).toMatchObject({
+      currentFrame: 1,
+      previewFrame: null,
+      previewItemId: null,
+    })
+
+    fireEvent.mouseMove(item, { clientX: 7, clientY: 48 })
+    act(() => vi.advanceTimersByTime(150))
+    const freshPreview = frameCallbacks.at(-1)
+    expect(freshPreview).toBeDefined()
+    frameCallbacks.length = 0
+    act(() => freshPreview?.(performance.now()))
+    expect(usePlaybackStore.getState()).toMatchObject({
+      currentFrame: 1,
+      previewFrame: 2,
+      previewItemId: VIDEO_ITEM.id,
+    })
+
+    fireEvent.mouseMove(item, { clientX: 10, clientY: 48 })
+    act(() => vi.advanceTimersByTime(150))
+    const cancelledPreview = frameCallbacks.at(-1)
+    expect(cancelledPreview).toBeDefined()
+    frameCallbacks.length = 0
+    fireEvent.mouseLeave(scrollContainer)
+    act(() => cancelledPreview?.(performance.now()))
+    expect(usePlaybackStore.getState().previewFrame).toBeNull()
+
+    fireEvent.mouseMove(item, { clientX: 7, clientY: 48 })
+    act(() => vi.advanceTimersByTime(150))
+    const unmountedPreview = frameCallbacks.at(-1)
+    expect(unmountedPreview).toBeDefined()
+    unmount()
+    act(() => unmountedPreview?.(performance.now()))
+    expect(usePlaybackStore.getState().previewFrame).toBeNull()
+
+    animationFrameSpy.mockRestore()
+    cancelAnimationFrameSpy.mockRestore()
+    vi.useRealTimers()
   })
 
   it('does not pause or seek when the timeline body is clicked during a microphone take', () => {

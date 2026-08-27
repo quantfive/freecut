@@ -22,6 +22,7 @@ const playMock = vi.fn()
 const pauseMock = vi.fn()
 const mockState = vi.hoisted(() => {
   const blobUrls = new Map<string, string>()
+  const mediaEpochs = new Map<string, number>()
   const listeners = new Set<() => void>()
   const version = { current: 0 }
   const resolveMediaUrlMock = vi.fn(async (mediaId: string) => blobUrls.get(mediaId) ?? '')
@@ -40,6 +41,7 @@ const mockState = vi.hoisted(() => {
 
     if (url === null) {
       blobUrls.delete(mediaId)
+      mediaEpochs.set(mediaId, (mediaEpochs.get(mediaId) ?? 0) + 1)
     } else {
       blobUrls.set(mediaId, url)
     }
@@ -55,6 +57,7 @@ const mockState = vi.hoisted(() => {
 
   return {
     blobUrls,
+    mediaEpochs,
     listeners,
     version,
     resolveMediaUrlMock,
@@ -67,12 +70,26 @@ const mockState = vi.hoisted(() => {
 
 const {
   blobUrls: mockBlobUrls,
+  mediaEpochs: mockMediaEpochs,
   listeners: blobUrlListeners,
   version: mockBlobUrlVersion,
   resolveMediaUrlMock,
   resolveProxyUrlMock,
   setBlobUrl: setMockBlobUrl,
 } = mockState
+
+function BlobBindingLayoutProbe({ onLayout }: { onLayout: (version: number) => void }) {
+  const version = React.useSyncExternalStore(
+    mockState.subscribeVersion,
+    () => mockState.version.current,
+  )
+
+  React.useLayoutEffect(() => {
+    onLayout(version)
+  }, [onLayout, version])
+
+  return null
+}
 let mockedPlayerFrame = 0
 let mockedPlayerIsPlaying = false
 let deferPlayerSeekCompletion = false
@@ -104,36 +121,55 @@ const rendererMockState = vi.hoisted(() => {
   }
 
   const instances: RendererMock[] = []
+  const renderedSources: Array<{ frame: number; src: string | null }> = []
   const getBestDomVideoElementForItem = vi.fn<(itemId: string) => HTMLVideoElement | null>(
     () => null,
   )
-  const create = vi.fn(async () => {
-    const prewarmFrame = vi.fn(async (frame: number) => {
-      void frame
-    })
-    const renderer: RendererMock = {
-      preload: vi.fn(async () => {}),
-      renderFrame: vi.fn(async () => {}),
-      prewarmFrame,
-      prewarmFrames: vi.fn(async (frames: number[]) => {
-        for (const frame of frames) {
-          await prewarmFrame(frame)
-        }
-      }),
-      invalidateFrameCache: vi.fn(),
-      setDomVideoElementProvider: vi.fn(),
-      wasLastRenderAborted: vi.fn(() => false),
-      getScrubbingCache: () => null,
-      dispose: vi.fn(),
-    }
-    instances.push(renderer)
-    return renderer
-  })
+  const create = vi.fn(
+    async (inputProps?: {
+      tracks?: Array<{
+        items?: Array<{ type?: string; from?: number; durationInFrames?: number; src?: string }>
+      }>
+    }) => {
+      const prewarmFrame = vi.fn(async (frame: number) => {
+        void frame
+      })
+      const renderFrame = vi.fn(async (frame: number) => {
+        const activeItem = (inputProps?.tracks ?? [])
+          .flatMap((track) => track.items ?? [])
+          .find(
+            (item) =>
+              item.type === 'video' &&
+              frame >= (item.from ?? 0) &&
+              frame < (item.from ?? 0) + (item.durationInFrames ?? 0),
+          )
+        renderedSources.push({ frame, src: activeItem?.src ?? null })
+      })
+      const renderer: RendererMock = {
+        preload: vi.fn(async () => {}),
+        renderFrame,
+        prewarmFrame,
+        prewarmFrames: vi.fn(async (frames: number[]) => {
+          for (const frame of frames) {
+            await prewarmFrame(frame)
+          }
+        }),
+        invalidateFrameCache: vi.fn(),
+        setDomVideoElementProvider: vi.fn(),
+        wasLastRenderAborted: vi.fn(() => false),
+        getScrubbingCache: () => null,
+        dispose: vi.fn(),
+      }
+      instances.push(renderer)
+      return renderer
+    },
+  )
 
   return {
     create,
     getBestDomVideoElementForItem,
     instances,
+    renderedSources,
   }
 })
 
@@ -257,6 +293,7 @@ vi.mock('@/infrastructure/browser/blob-url-manager', async () => {
   return {
     blobUrlManager: {
       get: (mediaId: string) => mockState.blobUrls.get(mediaId) ?? null,
+      getEpoch: (mediaId: string) => String(mockState.mediaEpochs.get(mediaId) ?? 0),
       getMediaIdByUrl: (url: string) =>
         [...mockState.blobUrls.entries()].find(([, candidate]) => candidate === url)?.[0] ?? null,
       has: (mediaId: string) => mockState.blobUrls.has(mediaId),
@@ -274,9 +311,9 @@ vi.mock('@/infrastructure/browser/blob-url-manager', async () => {
         }
       },
       invalidate: (mediaId: string) => {
-        if (mockState.blobUrls.delete(mediaId)) {
-          mockState.publishVersion()
-        }
+        mockState.blobUrls.delete(mediaId)
+        mockState.mediaEpochs.set(mediaId, (mockState.mediaEpochs.get(mediaId) ?? 0) + 1)
+        mockState.publishVersion()
       },
       invalidateAll: () => {
         if (mockState.blobUrls.size === 0) return
@@ -548,6 +585,43 @@ function getCanvasClearRectCallCount(canvas: HTMLCanvasElement) {
       if (context.canvas !== canvas || typeof context.clearRect !== 'function') return total
       if (!('mock' in context.clearRect)) return total
       return total + (context.clearRect as { mock: { calls: unknown[] } }).mock.calls.length
+    }, 0) ?? 0
+  )
+}
+
+function getCanvasDrawImageCallCountFor(canvas: HTMLCanvasElement) {
+  const results = canvasGetContextSpy?.mock.results as
+    | Array<{ type: string; value: unknown }>
+    | undefined
+  return (
+    results?.reduce((total: number, result) => {
+      if (result.type !== 'return' || !result.value) return total
+      const context = result.value as {
+        canvas?: HTMLCanvasElement
+        drawImage?: unknown
+      }
+      if (context.canvas !== canvas || typeof context.drawImage !== 'function') return total
+      if (!('mock' in context.drawImage)) return total
+      return total + (context.drawImage as { mock: { calls: unknown[] } }).mock.calls.length
+    }, 0) ?? 0
+  )
+}
+
+function getCanvasDrawImageCallCountFrom(canvas: HTMLCanvasElement, source: CanvasImageSource) {
+  const results = canvasGetContextSpy?.mock.results as
+    | Array<{ type: string; value: unknown }>
+    | undefined
+  return (
+    results?.reduce((total: number, result) => {
+      if (result.type !== 'return' || !result.value) return total
+      const context = result.value as {
+        canvas?: HTMLCanvasElement
+        drawImage?: unknown
+      }
+      if (context.canvas !== canvas || typeof context.drawImage !== 'function') return total
+      if (!('mock' in context.drawImage)) return total
+      const calls = (context.drawImage as { mock: { calls: unknown[][] } }).mock.calls
+      return total + calls.filter(([drawSource]) => drawSource === source).length
     }, 0) ?? 0
   )
 }
@@ -921,12 +995,14 @@ describe('VideoPreview sync behavior', () => {
     completeDeferredPlayerSeek = null
     lastPlayerDimensions = null
     playerDimensionsHistory = []
+    rendererMockState.renderedSources.length = 0
     seekToMock.mockReset()
     playMock.mockReset()
     pauseMock.mockReset()
     lastCompositionKeyframes = []
     lastCompositionMediaSources = []
     mockBlobUrls.clear()
+    mockMediaEpochs.clear()
     blobUrlListeners.clear()
     mockBlobUrlVersion.current = 0
     resolveMediaUrlMock.mockClear()
@@ -2065,6 +2141,399 @@ describe('VideoPreview sync behavior', () => {
       expect(screen.getByLabelText('Split grade comparison')).toBeTruthy()
       expect(container.querySelector('[data-grade-comparison-after-layer="true"]')).not.toBeNull()
       expect(screen.getByTestId('mock-player-frame')).toHaveTextContent('0')
+    })
+  })
+
+  it('retires a deferred split-grade surface before same-item source replacement', async () => {
+    canvasPixelReadbackEnabled = true
+    const gradeEffect = {
+      id: 'effect-grade',
+      enabled: true,
+      effect: {
+        type: 'gpu-effect' as const,
+        gpuEffectType: 'gpu-color-wheels' as const,
+        params: { exposure: 0.5 },
+      },
+    }
+    setSingleVideoItemAtFrame({
+      id: 'item-graded-replacement',
+      src: 'blob:old-graded-source',
+      effects: [gradeEffect],
+    })
+
+    const { container } = renderDefaultPreview()
+    await waitFor(() => expect(rendererMockState.instances).toHaveLength(1))
+    act(() => {
+      useGizmoStore.getState().setColorGradeComparisonMode('split')
+    })
+
+    const splitRenderer = await waitFor(() => {
+      expect(rendererMockState.instances).toHaveLength(2)
+      expect(container.querySelector('[data-grade-comparison-after-layer="true"]')).not.toBeNull()
+      return rendererMockState.instances[1]!
+    })
+    const rendererCalls = createCompositionRendererMock.mock.calls as unknown as Array<
+      [unknown, HTMLCanvasElement]
+    >
+    const oldSplitOffscreen = rendererCalls[1]![1]
+    const gpuDisplayCanvas = container.querySelectorAll('canvas')[1] as HTMLCanvasElement
+    setMockCanvasBlank(oldSplitOffscreen, false)
+    setMockCanvasBlank(gpuDisplayCanvas, false)
+
+    let resolveOldRender: (() => void) | null = null
+    splitRenderer.renderFrame.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveOldRender = resolve
+        }),
+    )
+    act(() => {
+      useGizmoStore.getState().setEffectsPreviewNew({
+        'item-graded-replacement': [
+          { ...gradeEffect, effect: { ...gradeEffect.effect, params: { exposure: 0.8 } } },
+        ],
+      })
+    })
+    await waitFor(() => expect(resolveOldRender).not.toBeNull())
+
+    const clearCountBeforeReplacement = getCanvasClearRectCallCount(gpuDisplayCanvas)
+    const drawCountBeforeReplacement = getCanvasDrawImageCallCountFor(gpuDisplayCanvas)
+    const defaultRendererFactory = createCompositionRendererMock.getMockImplementation()!
+    createCompositionRendererMock.mockImplementation(() => new Promise<never>(() => undefined))
+
+    act(() => {
+      useItemsStore.getState().setItems([
+        {
+          id: 'item-graded-replacement',
+          type: 'video',
+          trackId: 'track-video',
+          from: 0,
+          durationInFrames: 120,
+          src: 'blob:new-graded-source',
+          effects: [gradeEffect],
+        } as unknown as TimelineItem,
+      ])
+    })
+
+    await waitFor(() => expect(splitRenderer.dispose).toHaveBeenCalledOnce())
+    expect(getCanvasClearRectCallCount(gpuDisplayCanvas)).toBeGreaterThan(
+      clearCountBeforeReplacement,
+    )
+    expect(blankCanvasState.has(gpuDisplayCanvas)).toBe(true)
+    expect(gpuDisplayCanvas.style.visibility).toBe('hidden')
+    expect(container.querySelector('[data-grade-comparison-after-layer="true"]')).toBeNull()
+
+    await act(async () => {
+      resolveOldRender?.()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(getCanvasDrawImageCallCountFor(gpuDisplayCanvas)).toBe(drawCountBeforeReplacement)
+    expect(blankCanvasState.has(gpuDisplayCanvas)).toBe(true)
+    expect(gpuDisplayCanvas.style.visibility).toBe('hidden')
+    createCompositionRendererMock.mockImplementation(defaultRendererFactory)
+  })
+
+  it('retires a split-grade source binding in layout before resolver effects can reuse it', async () => {
+    canvasPixelReadbackEnabled = true
+    const mediaId = 'same-media-relink'
+    const oldUrl = 'blob:old-relink-source'
+    const newUrl = 'blob:new-relink-source'
+    const oldPresentationUrl = 'blob:old-relink-proxy'
+    const newPresentationUrl = 'blob:new-relink-proxy'
+    const gradeEffect = {
+      id: 'effect-grade',
+      enabled: true,
+      effect: {
+        type: 'gpu-effect' as const,
+        gpuEffectType: 'gpu-color-wheels' as const,
+        params: { exposure: 0.5 },
+      },
+    }
+    resolveProxyUrlMock.mockImplementation((candidateId) => {
+      if (candidateId !== mediaId) return null
+      return mockBlobUrls.get(mediaId) === newUrl ? newPresentationUrl : oldPresentationUrl
+    })
+    setMockBlobUrl(mediaId, oldUrl)
+    setSingleVideoItemAtFrame({
+      id: 'item-same-media-relink',
+      mediaId,
+      src: oldUrl,
+      effects: [gradeEffect],
+    })
+
+    let observeRelinkLayout = false
+    let layoutObservation:
+      | {
+          blank: boolean
+          hidden: boolean
+          oldRendererDisposed: boolean
+          resolveCallCount: number
+        }
+      | undefined
+    let gpuDisplayCanvas: HTMLCanvasElement | null = null
+    let oldSplitRenderer: (typeof rendererMockState.instances)[number] | null = null
+    const onBindingLayout = () => {
+      if (!observeRelinkLayout || !gpuDisplayCanvas || !oldSplitRenderer) return
+      layoutObservation = {
+        blank: blankCanvasState.has(gpuDisplayCanvas),
+        hidden: gpuDisplayCanvas.style.visibility === 'hidden',
+        oldRendererDisposed: oldSplitRenderer.dispose.mock.calls.length === 1,
+        resolveCallCount: resolveMediaUrlMock.mock.calls.length,
+      }
+    }
+
+    const { container } = render(
+      <>
+        <VideoPreview project={DEFAULT_PROJECT} containerSize={{ width: 1280, height: 720 }} />
+        <BlobBindingLayoutProbe onLayout={onBindingLayout} />
+      </>,
+    )
+    await waitFor(() => expect(rendererMockState.instances).toHaveLength(1))
+    act(() => {
+      useGizmoStore.getState().setColorGradeComparisonMode('split')
+    })
+
+    oldSplitRenderer = await waitFor(() => {
+      expect(rendererMockState.instances).toHaveLength(2)
+      expect(container.querySelector('[data-grade-comparison-after-layer="true"]')).not.toBeNull()
+      return rendererMockState.instances[1]!
+    })
+    const oldSplitCall = createCompositionRendererMock.mock.calls[1] as unknown as [
+      unknown,
+      HTMLCanvasElement,
+    ]
+    gpuDisplayCanvas = container.querySelectorAll('canvas')[1] as HTMLCanvasElement
+    setMockCanvasBlank(oldSplitCall[1], false)
+    setMockCanvasBlank(gpuDisplayCanvas, false)
+
+    let resolveOldRender: (() => void) | null = null
+    oldSplitRenderer.renderFrame.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveOldRender = resolve
+        }),
+    )
+    act(() => {
+      useGizmoStore.getState().setEffectsPreviewNew({
+        'item-same-media-relink': [
+          { ...gradeEffect, effect: { ...gradeEffect.effect, params: { exposure: 0.8 } } },
+        ],
+      })
+    })
+    await waitFor(() => expect(resolveOldRender).not.toBeNull())
+
+    const resolveCallsBeforeInvalidation = resolveMediaUrlMock.mock.calls.length
+    observeRelinkLayout = true
+    act(() => {
+      setMockBlobUrl(mediaId, null)
+    })
+
+    expect(layoutObservation).toEqual({
+      blank: true,
+      hidden: true,
+      oldRendererDisposed: true,
+      resolveCallCount: resolveCallsBeforeInvalidation,
+    })
+    await waitFor(() => {
+      expect(resolveMediaUrlMock.mock.calls.length).toBeGreaterThan(resolveCallsBeforeInvalidation)
+    })
+    expect(blankCanvasState.has(gpuDisplayCanvas)).toBe(true)
+    expect(gpuDisplayCanvas.style.visibility).toBe('hidden')
+
+    const oldSourceDrawCount = getCanvasDrawImageCallCountFrom(gpuDisplayCanvas, oldSplitCall[1])
+    await act(async () => {
+      resolveOldRender?.()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(getCanvasDrawImageCallCountFrom(gpuDisplayCanvas, oldSplitCall[1])).toBe(
+      oldSourceDrawCount,
+    )
+    expect(gpuDisplayCanvas.style.visibility).toBe('hidden')
+
+    act(() => {
+      setMockBlobUrl(mediaId, newUrl)
+    })
+    const sourceBindingRendererCalls = createCompositionRendererMock.mock.calls as unknown as Array<
+      [
+        inputProps: {
+          tracks: Array<{ items: Array<{ mediaId?: string; src?: string }> }>
+        },
+      ]
+    >
+    const replacementCallIndex = await waitFor(() => {
+      const index = sourceBindingRendererCalls.findIndex(([inputProps]) =>
+        inputProps.tracks.some((track) =>
+          track.items.some((item) => item.mediaId === mediaId && item.src === newPresentationUrl),
+        ),
+      )
+      expect(index).toBeGreaterThan(1)
+      return index
+    })
+    const replacementRenderer = rendererMockState.instances[replacementCallIndex]!
+    await waitFor(() => expect(replacementRenderer.renderFrame).toHaveBeenCalledWith(24))
+    await waitFor(() => {
+      expect(container.querySelector('[data-grade-comparison-after-layer="true"]')).not.toBeNull()
+      expect(gpuDisplayCanvas.style.visibility).toBe('visible')
+    })
+
+    for (const [inputProps] of sourceBindingRendererCalls.slice(2)) {
+      const sources = inputProps.tracks.flatMap((track) =>
+        track.items.filter((item) => item.mediaId === mediaId).map((item) => item.src),
+      )
+      expect(sources).not.toContain(oldPresentationUrl)
+    }
+  })
+
+  it('retires a reachable nested same-id source binding before the unchanged wrapper can repaint', async () => {
+    canvasPixelReadbackEnabled = true
+    const mediaId = 'nested-same-media-relink'
+    const gradeEffect = {
+      id: 'effect-grade',
+      enabled: true,
+      effect: {
+        type: 'gpu-effect' as const,
+        gpuEffectType: 'gpu-color-wheels' as const,
+        params: { exposure: 0.5 },
+      },
+    }
+    setMockBlobUrl(mediaId, 'blob:nested-old')
+    const nestedTrack = {
+      id: 'nested-track',
+      name: 'Nested',
+      height: 60,
+      locked: false,
+      visible: true,
+      muted: false,
+      solo: false,
+      order: 0,
+      items: [],
+    }
+    useCompositionsStore.getState().setCompositions([
+      {
+        id: 'nested-composition',
+        name: 'Nested composition',
+        width: 1920,
+        height: 1080,
+        fps: 30,
+        durationInFrames: 120,
+        tracks: [nestedTrack],
+        transitions: [],
+        keyframes: [],
+        items: [
+          {
+            id: 'nested-video',
+            label: 'Nested video',
+            type: 'video',
+            trackId: nestedTrack.id,
+            mediaId,
+            src: 'blob:nested-stale-item',
+            from: 0,
+            durationInFrames: 120,
+          } as unknown as TimelineItem,
+        ],
+      },
+    ])
+    setSingleVideoTrack()
+    useItemsStore.getState().setItems([
+      {
+        id: 'compound-with-grade',
+        label: 'Compound',
+        type: 'composition',
+        trackId: 'track-video',
+        compositionId: 'nested-composition',
+        compositionWidth: 1920,
+        compositionHeight: 1080,
+        from: 0,
+        durationInFrames: 120,
+        effects: [gradeEffect],
+      } as unknown as TimelineItem,
+    ])
+    act(() => {
+      usePlaybackStore.getState().setCurrentFrame(24)
+    })
+
+    let observeRelinkLayout = false
+    let wasBlankInLayout = false
+    let wasHiddenInLayout = false
+    let wasDisposedInLayout = false
+    let gpuDisplayCanvas: HTMLCanvasElement | null = null
+    let oldSplitRenderer: (typeof rendererMockState.instances)[number] | null = null
+    const onBindingLayout = () => {
+      if (!observeRelinkLayout || !gpuDisplayCanvas || !oldSplitRenderer) return
+      wasBlankInLayout = blankCanvasState.has(gpuDisplayCanvas)
+      wasHiddenInLayout = gpuDisplayCanvas.style.visibility === 'hidden'
+      wasDisposedInLayout = oldSplitRenderer.dispose.mock.calls.length === 1
+    }
+
+    const { container } = render(
+      <>
+        <VideoPreview project={DEFAULT_PROJECT} containerSize={{ width: 1280, height: 720 }} />
+        <BlobBindingLayoutProbe onLayout={onBindingLayout} />
+      </>,
+    )
+    await waitFor(() => expect(rendererMockState.instances).toHaveLength(1))
+    act(() => {
+      useGizmoStore.getState().setColorGradeComparisonMode('split')
+    })
+
+    oldSplitRenderer = await waitFor(() => {
+      expect(rendererMockState.instances).toHaveLength(2)
+      return rendererMockState.instances[1]!
+    })
+    const oldSplitCall = createCompositionRendererMock.mock.calls[1] as unknown as [
+      unknown,
+      HTMLCanvasElement,
+    ]
+    gpuDisplayCanvas = container.querySelectorAll('canvas')[1] as HTMLCanvasElement
+    setMockCanvasBlank(oldSplitCall[1], false)
+    setMockCanvasBlank(gpuDisplayCanvas, false)
+
+    let resolveOldRender: (() => void) | null = null
+    oldSplitRenderer.renderFrame.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveOldRender = resolve
+        }),
+    )
+    act(() => {
+      useGizmoStore.getState().setEffectsPreviewNew({
+        'compound-with-grade': [
+          { ...gradeEffect, effect: { ...gradeEffect.effect, params: { exposure: 0.8 } } },
+        ],
+      })
+    })
+    await waitFor(() => expect(resolveOldRender).not.toBeNull())
+
+    observeRelinkLayout = true
+    act(() => {
+      setMockBlobUrl(mediaId, null)
+    })
+
+    expect(wasBlankInLayout).toBe(true)
+    expect(wasHiddenInLayout).toBe(true)
+    expect(wasDisposedInLayout).toBe(true)
+    const drawCountAfterRetirement = getCanvasDrawImageCallCountFrom(
+      gpuDisplayCanvas,
+      oldSplitCall[1],
+    )
+
+    await act(async () => {
+      resolveOldRender?.()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(getCanvasDrawImageCallCountFrom(gpuDisplayCanvas, oldSplitCall[1])).toBe(
+      drawCountAfterRetirement,
+    )
+
+    act(() => {
+      setMockBlobUrl(mediaId, 'blob:nested-new')
+    })
+    await waitFor(() => expect(rendererMockState.instances.length).toBeGreaterThan(2))
+    await waitFor(() => {
+      expect(rendererMockState.instances.at(-1)?.renderFrame).toHaveBeenCalledWith(24)
     })
   })
 
@@ -4384,6 +4853,50 @@ describe('VideoPreview sync behavior', () => {
     await waitFor(() => {
       expect(getDisplayedFrame()).toBe(48)
       expect(scrubCanvas.style.visibility).toBe('visible')
+    })
+  })
+
+  it('repaints a visible scrub canvas from the exact source after a paused cross-clip seek', async () => {
+    setMockBlobUrl('media-red', 'blob:red')
+    setMockBlobUrl('media-blue', 'blob:blue')
+    setSingleVideoTrack()
+    useItemsStore.getState().setItems([
+      {
+        id: 'red',
+        label: 'Red',
+        type: 'video',
+        trackId: 'track-video',
+        mediaId: 'media-red',
+        src: 'blob:red',
+        from: 1,
+        durationInFrames: 90,
+      },
+      {
+        id: 'blue',
+        label: 'Blue',
+        type: 'video',
+        trackId: 'track-video',
+        mediaId: 'media-blue',
+        src: 'blob:blue',
+        from: 91,
+        durationInFrames: 90,
+      },
+    ] as TimelineItem[])
+
+    const { container } = renderDefaultPreview()
+    const scrubCanvas = getScrubCanvas(container)
+    await setScrubFrameAndWaitVisible(scrubCanvas, 45)
+
+    act(() => {
+      usePlaybackStore.getState().setPreviewFrame(null)
+      usePlaybackStore.getState().setCurrentFrame(135)
+    })
+
+    await waitFor(() => {
+      expect(usePlaybackStore.getState().currentFrame).toBe(135)
+      expect(getDisplayedFrame()).toBe(135)
+      expect(scrubCanvas.style.visibility).toBe('visible')
+      expect(rendererMockState.renderedSources).toContainEqual({ frame: 135, src: 'blob:blue' })
     })
   })
 

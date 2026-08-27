@@ -101,26 +101,45 @@ export function SourceComposition({
 
 function LottieSource({ src }: { src: string }) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
+  const sourceGenerationRef = useRef(0)
   const clock = useClock()
+
+  useLayoutEffect(() => {
+    const generation = ++sourceGenerationRef.current
+    const canvas = canvasRef.current
+    canvas?.getContext('2d')?.clearRect(0, 0, canvas.width, canvas.height)
+    if (canvas) canvas.style.display = 'none'
+    return () => {
+      if (sourceGenerationRef.current !== generation) return
+      sourceGenerationRef.current += 1
+      canvas?.getContext('2d')?.clearRect(0, 0, canvas.width, canvas.height)
+      if (canvas) canvas.style.display = 'none'
+    }
+  }, [src])
 
   useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas || !src) return
+    const generation = sourceGenerationRef.current
+    const isCurrent = () => sourceGenerationRef.current === generation
     const renderer = new LottieRenderer({ canvas, src, autoResize: true })
     let raf = 0
     let lastFrame = -1
     let loaded = false
     renderer.ready.then(() => {
-      loaded = renderer.isLoaded
+      if (isCurrent()) loaded = renderer.isLoaded
     })
     // Drive frames from the source clock imperatively (no per-frame React render).
     const tick = () => {
+      if (!isCurrent()) return
       if (loaded) {
         const total = renderer.totalFrames
         const frame =
           total > 0 ? Math.max(0, Math.min(Math.round(clock.currentFrame), total - 1)) : 0
         if (frame !== lastFrame) {
           renderer.renderFrame(frame)
+          if (!isCurrent()) return
+          canvas.style.display = 'block'
           lastFrame = frame
         }
       }
@@ -135,7 +154,7 @@ function LottieSource({ src }: { src: string }) {
 
   return (
     <AbsoluteFill>
-      <canvas ref={canvasRef} style={{ width: '100%', height: '100%', display: 'block' }} />
+      <canvas ref={canvasRef} style={{ width: '100%', height: '100%', display: 'none' }} />
     </AbsoluteFill>
   )
 }
@@ -517,6 +536,28 @@ function VideoSource({
     [activeSrc],
   )
 
+  const commitDecodedFrameResult = useCallback(
+    (didDraw: boolean, targetTime: number): boolean => {
+      if (didDraw) {
+        consecutiveDecodeFailuresRef.current = 0
+        queueDirectionalPrewarm(targetTime)
+        return true
+      }
+
+      if (extractorRef.current?.getLastFailureKind() !== 'decode-error') return true
+      consecutiveDecodeFailuresRef.current += 1
+      if (consecutiveDecodeFailuresRef.current < SOURCE_MONITOR_STRICT_DECODE_FALLBACK_FAILURES) {
+        return true
+      }
+
+      decoderReadyRef.current = false
+      setStrictDecodeReady(false)
+      setUseLegacyPausedSeek((prev) => (prev ? prev : true))
+      return false
+    },
+    [queueDirectionalPrewarm],
+  )
+
   const pumpLatestDecodedFrame = useCallback(() => {
     if (renderInFlightGenerationRef.current !== null) return
     const generation = sourceGenerationRef.current
@@ -535,24 +576,10 @@ function VideoSource({
           pendingTimeRef.current = null
 
           const didDraw = await drawDecodedFrame(targetTime).catch(() => false)
-          if (didDraw) {
-            consecutiveDecodeFailuresRef.current = 0
-            queueDirectionalPrewarm(targetTime)
-            continue
+          if (!mountedRef.current || sourceGenerationRef.current !== generation) {
+            return
           }
-
-          const failureKind = extractorRef.current?.getLastFailureKind() ?? 'decode-error'
-          if (failureKind === 'decode-error') {
-            consecutiveDecodeFailuresRef.current += 1
-            if (
-              consecutiveDecodeFailuresRef.current >= SOURCE_MONITOR_STRICT_DECODE_FALLBACK_FAILURES
-            ) {
-              decoderReadyRef.current = false
-              setStrictDecodeReady(false)
-              setUseLegacyPausedSeek((prev) => (prev ? prev : true))
-              return
-            }
-          }
+          if (!commitDecodedFrameResult(didDraw, targetTime)) return
         }
       } finally {
         if (renderInFlightGenerationRef.current === generation) {
@@ -574,7 +601,7 @@ function VideoSource({
     }
 
     void run()
-  }, [drawDecodedFrame, queueDirectionalPrewarm])
+  }, [commitDecodedFrameResult, drawDecodedFrame])
   pumpLatestDecodedFrameRef.current = pumpLatestDecodedFrame
 
   // Acquire/release pooled element when source changes.
@@ -899,6 +926,7 @@ function ImageSource({ src }: { src: string }) {
   return (
     <AbsoluteFill>
       <img
+        key={src}
         src={src}
         style={{ width: '100%', height: '100%', objectFit: 'contain' }}
         alt="Source preview"

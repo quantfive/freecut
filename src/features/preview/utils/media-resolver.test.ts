@@ -47,6 +47,16 @@ vi.mock('@/features/media-library/stores/media-library-store', () => ({
 
 let blobUrlCounter = 0
 
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  let reject!: (error: unknown) => void
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res
+    reject = rej
+  })
+  return { promise, resolve, reject }
+}
+
 beforeEach(() => {
   vi.clearAllMocks()
   blobUrlManager.releaseAll()
@@ -256,6 +266,34 @@ describe('resolveMediaUrl', () => {
     expect(url1).toBe(url2)
     // Service should only be called once (second call uses pending promise)
     expect(mediaLibraryService.getMedia).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps a late pre-invalidation request from replacing the new source', async () => {
+    const oldBlob = deferred<Blob>()
+    const newBlob = deferred<Blob>()
+    ;(mediaLibraryService.getMedia as Mock)
+      .mockResolvedValueOnce({ id: 'media-1', fileName: 'old.mp4' })
+      .mockResolvedValueOnce({ id: 'media-1', fileName: 'new.mp4' })
+    ;(mediaLibraryService.getMediaFile as Mock)
+      .mockReturnValueOnce(oldBlob.promise)
+      .mockReturnValueOnce(newBlob.promise)
+
+    const oldResolution = resolveMediaUrl('media-1')
+    await vi.waitFor(() => expect(mediaLibraryService.getMediaFile).toHaveBeenCalledTimes(1))
+
+    blobUrlManager.invalidate('media-1')
+    const newResolution = resolveMediaUrl('media-1')
+    await vi.waitFor(() => expect(mediaLibraryService.getMediaFile).toHaveBeenCalledTimes(2))
+
+    newBlob.resolve(new Blob(['new-source']))
+    await expect(newResolution).resolves.toBe('blob:test-1')
+    expect(blobUrlManager.get('media-1')).toBe('blob:test-1')
+
+    oldBlob.resolve(new Blob(['old-source']))
+    await expect(oldResolution).resolves.toBe('')
+    expect(blobUrlManager.get('media-1')).toBe('blob:test-1')
+    expect(blobUrlCounter).toBe(1)
+    expect(mockMarkMediaHealthy).toHaveBeenCalledTimes(1)
   })
 })
 
