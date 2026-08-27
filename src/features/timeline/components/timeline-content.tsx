@@ -95,7 +95,15 @@ function shouldIgnoreTimelineContainerClick(
   target: HTMLElement,
   interactionJustFinished: boolean,
 ): boolean {
-  return interactionJustFinished || Boolean(target.closest('[role="menu"]'))
+  return (
+    interactionJustFinished ||
+    Boolean(target.closest('[role="menu"]')) ||
+    isMicRecordingActive(useMicRecordingStore.getState().status)
+  )
+}
+
+function shouldIgnoreTimelineMouseDownCapture(button: number): boolean {
+  return button !== 0 || isMicRecordingActive(useMicRecordingStore.getState().status)
 }
 
 function resolveTimelineContainerClickFrame(
@@ -1421,7 +1429,7 @@ export const TimelineContent = memo(function TimelineContent({
 
   // Preview scrubber: show ghost playhead on hover
   const handleTimelineMouseDownCapture = useCallback((e: React.MouseEvent) => {
-    if (e.button !== 0) return
+    if (shouldIgnoreTimelineMouseDownCapture(e.button)) return
 
     const target = e.target as HTMLElement
     if (

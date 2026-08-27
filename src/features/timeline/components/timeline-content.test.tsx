@@ -3,6 +3,7 @@ import { act, fireEvent, render, waitFor } from '@testing-library/react'
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vite-plus/test'
 
 import { useEditorStore } from '@/shared/state/editor'
+import { useMicRecordingStore } from '@/shared/state/mic-recording-store'
 import { usePlaybackStore } from '@/shared/state/playback'
 import { resetPlaybackPreviewState } from '@/shared/state/playback-preview-test-helpers'
 import { useSelectionStore } from '@/shared/state/selection'
@@ -173,6 +174,7 @@ function resetStores() {
   })
 
   resetPlaybackPreviewState()
+  useMicRecordingStore.getState().reset()
 
   useTimelineStore.setState({
     fps: 30,
@@ -1009,6 +1011,32 @@ describe('TimelineContent playback selection behavior', () => {
     expect(usePlaybackStore.getState().currentFrame).toBe(24)
     expect(usePlaybackStore.getState().previewFrame).toBeNull()
     expect(usePlaybackStore.getState().isPlaying).toBe(false)
+  })
+
+  it('does not pause or seek when the timeline body is clicked during a microphone take', () => {
+    const { container } = render(<TimelineContent duration={10} tracks={[VIDEO_TRACK]} />)
+    const pause = vi.spyOn(usePlaybackStore.getState(), 'pause')
+
+    act(() => {
+      usePlaybackStore.setState({ currentFrame: 90, isPlaying: true })
+      useMicRecordingStore.setState({ status: 'recording' })
+    })
+    act(() => {
+      usePlaybackStore.setState({ previewFrame: 24 })
+    })
+
+    const track = container.querySelector(`[data-track-id="${VIDEO_TRACK.id}"]`)
+    expect(track).toBeTruthy()
+
+    fireEvent.mouseDown(track!, { button: 0, clientX: 80, clientY: 100 })
+    fireEvent.click(track!, { button: 0, clientX: 80, clientY: 100 })
+
+    expect(pause).not.toHaveBeenCalled()
+    expect(usePlaybackStore.getState()).toMatchObject({
+      currentFrame: 90,
+      previewFrame: 24,
+      isPlaying: true,
+    })
   })
 
   it('does not restore the marquee release preview after a timeline body click', () => {
