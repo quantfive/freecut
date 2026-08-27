@@ -14,7 +14,7 @@ import type { TimelineShortcutCallbacks } from '../use-timeline-shortcuts'
 import { useSourcePlayerStore } from '@/shared/state/source-player'
 import { getFilteredItemSnapEdges } from '../../utils/timeline-snap-utils'
 import { getVisibleTrackIds } from '../../utils/group-utils'
-import { useResolvedHotkeys } from '@/features/timeline/deps/settings'
+import { useRuntimeHotkeys } from '@/features/timeline/deps/settings'
 
 /** Compute snap points on-demand from current store state (avoids reactive subscriptions). */
 function getSnapPoints(): number[] {
@@ -35,7 +35,7 @@ function getSnapPoints(): number[] {
 }
 
 export function usePlaybackShortcuts(callbacks: TimelineShortcutCallbacks) {
-  const hotkeys = useResolvedHotkeys()
+  const hotkeys = useRuntimeHotkeys()
   const togglePlayPause = usePlaybackStore((s) => s.togglePlayPause)
   const shuttleForward = usePlaybackStore((s) => s.shuttleForward)
   const shuttleReverse = usePlaybackStore((s) => s.shuttleReverse)

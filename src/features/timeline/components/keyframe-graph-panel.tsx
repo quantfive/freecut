@@ -96,7 +96,7 @@ import {
   updateTextMotionLive,
 } from '../stores/actions/text-motion-actions'
 import { HOTKEY_OPTIONS } from '@/config/hotkeys'
-import { useResolvedHotkeys } from '@/features/timeline/deps/settings'
+import { useRuntimeHotkeys } from '@/features/timeline/deps/settings'
 import { getDirectPropertyLinks, isTransformAnimatableProperty } from '@/types/keyframe'
 import { buildEffectPropertyResetPlan } from '@/features/timeline/utils/effect-property-reset'
 import { VectorSpeedGraph } from './vector-speed-graph'
@@ -1228,7 +1228,7 @@ export const KeyframeGraphPanel = memo(function KeyframeGraphPanel({
       })),
     [t],
   )
-  const hotkeys = useResolvedHotkeys()
+  const hotkeys = useRuntimeHotkeys()
   // Ref to measure container width
   const containerRef = useRef<HTMLDivElement>(null)
   const panelRef = useRef<HTMLDivElement>(null)

@@ -15,7 +15,7 @@ import { useKeyframeSelectionStore } from '../../stores/keyframe-selection-store
 import { HOTKEY_OPTIONS } from '@/config/hotkeys'
 import type { Transition } from '@/types/transition'
 import type { TimelineItem } from '@/types/timeline'
-import { useResolvedHotkeys } from '@/features/timeline/deps/settings'
+import { useRuntimeHotkeys } from '@/features/timeline/deps/settings'
 import {
   isCompositionWrapperItem,
   wouldCreateCompositionCycle,
@@ -64,7 +64,7 @@ function revealPastedItems(itemIds: readonly string[]): void {
 }
 
 export function useClipboardShortcuts() {
-  const hotkeys = useResolvedHotkeys()
+  const hotkeys = useRuntimeHotkeys()
   const selectedItemIds = useSelectionStore((s) => s.selectedItemIds)
   const selectedTransitionId = useSelectionStore((s) => s.selectedTransitionId)
   const selectedKeyframes = useKeyframeSelectionStore((s) => s.selectedKeyframes)

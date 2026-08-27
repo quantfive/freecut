@@ -105,6 +105,8 @@ export type HotkeyBindingMap = Record<HotkeyKey, string>
 export type HotkeyOverrideMap = Partial<Record<HotkeyKey, string>>
 type HotkeyPlatform = 'mac' | 'windows'
 
+const HOTKEY_COMMAND_ORDER = Object.keys(HOTKEYS) as HotkeyKey[]
+
 export const HOTKEY_EXPORT_SCHEMA = 'freecut-hotkeys'
 export const HOTKEY_EXPORT_VERSION = 2
 
@@ -787,6 +789,28 @@ export function getHotkeyBindingFromEventData(eventData: HotkeyEventData): strin
   return normalizeHotkeyBinding(tokens.join('+'))
 }
 
+/** Exact runtime matching for local handlers, including explicit meta/ctrl remaps. */
+export function doesHotkeyEventMatchBinding(eventData: HotkeyEventData, binding: string): boolean {
+  const tokens = splitHotkeyBinding(binding)
+  const eventKey = eventData.code ?? eventData.key ?? ''
+  const functionKey = /^F(?:[1-9]|1[0-2])$/i.test(eventKey) ? eventKey.toLowerCase() : null
+  const primaryToken = getHotkeyPrimaryTokenFromEventData(eventData) ?? functionKey
+  if (!primaryToken || !tokens.includes(primaryToken)) return false
+
+  const usesMod = tokens.includes('mod')
+  const expectsCtrl = tokens.includes('ctrl')
+  const expectsMeta = tokens.includes('meta')
+  const controlModifierMatches = usesMod
+    ? Boolean(eventData.ctrlKey || eventData.metaKey)
+    : Boolean(eventData.ctrlKey) === expectsCtrl && Boolean(eventData.metaKey) === expectsMeta
+
+  return (
+    controlModifierMatches &&
+    Boolean(eventData.altKey) === tokens.includes('alt') &&
+    Boolean(eventData.shiftKey) === tokens.includes('shift')
+  )
+}
+
 function addShiftModifier(binding: string): string {
   const tokens = splitHotkeyBinding(binding)
   if (tokens.includes('shift')) return normalizeHotkeyBinding(binding)
@@ -822,15 +846,18 @@ function getPhysicalHotkeyBindings(binding: string): string[] {
 
 /**
  * Canonical graph of every physical chord registered at runtime, including
- * modifier-derived variants. Claim insertion order is the deterministic owner
- * order when defensive runtime claiming sees an unresolved collision.
+ * modifier-derived variants. Ownership follows HOTKEYS declaration order,
+ * with each command's primary claim before its derived preview claim. This
+ * order is independent of persisted/host object insertion order so defensive
+ * runtime claiming stays stable even for invalid external state.
  */
 function getRuntimeHotkeyConflictGraph(
   bindings: HotkeyBindingMap,
 ): Record<string, RuntimePhysicalHotkeyClaim[]> {
   const conflicts: Record<string, RuntimePhysicalHotkeyClaim[]> = {}
 
-  for (const [key, binding] of Object.entries(bindings) as [HotkeyKey, string][]) {
+  for (const key of HOTKEY_COMMAND_ORDER) {
+    const binding = bindings[key]
     for (const claim of getCommandRuntimeHotkeyClaims(key, binding)) {
       for (const physicalBinding of getPhysicalHotkeyBindings(claim.binding)) {
         const bindingClaims = conflicts[physicalBinding] ?? []
@@ -843,22 +870,46 @@ function getRuntimeHotkeyConflictGraph(
   return conflicts
 }
 
-export function getRuntimeHotkeyBinding(
+function getOwnedRuntimeHotkeyBinding(
+  graph: Record<string, RuntimePhysicalHotkeyClaim[]>,
   bindings: HotkeyBindingMap,
   command: HotkeyKey,
-  variant: RuntimeHotkeyVariant = 'primary',
+  variant: RuntimeHotkeyVariant,
 ): string | null {
   const claim = getCommandRuntimeHotkeyClaims(command, bindings[command]).find(
     (candidate) => candidate.variant === variant,
   )
   if (!claim) return null
 
-  const graph = getRuntimeHotkeyConflictGraph(bindings)
   const ownsEveryPhysicalBinding = getPhysicalHotkeyBindings(claim.binding).every((binding) => {
     const owner = graph[binding]?.[0]
     return owner?.command === command && owner.variant === variant
   })
   return ownsEveryPhysicalBinding ? claim.binding : null
+}
+
+/**
+ * Returns the runtime-only primary registration map. A command that loses any
+ * canonical physical alias is disabled with an empty binding; raw resolved and
+ * persisted settings are never mutated.
+ */
+export function resolveRuntimeHotkeys(bindings: HotkeyBindingMap): HotkeyBindingMap {
+  const graph = getRuntimeHotkeyConflictGraph(bindings)
+  return Object.fromEntries(
+    HOTKEY_COMMAND_ORDER.map((command) => [
+      command,
+      getOwnedRuntimeHotkeyBinding(graph, bindings, command, 'primary') ?? '',
+    ]),
+  ) as HotkeyBindingMap
+}
+
+export function getRuntimeHotkeyBinding(
+  bindings: HotkeyBindingMap,
+  command: HotkeyKey,
+  variant: RuntimeHotkeyVariant = 'primary',
+): string | null {
+  const graph = getRuntimeHotkeyConflictGraph(bindings)
+  return getOwnedRuntimeHotkeyBinding(graph, bindings, command, variant)
 }
 
 export function findHotkeyConflicts(

@@ -8,7 +8,7 @@ import { useZoomStore, getZoomTo100Handler } from '../../stores/zoom-store'
 import { usePlaybackStore } from '@/shared/state/playback'
 import { HOTKEY_OPTIONS } from '@/config/hotkeys'
 import type { TimelineShortcutCallbacks } from '../use-timeline-shortcuts'
-import { useResolvedHotkeys, useSettingsStore } from '@/features/timeline/deps/settings'
+import { useRuntimeHotkeys, useSettingsStore } from '@/features/timeline/deps/settings'
 
 export interface UIShortcutOptions {
   /**
@@ -23,7 +23,7 @@ export function useUIShortcuts(
   options: UIShortcutOptions = {},
 ) {
   const { enableHistory = true } = options
-  const hotkeys = useResolvedHotkeys()
+  const hotkeys = useRuntimeHotkeys()
   const toggleSnap = useTimelineStore((s) => s.toggleSnap)
   const zoomIn = useZoomStore((s) => s.zoomIn)
   const zoomOut = useZoomStore((s) => s.zoomOut)

@@ -1,6 +1,6 @@
 import { useHotkeys } from 'react-hotkeys-hook'
 import { HOTKEY_OPTIONS } from '@/config/hotkeys'
-import { useResolvedHotkeys } from '@/features/editor/deps/settings'
+import { useRuntimeHotkeys } from '@/features/editor/deps/settings'
 import { useEditorStore } from '@/shared/state/editor'
 
 import { useSceneBrowserStore } from '@/features/editor/deps/scene-browser'
@@ -24,7 +24,7 @@ interface EditorHotkeyCallbacks {
  * Uses react-hotkeys-hook with granular Zustand selectors
  */
 export function useEditorHotkeys(callbacks: EditorHotkeyCallbacks = {}) {
-  const hotkeys = useResolvedHotkeys()
+  const hotkeys = useRuntimeHotkeys()
   const enableLocalUi = callbacks.enableLocalUi ?? true
 
   // Save: Cmd/Ctrl+S

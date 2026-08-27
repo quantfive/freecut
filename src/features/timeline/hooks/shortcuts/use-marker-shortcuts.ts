@@ -8,10 +8,10 @@ import { useMarkersStore } from '../../stores/markers-store'
 import { useSelectionStore } from '@/shared/state/selection'
 import { HOTKEY_OPTIONS } from '@/config/hotkeys'
 import { addMarker, removeMarker } from '../../stores/actions/marker-actions'
-import { useResolvedHotkeys } from '@/features/timeline/deps/settings'
+import { useRuntimeHotkeys } from '@/features/timeline/deps/settings'
 
 export function useMarkerShortcuts() {
-  const hotkeys = useResolvedHotkeys()
+  const hotkeys = useRuntimeHotkeys()
   const setCurrentFrame = usePlaybackStore((s) => s.setCurrentFrame)
   const clearSelection = useSelectionStore((s) => s.clearSelection)
 
