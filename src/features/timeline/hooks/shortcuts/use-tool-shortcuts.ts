@@ -2,7 +2,7 @@
  * Tool shortcuts: V (Select), T (Trim Edit), C (Razor), Shift+C (Split at playhead), R (Rate Stretch).
  */
 
-import { COMMAND_HOTKEYS as hotkeys, useCommandHotkey } from '@/hooks/use-hotkey-registration'
+import { useCommandHotkey } from '@/hooks/use-hotkey-registration'
 import { usePlaybackStore } from '@/shared/state/playback'
 import { useTimelineStore } from '../../stores/timeline-store'
 import { useSelectionStore } from '@/shared/state/selection'
@@ -16,7 +16,7 @@ export function useToolShortcuts(callbacks: TimelineShortcutCallbacks) {
 
   // Tool: V - Selection Tool
   useCommandHotkey(
-    hotkeys.SELECTION_TOOL,
+    'SELECTION_TOOL',
     (event) => {
       event.preventDefault()
       setActiveTool('select')
@@ -27,7 +27,7 @@ export function useToolShortcuts(callbacks: TimelineShortcutCallbacks) {
 
   // Tool: T - Toggle Trim Edit Tool
   useCommandHotkey(
-    hotkeys.TRIM_EDIT_TOOL,
+    'TRIM_EDIT_TOOL',
     (event) => {
       event.preventDefault()
       setActiveTool(activeTool === 'trim-edit' ? 'select' : 'trim-edit')
@@ -38,7 +38,7 @@ export function useToolShortcuts(callbacks: TimelineShortcutCallbacks) {
 
   // Tool: C - Toggle Razor/Cut Mode
   useCommandHotkey(
-    hotkeys.RAZOR_TOOL,
+    'RAZOR_TOOL',
     (event) => {
       event.preventDefault()
       setActiveTool(activeTool === 'razor' ? 'select' : 'razor')
@@ -49,7 +49,7 @@ export function useToolShortcuts(callbacks: TimelineShortcutCallbacks) {
 
   // Tool: Shift+C - Split hovered item at gray playhead (or main playhead)
   useCommandHotkey(
-    hotkeys.SPLIT_AT_PLAYHEAD,
+    'SPLIT_AT_PLAYHEAD',
     (event) => {
       event.preventDefault()
       const { previewFrame, previewItemId, currentFrame } = usePlaybackStore.getState()
@@ -73,7 +73,7 @@ export function useToolShortcuts(callbacks: TimelineShortcutCallbacks) {
 
   // Tool: R - Toggle Rate Stretch Tool
   useCommandHotkey(
-    hotkeys.RATE_STRETCH_TOOL,
+    'RATE_STRETCH_TOOL',
     (event) => {
       event.preventDefault()
       setActiveTool(activeTool === 'rate-stretch' ? 'select' : 'rate-stretch')
@@ -84,7 +84,7 @@ export function useToolShortcuts(callbacks: TimelineShortcutCallbacks) {
 
   // Tool: Y - Toggle Slip Tool
   useCommandHotkey(
-    hotkeys.SLIP_TOOL,
+    'SLIP_TOOL',
     (event) => {
       event.preventDefault()
       setActiveTool(activeTool === 'slip' ? 'select' : 'slip')
@@ -95,7 +95,7 @@ export function useToolShortcuts(callbacks: TimelineShortcutCallbacks) {
 
   // Tool: U - Toggle Slide Tool
   useCommandHotkey(
-    hotkeys.SLIDE_TOOL,
+    'SLIDE_TOOL',
     (event) => {
       event.preventDefault()
       setActiveTool(activeTool === 'slide' ? 'select' : 'slide')

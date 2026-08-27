@@ -3,7 +3,7 @@
  */
 
 import { useCallback } from 'react'
-import { COMMAND_HOTKEYS as hotkeys, useCommandHotkey } from '@/hooks/use-hotkey-registration'
+import { useCommandHotkey } from '@/hooks/use-hotkey-registration'
 import { usePlaybackStore } from '@/shared/state/playback'
 import { usePreviewBridgeStore } from '@/shared/state/preview-bridge'
 import { useItemsStore } from '../../stores/items-store'
@@ -59,7 +59,7 @@ export function usePlaybackShortcuts(callbacks: TimelineShortcutCallbacks) {
 
   // Playback: Space - Play/Pause
   useCommandHotkey(
-    hotkeys.PLAY_PAUSE,
+    'PLAY_PAUSE',
     (event) => {
       event.preventDefault()
       const { hoveredPanel, playerMethods } = useSourcePlayerStore.getState()
@@ -81,7 +81,7 @@ export function usePlaybackShortcuts(callbacks: TimelineShortcutCallbacks) {
   // Shuttle forward advances through 1x, 2x, and 4x. Ignore browser key
   // repeat so one physical press produces one transport transition.
   useCommandHotkey(
-    hotkeys.SHUTTLE_FORWARD,
+    'SHUTTLE_FORWARD',
     (event) => {
       if (event.repeat) return
       event.preventDefault()
@@ -103,7 +103,7 @@ export function usePlaybackShortcuts(callbacks: TimelineShortcutCallbacks) {
   // Shuttle reverse mirrors forward playback. Browser media stays on a paused visual
   // seek path for negative rates; the Clock still advances at display cadence.
   useCommandHotkey(
-    hotkeys.SHUTTLE_REVERSE,
+    'SHUTTLE_REVERSE',
     (event) => {
       if (event.repeat) return
       event.preventDefault()
@@ -125,7 +125,7 @@ export function usePlaybackShortcuts(callbacks: TimelineShortcutCallbacks) {
   // Pause always owns its binding, including while already paused, so transport
   // routing cannot fall through to another command.
   useCommandHotkey(
-    hotkeys.SHUTTLE_PAUSE,
+    'SHUTTLE_PAUSE',
     (event) => {
       if (event.repeat) return
       event.preventDefault()
@@ -147,7 +147,7 @@ export function usePlaybackShortcuts(callbacks: TimelineShortcutCallbacks) {
 
   // Navigation: Arrow Left - Previous frame
   useCommandHotkey(
-    hotkeys.PREVIOUS_FRAME,
+    'PREVIOUS_FRAME',
     (event) => {
       event.preventDefault()
       const { hoveredPanel, playerMethods } = useSourcePlayerStore.getState()
@@ -164,7 +164,7 @@ export function usePlaybackShortcuts(callbacks: TimelineShortcutCallbacks) {
 
   // Navigation: Arrow Right - Next frame
   useCommandHotkey(
-    hotkeys.NEXT_FRAME,
+    'NEXT_FRAME',
     (event) => {
       event.preventDefault()
       const { hoveredPanel, playerMethods } = useSourcePlayerStore.getState()
@@ -181,7 +181,7 @@ export function usePlaybackShortcuts(callbacks: TimelineShortcutCallbacks) {
 
   // Navigation: Home - Go to start
   useCommandHotkey(
-    hotkeys.GO_TO_START,
+    'GO_TO_START',
     (event) => {
       event.preventDefault()
       const { hoveredPanel, playerMethods } = useSourcePlayerStore.getState()
@@ -197,7 +197,7 @@ export function usePlaybackShortcuts(callbacks: TimelineShortcutCallbacks) {
 
   // Navigation: End - Go to end of timeline (last frame of last item)
   useCommandHotkey(
-    hotkeys.GO_TO_END,
+    'GO_TO_END',
     (event) => {
       event.preventDefault()
       const { hoveredPanel, playerMethods } = useSourcePlayerStore.getState()
@@ -213,7 +213,7 @@ export function usePlaybackShortcuts(callbacks: TimelineShortcutCallbacks) {
 
   // Navigation: Down - Jump to next snap point (clip edge or marker)
   useCommandHotkey(
-    hotkeys.NEXT_SNAP_POINT,
+    'NEXT_SNAP_POINT',
     (event) => {
       event.preventDefault()
       const currentFrame = usePlaybackStore.getState().currentFrame
@@ -228,7 +228,7 @@ export function usePlaybackShortcuts(callbacks: TimelineShortcutCallbacks) {
 
   // Navigation: Up - Jump to previous snap point (clip edge or marker)
   useCommandHotkey(
-    hotkeys.PREVIOUS_SNAP_POINT,
+    'PREVIOUS_SNAP_POINT',
     (event) => {
       event.preventDefault()
       const currentFrame = usePlaybackStore.getState().currentFrame

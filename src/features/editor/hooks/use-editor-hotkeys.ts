@@ -1,4 +1,4 @@
-import { COMMAND_HOTKEYS as hotkeys, useCommandHotkey } from '@/hooks/use-hotkey-registration'
+import { useCommandHotkey } from '@/hooks/use-hotkey-registration'
 import { HOTKEY_OPTIONS } from '@/config/hotkeys'
 import { useEditorStore } from '@/shared/state/editor'
 
@@ -27,7 +27,7 @@ export function useEditorHotkeys(callbacks: EditorHotkeyCallbacks = {}) {
 
   // Save: Cmd/Ctrl+S
   useCommandHotkey(
-    hotkeys.SAVE,
+    'SAVE',
     (event) => {
       event.preventDefault()
       if (callbacks.onSave) {
@@ -40,7 +40,7 @@ export function useEditorHotkeys(callbacks: EditorHotkeyCallbacks = {}) {
 
   // Export: Cmd/Ctrl+Shift+E
   useCommandHotkey(
-    hotkeys.EXPORT,
+    'EXPORT',
     (event) => {
       event.preventDefault()
       if (callbacks.onExport) {
@@ -55,7 +55,7 @@ export function useEditorHotkeys(callbacks: EditorHotkeyCallbacks = {}) {
   // default browser binding is a no-op here but Chrome will still eat it
   // if our listener is in bubbling phase.
   useCommandHotkey(
-    hotkeys.OPEN_SCENE_BROWSER,
+    'OPEN_SCENE_BROWSER',
     (event) => {
       if (!enableLocalUi) return
       event.preventDefault()
@@ -68,7 +68,7 @@ export function useEditorHotkeys(callbacks: EditorHotkeyCallbacks = {}) {
   // Workspace switching: Alt+1 (Edit), Alt+2 (Color), Alt+3 (Motion).
   // WORKSPACE_ANIMATE retains its persisted command id for shortcut migration.
   useCommandHotkey(
-    hotkeys.WORKSPACE_EDIT,
+    'WORKSPACE_EDIT',
     (event) => {
       if (!enableLocalUi) return
       event.preventDefault()
@@ -79,7 +79,7 @@ export function useEditorHotkeys(callbacks: EditorHotkeyCallbacks = {}) {
   )
 
   useCommandHotkey(
-    hotkeys.WORKSPACE_COLOR,
+    'WORKSPACE_COLOR',
     (event) => {
       if (!enableLocalUi) return
       event.preventDefault()
@@ -90,7 +90,7 @@ export function useEditorHotkeys(callbacks: EditorHotkeyCallbacks = {}) {
   )
 
   useCommandHotkey(
-    hotkeys.WORKSPACE_ANIMATE,
+    'WORKSPACE_ANIMATE',
     (event) => {
       if (!enableLocalUi) return
       event.preventDefault()

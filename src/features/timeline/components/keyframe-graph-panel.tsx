@@ -17,7 +17,7 @@ import {
 } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { TFunction } from 'i18next'
-import { COMMAND_HOTKEYS as hotkeys, useCommandHotkey } from '@/hooks/use-hotkey-registration'
+import { useCommandHotkey } from '@/hooks/use-hotkey-registration'
 import { Maximize2, Minimize2, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { useShallow } from 'zustand/react/shallow'
@@ -2747,7 +2747,7 @@ export const KeyframeGraphPanel = memo(function KeyframeGraphPanel({
   // The view-mode toggle is always visible now, so the hotkeys map to it in
   // every context (including the Animate workspace's split-capable toggle).
   useCommandHotkey(
-    hotkeys.KEYFRAME_EDITOR_GRAPH,
+    'KEYFRAME_EDITOR_GRAPH',
     (event) => {
       event.preventDefault()
       setEditorMode('graph')
@@ -2760,7 +2760,7 @@ export const KeyframeGraphPanel = memo(function KeyframeGraphPanel({
   )
 
   useCommandHotkey(
-    hotkeys.KEYFRAME_EDITOR_DOPESHEET,
+    'KEYFRAME_EDITOR_DOPESHEET',
     (event) => {
       event.preventDefault()
       setEditorMode('dopesheet')
@@ -2773,7 +2773,7 @@ export const KeyframeGraphPanel = memo(function KeyframeGraphPanel({
   )
 
   useCommandHotkey(
-    hotkeys.KEYFRAME_EDITOR_SPLIT,
+    'KEYFRAME_EDITOR_SPLIT',
     (event) => {
       event.preventDefault()
       setEditorMode('split')
@@ -2786,7 +2786,7 @@ export const KeyframeGraphPanel = memo(function KeyframeGraphPanel({
   )
 
   useCommandHotkey(
-    hotkeys.COPY,
+    'COPY',
     (event) => {
       event.preventDefault()
       handleCopyKeyframes()
@@ -2799,7 +2799,7 @@ export const KeyframeGraphPanel = memo(function KeyframeGraphPanel({
   )
 
   useCommandHotkey(
-    hotkeys.CUT,
+    'CUT',
     (event) => {
       event.preventDefault()
       handleCutKeyframes()
@@ -2812,7 +2812,7 @@ export const KeyframeGraphPanel = memo(function KeyframeGraphPanel({
   )
 
   useCommandHotkey(
-    hotkeys.PASTE,
+    'PASTE',
     (event) => {
       event.preventDefault()
       handlePasteKeyframes()

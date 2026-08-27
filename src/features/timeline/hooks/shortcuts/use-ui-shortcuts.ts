@@ -2,7 +2,7 @@
  * UI shortcuts: S (snap toggle), Cmd/Ctrl+=/- (zoom), \\ (zoom to fit), Shift+\\ or Cmd/Ctrl+0 (zoom to 100%), Undo/Redo.
  */
 
-import { COMMAND_HOTKEYS as hotkeys, useCommandHotkey } from '@/hooks/use-hotkey-registration'
+import { useCommandHotkey } from '@/hooks/use-hotkey-registration'
 import { useTimelineStore } from '../../stores/timeline-store'
 import { useZoomStore, getZoomTo100Handler } from '../../stores/zoom-store'
 import { usePlaybackStore } from '@/shared/state/playback'
@@ -29,7 +29,7 @@ export function useUIShortcuts(
 
   // History: Cmd/Ctrl+Z - Undo
   useCommandHotkey(
-    hotkeys.UNDO,
+    'UNDO',
     (event) => {
       event.preventDefault()
       useTimelineStore.temporal.getState().undo()
@@ -47,7 +47,7 @@ export function useUIShortcuts(
 
   // History: Cmd/Ctrl+Shift+Z - Redo
   useCommandHotkey(
-    hotkeys.REDO,
+    'REDO',
     (event) => {
       event.preventDefault()
       useTimelineStore.temporal.getState().redo()
@@ -65,7 +65,7 @@ export function useUIShortcuts(
 
   // UI: S - Toggle Snap
   useCommandHotkey(
-    hotkeys.TOGGLE_SNAP,
+    'TOGGLE_SNAP',
     (event) => {
       event.preventDefault()
       toggleSnap()
@@ -76,7 +76,7 @@ export function useUIShortcuts(
 
   // UI: Shift+S - Toggle Canvas (gizmo) Snap — independent from timeline snap.
   useCommandHotkey(
-    hotkeys.TOGGLE_CANVAS_SNAP,
+    'TOGGLE_CANVAS_SNAP',
     (event) => {
       event.preventDefault()
       const s = useSettingsStore.getState()
@@ -90,7 +90,7 @@ export function useUIShortcuts(
 
   // Zoom: Cmd/Ctrl+Equals - Zoom in
   useCommandHotkey(
-    hotkeys.ZOOM_IN,
+    'ZOOM_IN',
     (event) => {
       event.preventDefault()
       zoomIn()
@@ -101,7 +101,7 @@ export function useUIShortcuts(
 
   // Zoom: Cmd/Ctrl+Minus - Zoom out
   useCommandHotkey(
-    hotkeys.ZOOM_OUT,
+    'ZOOM_OUT',
     (event) => {
       event.preventDefault()
       zoomOut()
@@ -112,7 +112,7 @@ export function useUIShortcuts(
 
   // Zoom: Backslash - Zoom to Fit
   useCommandHotkey(
-    hotkeys.ZOOM_TO_FIT,
+    'ZOOM_TO_FIT',
     (event) => {
       event.preventDefault()
       if (callbacks.onZoomToFit) {
@@ -144,7 +144,7 @@ export function useUIShortcuts(
 
   // Zoom: Shift+Backslash - Zoom to 100% centered on cursor (or playhead if cursor not on timeline)
   useCommandHotkey(
-    hotkeys.ZOOM_TO_100,
+    'ZOOM_TO_100',
     (event) => {
       event.preventDefault()
       const { currentFrame, previewFrame } = usePlaybackStore.getState()
@@ -161,7 +161,7 @@ export function useUIShortcuts(
 
   // Zoom: Cmd/Ctrl+0 - Reset timeline zoom to 100%
   useCommandHotkey(
-    hotkeys.ZOOM_TO_100_ALT,
+    'ZOOM_TO_100_ALT',
     (event) => {
       event.preventDefault()
       const { currentFrame, previewFrame } = usePlaybackStore.getState()

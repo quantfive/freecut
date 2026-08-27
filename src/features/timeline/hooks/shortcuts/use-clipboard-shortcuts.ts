@@ -2,7 +2,7 @@
  * Clipboard shortcuts: Ctrl+C (copy), Ctrl+X (cut), Ctrl+V (paste).
  */
 
-import { COMMAND_HOTKEYS as hotkeys, useCommandHotkey } from '@/hooks/use-hotkey-registration'
+import { useCommandHotkey } from '@/hooks/use-hotkey-registration'
 import { toast } from 'sonner'
 import { usePlaybackStore } from '@/shared/state/playback'
 import { useTimelineStore } from '../../stores/timeline-store'
@@ -329,7 +329,7 @@ export function useClipboardShortcuts() {
 
   // Clipboard: Ctrl+C - Copy selected transition properties or timeline items
   useCommandHotkey(
-    hotkeys.COPY,
+    'COPY',
     (event) => {
       // Transcript editor copies the selected words instead of the clip.
       if (handleTranscriptClipboardCopy(false)) {
@@ -376,7 +376,7 @@ export function useClipboardShortcuts() {
 
   // Clipboard: Ctrl+X - Cut selected items immediately
   useCommandHotkey(
-    hotkeys.CUT,
+    'CUT',
     (event) => {
       // Transcript editor cuts the selected words instead of the clip.
       if (handleTranscriptClipboardCopy(true)) {
@@ -403,7 +403,7 @@ export function useClipboardShortcuts() {
 
   // Clipboard: Ctrl+V - Paste transition properties or timeline items
   useCommandHotkey(
-    hotkeys.PASTE,
+    'PASTE',
     (event) => {
       if (selectedTransitionId && transitionClipboard) {
         event.preventDefault()

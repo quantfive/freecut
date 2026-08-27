@@ -2,7 +2,7 @@
  * Marker shortcuts: M (add), Shift+M (remove), [ ] (navigate).
  */
 
-import { COMMAND_HOTKEYS as hotkeys, useCommandHotkey } from '@/hooks/use-hotkey-registration'
+import { useCommandHotkey } from '@/hooks/use-hotkey-registration'
 import { usePlaybackStore } from '@/shared/state/playback'
 import { useMarkersStore } from '../../stores/markers-store'
 import { useSelectionStore } from '@/shared/state/selection'
@@ -15,7 +15,7 @@ export function useMarkerShortcuts() {
 
   // Markers: M - Add marker at playhead
   useCommandHotkey(
-    hotkeys.ADD_MARKER,
+    'ADD_MARKER',
     (event) => {
       event.preventDefault()
       const { previewFrame, currentFrame } = usePlaybackStore.getState()
@@ -27,7 +27,7 @@ export function useMarkerShortcuts() {
 
   // Markers: Shift+M - Remove selected marker
   useCommandHotkey(
-    hotkeys.REMOVE_MARKER,
+    'REMOVE_MARKER',
     (event) => {
       event.preventDefault()
       const id = useSelectionStore.getState().selectedMarkerId
@@ -42,7 +42,7 @@ export function useMarkerShortcuts() {
 
   // Markers: [ - Jump to previous marker
   useCommandHotkey(
-    hotkeys.PREVIOUS_MARKER,
+    'PREVIOUS_MARKER',
     (event) => {
       event.preventDefault()
       const currentMarkers = useMarkersStore.getState().markers
@@ -66,7 +66,7 @@ export function useMarkerShortcuts() {
 
   // Markers: ] - Jump to next marker
   useCommandHotkey(
-    hotkeys.NEXT_MARKER,
+    'NEXT_MARKER',
     (event) => {
       event.preventDefault()
       const currentMarkers = useMarkersStore.getState().markers
