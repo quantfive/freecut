@@ -139,6 +139,21 @@ export interface HotkeyImportResult {
   ignoredCommandCount: number
   remappedCommandCount: number
   sourceVersion: number | null
+  conflictWarnings?: HotkeyConflictWarning[]
+}
+
+export interface HotkeyConflictWarning {
+  code: 'duplicate_binding'
+  command: HotkeyKey
+  binding: string
+  resolution: 'fallback' | 'unassigned'
+  conflictingCommand: HotkeyKey
+}
+
+export interface HotkeyResolution {
+  bindings: HotkeyBindingMap
+  overrides: HotkeyOverrideMap
+  warnings: HotkeyConflictWarning[]
 }
 
 export interface BrowserHostileHotkey {
@@ -405,11 +420,69 @@ function getHotkeyPlatform(platformValue?: string): HotkeyPlatform {
     : 'windows'
 }
 
-export function resolveHotkeys(overrides: HotkeyOverrideMap = {}): HotkeyBindingMap {
-  return {
-    ...HOTKEYS,
-    ...sanitizeHotkeyOverrides(overrides),
+export function resolveHotkeyConfiguration(overrides: unknown = {}): HotkeyResolution {
+  const requested = normalizeHotkeyOverrides(overrides)
+  const commandKeys = Object.keys(HOTKEYS) as HotkeyKey[]
+  const rejectedOverrides = new Set<HotkeyKey>()
+  let bindings = {} as HotkeyBindingMap
+  const effectiveOverrides: HotkeyOverrideMap = {}
+  const warnings: HotkeyConflictWarning[] = []
+
+  // Resolve the complete candidate map before assigning priority. This accepts
+  // valid swaps (for example Space <-> K), while any remaining collision rejects
+  // the participating custom binding(s) back to their unique canonical defaults.
+  // Re-run because one fallback can expose a collision with another custom value.
+  while (true) {
+    bindings = Object.fromEntries(
+      commandKeys.map((key) => [
+        key,
+        !rejectedOverrides.has(key) && key in requested ? requested[key]! : HOTKEYS[key],
+      ]),
+    ) as HotkeyBindingMap
+
+    const conflicts = Object.values(getHotkeyConflictMap(bindings)).filter(
+      (commands) => commands.length > 1,
+    )
+    if (conflicts.length === 0) break
+
+    let rejectedInPass = false
+    for (const commands of conflicts) {
+      for (const key of commands) {
+        if (rejectedOverrides.has(key) || !(key in requested)) continue
+
+        const requestedBinding = requested[key]!
+        if (requestedBinding === HOTKEYS[key]) continue
+
+        const conflictingCommand = commands.find((command) => command !== key)!
+        rejectedOverrides.add(key)
+        warnings.push({
+          code: 'duplicate_binding',
+          command: key,
+          binding: normalizeHotkeyBinding(requestedBinding),
+          resolution: 'fallback',
+          conflictingCommand,
+        })
+        rejectedInPass = true
+      }
+    }
+
+    if (!rejectedInPass) {
+      throw new Error('Default keyboard shortcut bindings must be unique')
+    }
   }
+
+  for (const key of commandKeys) {
+    const binding = bindings[key]
+    if (binding !== HOTKEYS[key]) {
+      effectiveOverrides[key] = binding
+    }
+  }
+
+  return { bindings, overrides: effectiveOverrides, warnings }
+}
+
+export function resolveHotkeys(overrides: HotkeyOverrideMap = {}): HotkeyBindingMap {
+  return resolveHotkeyConfiguration(overrides).bindings
 }
 
 function isExplicitlyUnassignedHotkey(rawBinding: string): boolean {
@@ -531,6 +604,10 @@ export function normalizeHotkeyBinding(binding: string): string {
 }
 
 export function sanitizeHotkeyOverrides(overrides: unknown): HotkeyOverrideMap {
+  return resolveHotkeyConfiguration(overrides).overrides
+}
+
+function normalizeHotkeyOverrides(overrides: unknown): HotkeyOverrideMap {
   if (!overrides || typeof overrides !== 'object') {
     return {}
   }
@@ -785,12 +862,14 @@ function collectImportedOverrides(source: unknown): HotkeyImportResult {
     }
   }
 
+  const resolution = resolveHotkeyConfiguration(normalizedOverrides)
   return {
-    overrides: normalizedOverrides,
+    overrides: resolution.overrides,
     importedCommandCount,
     ignoredCommandCount,
     remappedCommandCount,
     sourceVersion: null,
+    ...(resolution.warnings.length > 0 ? { conflictWarnings: resolution.warnings } : {}),
   }
 }
 
@@ -801,7 +880,14 @@ function migrateLegacyHotkeyImport(result: HotkeyImportResult): HotkeyImportResu
   ) {
     const overrides = { ...result.overrides }
     delete overrides.EDIT_KEYFRAME_ADD
-    return { ...result, overrides }
+    const conflictWarnings = result.conflictWarnings?.filter(
+      (warning) => warning.command !== 'EDIT_KEYFRAME_ADD',
+    )
+    return {
+      ...result,
+      overrides,
+      ...(conflictWarnings && conflictWarnings.length > 0 ? { conflictWarnings } : {}),
+    }
   }
 
   return result
@@ -874,12 +960,14 @@ export function parseHotkeyImportDocument(source: unknown): HotkeyImportResult {
     }
   }
 
+  const resolution = resolveHotkeyConfiguration(importedOverrides)
   return migrateLegacyHotkeyImport({
-    overrides: sanitizeHotkeyOverrides(importedOverrides),
+    overrides: resolution.overrides,
     importedCommandCount,
     ignoredCommandCount,
     remappedCommandCount,
     sourceVersion,
+    ...(resolution.warnings.length > 0 ? { conflictWarnings: resolution.warnings } : {}),
   })
 }
 

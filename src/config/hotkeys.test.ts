@@ -13,6 +13,7 @@ import {
   getHotkeyPrimaryTokenFromEventData,
   normalizeHotkeyBinding,
   parseHotkeyImportDocument,
+  resolveHotkeyConfiguration,
   resolveHotkeys,
   sanitizeHotkeyOverrides,
 } from './hotkeys'
@@ -147,6 +148,52 @@ describe('findHotkeyConflicts', () => {
     })
 
     expect(findHotkeyConflicts(bindings, 'c', 'SELECTION_TOOL')).toEqual(['RAZOR_TOOL'])
+  })
+})
+
+describe('resolveHotkeyConfiguration', () => {
+  it('keeps every runtime binding unique and falls back a conflicting override', () => {
+    const result = resolveHotkeyConfiguration({ EDIT_KEYFRAME_ADD: 'k' })
+
+    expect(result.bindings.SHUTTLE_PAUSE).toBe('k')
+    expect(result.bindings.EDIT_KEYFRAME_ADD).toBe('shift+k')
+    expect(result.overrides).toEqual({})
+    expect(result.warnings).toEqual([
+      {
+        code: 'duplicate_binding',
+        command: 'EDIT_KEYFRAME_ADD',
+        binding: 'k',
+        resolution: 'fallback',
+        conflictingCommand: 'SHUTTLE_PAUSE',
+      },
+    ])
+  })
+
+  it('rejects an earlier override instead of disabling a later default command', () => {
+    const result = resolveHotkeyConfiguration({ PLAY_PAUSE: 'k' })
+
+    expect(result.bindings.PLAY_PAUSE).toBe('space')
+    expect(result.bindings.SHUTTLE_PAUSE).toBe('k')
+    expect(result.overrides).toEqual({})
+    expect(result.warnings).toEqual([
+      expect.objectContaining({
+        command: 'PLAY_PAUSE',
+        conflictingCommand: 'SHUTTLE_PAUSE',
+        resolution: 'fallback',
+      }),
+    ])
+  })
+
+  it('accepts a conflict-free swap regardless of canonical command order', () => {
+    const result = resolveHotkeyConfiguration({
+      PLAY_PAUSE: 'k',
+      SHUTTLE_PAUSE: 'space',
+    })
+
+    expect(result.bindings.PLAY_PAUSE).toBe('k')
+    expect(result.bindings.SHUTTLE_PAUSE).toBe('space')
+    expect(result.overrides).toEqual({ PLAY_PAUSE: 'k', SHUTTLE_PAUSE: 'space' })
+    expect(result.warnings).toEqual([])
   })
 })
 
@@ -384,7 +431,7 @@ describe('parseHotkeyImportDocument', () => {
     })
   })
 
-  it('preserves an intentional plain-K keyframe override in a v2 preset', () => {
+  it('falls back a v2 plain-K keyframe override that conflicts with transport', () => {
     expect(
       parseHotkeyImportDocument({
         schema: HOTKEY_EXPORT_SCHEMA,
@@ -394,13 +441,20 @@ describe('parseHotkeyImportDocument', () => {
         },
       }),
     ).toEqual({
-      overrides: {
-        EDIT_KEYFRAME_ADD: 'k',
-      },
+      overrides: {},
       importedCommandCount: 1,
       ignoredCommandCount: 0,
       remappedCommandCount: 0,
       sourceVersion: 2,
+      conflictWarnings: [
+        {
+          code: 'duplicate_binding',
+          command: 'EDIT_KEYFRAME_ADD',
+          binding: 'k',
+          resolution: 'fallback',
+          conflictingCommand: 'SHUTTLE_PAUSE',
+        },
+      ],
     })
   })
 })

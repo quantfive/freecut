@@ -936,6 +936,11 @@ export function HotkeyEditor() {
     try {
       const contents = await readTextFile(file)
       const importResult = parseHotkeyImportDocument(JSON.parse(contents))
+      if (importResult.conflictWarnings?.length) {
+        toast.warning(
+          `${importResult.conflictWarnings.length} imported shortcut conflict(s) were resolved to keep commands reachable.`,
+        )
+      }
       const changes = buildImportChanges(hotkeys, importResult.overrides)
 
       if (changes.length === 0) {

@@ -3,6 +3,9 @@
 import { createElement } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vite-plus/test'
 import { fireEvent, render, waitFor } from '@testing-library/react'
+import { useHotkeys } from 'react-hotkeys-hook'
+import { HOTKEY_OPTIONS } from '@/config/hotkeys'
+import { useResolvedHotkeys } from '@/features/editor/deps/settings'
 import { useSettingsStore } from '@/features/editor/deps/settings'
 import { useHostTimelineShortcuts } from '@/features/editor/deps/timeline-hooks'
 import { usePlaybackStore } from '@/shared/state/playback'
@@ -10,6 +13,13 @@ import { createHostShortcutSettings, type EditorHost, type HostShortcutSettings 
 import { mountHostShortcutSettings } from './shortcut-settings'
 
 function HostShortcutHarness() {
+  useHostTimelineShortcuts()
+  return null
+}
+
+function ConflictingShortcutHarness({ onAddKeyframe }: { onAddKeyframe: () => void }) {
+  const hotkeys = useResolvedHotkeys()
+  useHotkeys(hotkeys.EDIT_KEYFRAME_ADD, onAddKeyframe, HOTKEY_OPTIONS, [onAddKeyframe])
   useHostTimelineShortcuts()
   return null
 }
@@ -174,5 +184,30 @@ describe('host shortcut settings round trip', () => {
     expect(host.listenerCount()).toBe(1)
     unmount()
     expect(host.listenerCount()).toBe(0)
+  })
+
+  it('resolves a host collision so capture and bubbling listeners fire one intended action', async () => {
+    const harness = createShortcutHost({
+      schema: 'freecut-host-shortcuts',
+      version: 1,
+      overrides: {
+        SHUTTLE_PAUSE: 'k',
+        EDIT_KEYFRAME_ADD: 'k',
+      },
+    })
+    const unmount = await mountHostShortcutSettings(harness.host)
+    const addKeyframe = vi.fn()
+
+    render(createElement(ConflictingShortcutHarness, { onAddKeyframe: addKeyframe }))
+    usePlaybackStore.setState({ isPlaying: true })
+    fireEvent.keyDown(document, { key: 'k', code: 'KeyK' })
+    expect(usePlaybackStore.getState().isPlaying).toBe(false)
+    expect(addKeyframe).not.toHaveBeenCalled()
+
+    fireEvent.keyDown(document, { key: 'K', code: 'KeyK', shiftKey: true })
+    expect(addKeyframe).toHaveBeenCalledTimes(1)
+    expect(harness.notify).toHaveBeenCalledWith(expect.objectContaining({ kind: 'conflict' }))
+
+    unmount()
   })
 })
