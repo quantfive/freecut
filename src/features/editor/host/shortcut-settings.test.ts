@@ -42,6 +42,7 @@ function createShortcutHost(initial: HostShortcutSettings) {
     host,
     setSettings,
     notify,
+    listenerCount: () => listeners.size,
     emit: (settings: HostShortcutSettings) => {
       for (const listener of listeners) listener(settings)
     },
@@ -123,5 +124,55 @@ describe('host shortcut settings round trip', () => {
     expect(useSettingsStore.getState().hotkeyOverrides).toEqual({
       PLAY_PAUSE: 'shift+space',
     })
+  })
+
+  it('keeps late hydration from host A inert after host B replaces it', async () => {
+    let resolveA!: (settings: HostShortcutSettings) => void
+    const hostA = createShortcutHost(createHostShortcutSettings({ SHUTTLE_REVERSE: 'a' }))
+    hostA.host.shortcuts!.getSettings = vi.fn(
+      () => new Promise<HostShortcutSettings>((resolve) => (resolveA = resolve)),
+    )
+    const mountA = mountHostShortcutSettings(hostA.host)
+
+    const hostB = createShortcutHost(createHostShortcutSettings({ SHUTTLE_REVERSE: 'b' }))
+    const unmountB = await mountHostShortcutSettings(hostB.host)
+    resolveA(createHostShortcutSettings({ SHUTTLE_REVERSE: 'a' }))
+    const unmountA = await mountA
+
+    expect(useSettingsStore.getState().hotkeyOverrides).toEqual({ SHUTTLE_REVERSE: 'b' })
+    expect(hostA.listenerCount()).toBe(0)
+    unmountA()
+    expect(useSettingsStore.getState().hotkeyOverrides).toEqual({ SHUTTLE_REVERSE: 'b' })
+    unmountB()
+  })
+
+  it('does not execute a queued write after its host is disposed', async () => {
+    const host = createShortcutHost(createHostShortcutSettings({ SHUTTLE_PAUSE: 'p' }))
+    const unmount = await mountHostShortcutSettings(host.host)
+    const pending = Promise.resolve()
+    host.setSettings.mockReturnValueOnce(pending)
+    useSettingsStore.getState().setHotkeyBinding('SHUTTLE_PAUSE', 'x')
+    unmount()
+    await Promise.resolve()
+    expect(host.setSettings).not.toHaveBeenCalled()
+  })
+
+  it('drops an older outbound write when newer host input arrives', async () => {
+    const host = createShortcutHost(createHostShortcutSettings({ SHUTTLE_PAUSE: 'p' }))
+    const unmount = await mountHostShortcutSettings(host.host)
+    useSettingsStore.getState().setHotkeyBinding('SHUTTLE_PAUSE', 'x')
+    host.emit(createHostShortcutSettings({ SHUTTLE_PAUSE: 'y' }))
+    await Promise.resolve()
+    expect(host.setSettings).not.toHaveBeenCalled()
+    expect(useSettingsStore.getState().hotkeyOverrides).toEqual({ SHUTTLE_PAUSE: 'y' })
+    unmount()
+  })
+
+  it('removes the host subscriber on unmount', async () => {
+    const host = createShortcutHost(createHostShortcutSettings({ SHUTTLE_PAUSE: 'p' }))
+    const unmount = await mountHostShortcutSettings(host.host)
+    expect(host.listenerCount()).toBe(1)
+    unmount()
+    expect(host.listenerCount()).toBe(0)
   })
 })
