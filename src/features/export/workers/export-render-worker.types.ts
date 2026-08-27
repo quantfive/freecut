@@ -17,7 +17,23 @@ export interface ExportRenderCancelRequest {
   requestId: string
 }
 
-export type ExportRenderWorkerRequest = ExportRenderStartRequest | ExportRenderCancelRequest
+export interface ExportRenderCapabilityRequest {
+  type: 'probe'
+  requestId: string
+}
+
+export type ExportRenderWorkerRequest =
+  | ExportRenderStartRequest
+  | ExportRenderCancelRequest
+  | ExportRenderCapabilityRequest
+
+export interface ExportRenderCapabilityResponse {
+  type: 'capabilities'
+  requestId: string
+  capabilities: {
+    offlineAudioContext: boolean
+  }
+}
 
 export interface ExportRenderProgressResponse {
   type: 'progress'
@@ -43,6 +59,7 @@ export interface ExportRenderErrorResponse {
 }
 
 export type ExportRenderWorkerResponse =
+  | ExportRenderCapabilityResponse
   | ExportRenderProgressResponse
   | ExportRenderCompleteResponse
   | ExportRenderCancelledResponse

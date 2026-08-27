@@ -165,18 +165,33 @@ export interface RunRenderOutcome {
 
 type ExportWorkerManager = ReturnType<typeof createManagedWorker<Worker>>
 
+type WorkerRenderOutcome =
+  | { kind: 'complete'; result: ClientRenderResult }
+  | { kind: 'requires-main-thread'; reason: string }
+
+function itemHasAudibleMedia(item: CompositionInputProps['tracks'][number]['items'][number]) {
+  if (item.type !== 'audio' && item.type !== 'video') return false
+  return !('muted' in item) || item.muted !== true
+}
+
+function compositionHasAudibleMedia(composition: CompositionInputProps): boolean {
+  return (composition.tracks ?? []).some(
+    (track) => !track.muted && (track.items ?? []).some(itemHasAudibleMedia),
+  )
+}
+
 function renderInWorker(
   workerManager: ExportWorkerManager,
   clientSettings: ClientExportSettings,
   composition: CompositionInputProps,
   signal: AbortSignal,
   onProgress: (progress: RenderProgress) => void,
-): Promise<ClientRenderResult> {
+): Promise<WorkerRenderOutcome> {
   if (typeof Worker === 'undefined') {
     return Promise.reject(new Error('WORKER_UNAVAILABLE'))
   }
 
-  return new Promise<ClientRenderResult>((resolve, reject) => {
+  return new Promise<WorkerRenderOutcome>((resolve, reject) => {
     if (signal.aborted) {
       reject(new DOMException('Render cancelled', 'AbortError'))
       return
@@ -184,51 +199,90 @@ function renderInWorker(
 
     const requestId = `export-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
     const worker = workerManager.getWorker()
+    let startPosted = false
+    let settled = false
+
+    const cleanup = () => signal.removeEventListener('abort', onAbort)
+    const resolveOnce = (outcome: WorkerRenderOutcome) => {
+      if (settled) return
+      settled = true
+      cleanup()
+      resolve(outcome)
+    }
+    const rejectOnce = (error: Error) => {
+      if (settled) return
+      settled = true
+      cleanup()
+      reject(error)
+    }
 
     const onAbort = () => {
       const cancelMessage: ExportRenderWorkerRequest = { type: 'cancel', requestId }
       worker.postMessage(cancelMessage)
+      rejectOnce(new DOMException('Render cancelled', 'AbortError'))
     }
-    const cleanup = () => signal.removeEventListener('abort', onAbort)
 
     signal.addEventListener('abort', onAbort, { once: true })
 
-    worker.onmessage = (event: MessageEvent<ExportRenderWorkerResponse>) => {
+    const startRender = () => {
+      if (startPosted) return
+      startPosted = true
+      const startMessage: ExportRenderWorkerRequest = {
+        type: 'start',
+        requestId,
+        settings: clientSettings,
+        composition,
+      }
+      worker.postMessage(startMessage)
+    }
+
+    const handleCapabilities = (
+      response: Extract<ExportRenderWorkerResponse, { type: 'capabilities' }>,
+    ) => {
+      if (compositionHasAudibleMedia(composition) && !response.capabilities.offlineAudioContext) {
+        resolveOnce({
+          kind: 'requires-main-thread',
+          reason: 'WORKER_REQUIRES_MAIN_THREAD:audio-context',
+        })
+        return
+      }
+      startRender()
+    }
+
+    const handleWorkerMessage = (event: MessageEvent<ExportRenderWorkerResponse>) => {
+      if (settled || event.data.requestId !== requestId) return
       const response = event.data
-      if (response.requestId !== requestId) return
 
       switch (response.type) {
+        case 'capabilities':
+          handleCapabilities(response)
+          return
         case 'progress':
           onProgress(response.progress)
-          break
+          return
         case 'complete':
-          cleanup()
-          resolve(response.result)
-          break
+          resolveOnce({ kind: 'complete', result: response.result })
+          return
         case 'cancelled':
-          cleanup()
-          reject(new DOMException('Render cancelled', 'AbortError'))
-          break
+          rejectOnce(new DOMException('Render cancelled', 'AbortError'))
+          return
         case 'error':
-          cleanup()
-          reject(new Error(response.error))
-          break
+          if (response.error.startsWith('WORKER_REQUIRES_MAIN_THREAD:')) {
+            resolveOnce({ kind: 'requires-main-thread', reason: response.error })
+          } else {
+            rejectOnce(new Error(response.error))
+          }
       }
     }
+    worker.onmessage = handleWorkerMessage
 
     worker.onerror = (event: ErrorEvent) => {
-      cleanup()
       const location = event.filename ? ` @${event.filename}:${event.lineno}:${event.colno}` : ''
-      reject(new Error(`EXPORT_WORKER_RUNTIME_ERROR:${event.message}${location}`))
+      rejectOnce(new Error(`EXPORT_WORKER_RUNTIME_ERROR:${event.message}${location}`))
     }
 
-    const startMessage: ExportRenderWorkerRequest = {
-      type: 'start',
-      requestId,
-      settings: clientSettings,
-      composition,
-    }
-    worker.postMessage(startMessage)
+    const capabilityMessage: ExportRenderWorkerRequest = { type: 'probe', requestId }
+    worker.postMessage(capabilityMessage)
   })
 }
 
@@ -257,6 +311,17 @@ export async function runRender({
   signal,
   onProgress,
 }: RunRenderArgs): Promise<RunRenderOutcome> {
+  if (typeof Worker === 'undefined') {
+    const result = await renderOnMainThread(
+      exportMode,
+      clientSettings,
+      composition,
+      signal,
+      onProgress,
+    )
+    return { result, renderPath: 'main-thread', fallbackReason: 'WORKER_UNAVAILABLE' }
+  }
+
   const workerManager = createManagedWorker<Worker>({
     createWorker: () =>
       new Worker(new URL('../workers/export-render.worker.ts', import.meta.url), {
@@ -269,26 +334,16 @@ export async function runRender({
   })
 
   try {
-    const result = await renderInWorker(
+    const workerOutcome = await renderInWorker(
       workerManager,
       clientSettings,
       composition,
       signal,
       onProgress,
     )
-    return { result, renderPath: 'worker' }
-  } catch (workerError) {
-    if (workerError instanceof DOMException && workerError.name === 'AbortError') {
-      throw workerError
+    if (workerOutcome.kind === 'complete') {
+      return { result: workerOutcome.result, renderPath: 'worker' }
     }
-
-    const workerMessage = workerError instanceof Error ? workerError.message : String(workerError)
-    const shouldFallbackToMainThread =
-      workerMessage.startsWith('WORKER_REQUIRES_MAIN_THREAD:') ||
-      workerMessage.startsWith('WORKER_UNAVAILABLE') ||
-      workerMessage.startsWith('EXPORT_WORKER_RUNTIME_ERROR:')
-
-    if (!shouldFallbackToMainThread) throw workerError
 
     const result = await renderOnMainThread(
       exportMode,
@@ -297,7 +352,11 @@ export async function runRender({
       signal,
       onProgress,
     )
-    return { result, renderPath: 'main-thread', fallbackReason: workerMessage }
+    return {
+      result,
+      renderPath: 'main-thread',
+      fallbackReason: workerOutcome.reason,
+    }
   } finally {
     workerManager.terminate()
   }

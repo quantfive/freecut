@@ -139,11 +139,10 @@ export class VideoFrameExtractor {
       if (typeof this.videoTrack.canDecode === 'function') {
         const decodable = await this.videoTrack.canDecode()
         if (!decodable) {
-          this.logInitFailure(
-            'Video track is not decodable via mediabunny/WebCodecs',
-            { itemId: this.itemId },
-            'warn',
-          )
+          log.debug('Skipping unsupported mediabunny decode path', {
+            itemId: this.itemId,
+            reason: 'track-not-decodable',
+          })
           return false
         }
       }
@@ -597,7 +596,9 @@ export class VideoFrameExtractor {
       error: error instanceof Error ? error.message : String(error),
     }
 
-    if (shouldWarn && !this.options.logFrameFailuresAsDebug) {
+    if (this.lastFailureKind === 'no-sample') {
+      log.debug('Mediabunny frame extraction fallback', logData)
+    } else if (shouldWarn && !this.options.logFrameFailuresAsDebug) {
       log.warn('Mediabunny frame extraction failed', logData)
     } else {
       log.debug('Mediabunny frame extraction failed', logData)
