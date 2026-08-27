@@ -163,6 +163,22 @@ describe('group-utils', () => {
     }
   })
 
+  it('fails closed when a lane reaches a duplicate track id', () => {
+    const [effectiveTrack] = resolveEffectiveTrackStates([
+      makeTrack({ id: 'duplicate-parent', isGroup: true }),
+      makeTrack({ id: 'duplicate-parent', isGroup: true, locked: false }),
+      makeTrack({ id: 'child', parentTrackId: 'duplicate-parent', solo: true }),
+    ])
+
+    expect(effectiveTrack).toMatchObject({
+      id: 'child',
+      locked: true,
+      muted: true,
+      visible: false,
+      solo: false,
+    })
+  })
+
   it('uses propagated visibility when collecting visible track ids', () => {
     const visibleTrackIds = getVisibleTrackIds([
       makeTrack({ id: 'group-1', isGroup: true, visible: false }),
@@ -180,6 +196,40 @@ describe('group-utils', () => {
 
     expect(pruneEmptyLayerGroups([populatedGroup, emptyGroup, child])).toEqual([
       populatedGroup,
+      child,
+    ])
+  })
+
+  it('retains every transitive group ancestor in input order and prunes empty branches', () => {
+    const outer = makeTrack({ id: 'outer', isGroup: true })
+    const inner = makeTrack({ id: 'inner', isGroup: true, parentTrackId: outer.id })
+    const emptySibling = makeTrack({
+      id: 'empty-sibling',
+      isGroup: true,
+      parentTrackId: outer.id,
+    })
+    const child = makeTrack({ id: 'child', parentTrackId: inner.id })
+
+    expect(pruneEmptyLayerGroups([child, emptySibling, inner, outer])).toEqual([
+      child,
+      inner,
+      outer,
+    ])
+  })
+
+  it('retains malformed group ancestry only when a lane reaches it', () => {
+    const cycleA = makeTrack({ id: 'cycle-a', isGroup: true, parentTrackId: 'cycle-b' })
+    const cycleB = makeTrack({ id: 'cycle-b', isGroup: true, parentTrackId: 'cycle-a' })
+    const unreferencedCycle = makeTrack({
+      id: 'unreferenced-cycle',
+      isGroup: true,
+      parentTrackId: 'unreferenced-cycle',
+    })
+    const child = makeTrack({ id: 'child', parentTrackId: cycleA.id })
+
+    expect(pruneEmptyLayerGroups([cycleA, cycleB, unreferencedCycle, child])).toEqual([
+      cycleA,
+      cycleB,
       child,
     ])
   })

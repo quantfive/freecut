@@ -11,20 +11,54 @@ export function getVisibleTrackIds(tracks: TimelineTrack[]): Set<string> {
   )
 }
 
+function indexLayerGroups(tracks: TimelineTrack[]): Map<string, TimelineTrack[]> {
+  const groupsById = new Map<string, TimelineTrack[]>()
+  for (const track of tracks) {
+    if (!track.isGroup) continue
+    const definitions = groupsById.get(track.id)
+    if (definitions) definitions.push(track)
+    else groupsById.set(track.id, [track])
+  }
+  return groupsById
+}
+
+function collectRetainedGroupIds(
+  tracks: TimelineTrack[],
+  groupsById: Map<string, TimelineTrack[]>,
+): Set<string> {
+  const retainedGroupIds = new Set(
+    tracks.flatMap((track) => (!track.isGroup && track.parentTrackId ? [track.parentTrackId] : [])),
+  )
+  const pendingGroupIds = [...retainedGroupIds]
+
+  for (let index = 0; index < pendingGroupIds.length; index += 1) {
+    const definitions = groupsById.get(pendingGroupIds[index]!) ?? []
+    for (const group of definitions) {
+      const parentId = group.parentTrackId
+      if (!parentId || retainedGroupIds.has(parentId)) continue
+      retainedGroupIds.add(parentId)
+      pendingGroupIds.push(parentId)
+    }
+  }
+
+  return retainedGroupIds
+}
+
 /**
- * Remove layer-group containers that no longer own any child tracks.
+ * Remove layer-group containers that no longer own a descendant lane.
  *
  * A layer group is an organizational timeline container, not an item lane of
- * its own, so retaining an empty container only leaves an orphaned UI row.
+ * its own, so retaining a branch with no lane only leaves orphaned UI rows.
+ * Starting from every non-group lane makes the traversal independent of input
+ * order and retains its complete group ancestry. Missing parents terminate a
+ * branch, while visited IDs make self/multi-node cycles finite. If an ID has
+ * duplicate group definitions, all of them and all of their possible parents
+ * are retained so normalization does not erase the ambiguity that effective
+ * state resolution must handle fail-closed.
  */
 export function pruneEmptyLayerGroups(tracks: TimelineTrack[]): TimelineTrack[] {
-  const populatedGroupIds = new Set(
-    tracks
-      .filter((track) => !track.isGroup && track.parentTrackId)
-      .map((track) => track.parentTrackId as string),
-  )
-
-  const nextTracks = tracks.filter((track) => !track.isGroup || populatedGroupIds.has(track.id))
+  const retainedGroupIds = collectRetainedGroupIds(tracks, indexLayerGroups(tracks))
+  const nextTracks = tracks.filter((track) => !track.isGroup || retainedGroupIds.has(track.id))
   return nextTracks.length === tracks.length ? tracks : nextTracks
 }
 
