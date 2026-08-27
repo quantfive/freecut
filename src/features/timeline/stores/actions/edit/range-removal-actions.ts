@@ -11,9 +11,13 @@ import {
 } from '../../../utils/media-item-frames'
 import { getUniqueLinkedItemAnchorIds } from '../../../utils/linked-items'
 import { isTrackSyncLockEnabled } from '../../../utils/track-sync-lock'
-import { propagateRemovedIntervalsToSyncLockedTracks } from '../sync-lock-ripple'
+import {
+  buildRemovedIntervalPreviewUpdatesForSyncLockedTracks,
+  propagateRemovedIntervalsToSyncLockedTracks,
+} from '../sync-lock-ripple'
 import { applySplitBookkeeping, type SplitResultEntry } from '../split-bookkeeping'
 import {
+  canMutateTimelineItems,
   isLinkedSelectionEnabled,
   isInTransitionOverlap,
   requestPostEditWarmForItems,
@@ -152,6 +156,10 @@ function applyRippleRemoval(ids: string[]): { removedIds: string[]; affectedIds:
   const syncLockResult = propagateRemovedIntervalsToSyncLockedTracks({
     editedTrackIds,
     intervals: removedIntervals,
+    additionalAffectedIds: new Set([
+      ...allRemoveIds,
+      ...filteredUpdates.map((update) => update.id),
+    ]),
   })
 
   const cascadedRemoveIds = Array.from(new Set([...allRemoveIds, ...syncLockResult.removedIds]))
@@ -202,6 +210,148 @@ export function removeTranscriptRangesFromItems(
   return removeTimelineRangesFromItems('REMOVE_TRANSCRIPT_SELECTION', itemIds, rangesByMediaId)
 }
 
+function getRangeRemovalAnchors(
+  itemIds: string[],
+  rangesByMediaId: Record<string, RemoveSilenceRange[]>,
+): TimelineItem[] {
+  const store = useItemsStore.getState()
+  const anchorIds = getUniqueLinkedItemAnchorIds(store.items, itemIds)
+  return anchorIds
+    .map((id) => store.itemById[id])
+    .filter(
+      (item): item is TimelineItem =>
+        item !== undefined &&
+        (item.type === 'video' || item.type === 'audio') &&
+        !!item.mediaId &&
+        (rangesByMediaId[item.mediaId]?.length ?? 0) > 0,
+    )
+}
+
+function getAnchorTimelineIntervals(
+  anchor: TimelineItem,
+  ranges: RemoveSilenceRange[],
+  timelineFps: number,
+): RemoveSilenceRange[] {
+  return ranges.flatMap((range) => {
+    const firstFrame = sourceSecondsToTimelineFrame(anchor, range.start, timelineFps)
+    const secondFrame = sourceSecondsToTimelineFrame(anchor, range.end, timelineFps)
+    const start = Math.max(anchor.from, Math.min(firstFrame, secondFrame))
+    const end = Math.min(anchor.from + anchor.durationInFrames, Math.max(firstFrame, secondFrame))
+    return end > start ? [{ start, end }] : []
+  })
+}
+
+interface RangeRemovalPreflightAccumulator {
+  mutationIds: Set<string>
+  editedTrackIds: Set<string>
+  earliestAffectedFrameByTrackId: Map<string, number>
+  intervals: RemoveSilenceRange[]
+}
+
+function addRangeAnchorPreflight(params: {
+  anchor: TimelineItem
+  ranges: RemoveSilenceRange[]
+  timelineFps: number
+  linkedSelectionEnabled: boolean
+  accumulator: RangeRemovalPreflightAccumulator
+}): void {
+  const items = useItemsStore.getState().items
+  const splitItems = getLinkedItemsForEdit(items, params.anchor.id, params.linkedSelectionEnabled)
+  const anchorIntervals = getAnchorTimelineIntervals(
+    params.anchor,
+    params.ranges,
+    params.timelineFps,
+  )
+  params.accumulator.intervals.push(...anchorIntervals)
+
+  for (const splitItem of splitItems) {
+    params.accumulator.editedTrackIds.add(splitItem.trackId)
+    for (const relatedId of expandIdsWithLinkedItems(
+      items,
+      [splitItem.id],
+      params.linkedSelectionEnabled,
+    )) {
+      params.accumulator.mutationIds.add(relatedId)
+    }
+
+    for (const interval of anchorIntervals) {
+      const previousStart =
+        params.accumulator.earliestAffectedFrameByTrackId.get(splitItem.trackId) ??
+        Number.POSITIVE_INFINITY
+      params.accumulator.earliestAffectedFrameByTrackId.set(
+        splitItem.trackId,
+        Math.min(previousStart, interval.start),
+      )
+    }
+  }
+}
+
+function addRangeDownstreamPreflight(params: {
+  items: TimelineItem[]
+  linkedSelectionEnabled: boolean
+  accumulator: RangeRemovalPreflightAccumulator
+}): void {
+  for (const item of params.items) {
+    const earliestAffectedFrame = params.accumulator.earliestAffectedFrameByTrackId.get(
+      item.trackId,
+    )
+    if (
+      earliestAffectedFrame === undefined ||
+      item.from + item.durationInFrames <= earliestAffectedFrame
+    ) {
+      continue
+    }
+    for (const relatedId of expandIdsWithLinkedItems(
+      params.items,
+      [item.id],
+      params.linkedSelectionEnabled,
+    )) {
+      params.accumulator.mutationIds.add(relatedId)
+    }
+  }
+}
+
+function buildRangeRemovalPreflight(
+  itemIds: string[],
+  rangesByMediaId: Record<string, RemoveSilenceRange[]>,
+): { analyzedItemCount: number; mutationIds: string[] } {
+  const store = useItemsStore.getState()
+  const timelineFps = useTimelineSettingsStore.getState().fps
+  const anchors = getRangeRemovalAnchors(itemIds, rangesByMediaId)
+  if (anchors.length === 0) return { analyzedItemCount: 0, mutationIds: [] }
+
+  const linkedSelectionEnabled = isLinkedSelectionEnabled()
+  const accumulator: RangeRemovalPreflightAccumulator = {
+    mutationIds: new Set<string>(),
+    editedTrackIds: new Set<string>(),
+    earliestAffectedFrameByTrackId: new Map<string, number>(),
+    intervals: [],
+  }
+
+  for (const anchor of anchors) {
+    addRangeAnchorPreflight({
+      anchor,
+      ranges: rangesByMediaId[anchor.mediaId!] ?? [],
+      timelineFps,
+      linkedSelectionEnabled,
+      accumulator,
+    })
+  }
+
+  addRangeDownstreamPreflight({ items: store.items, linkedSelectionEnabled, accumulator })
+
+  const syncLockUpdates = buildRemovedIntervalPreviewUpdatesForSyncLockedTracks({
+    items: store.items,
+    tracks: store.tracks,
+    editedTrackIds: accumulator.editedTrackIds,
+    intervals: accumulator.intervals,
+    additionalAffectedIds: accumulator.mutationIds,
+  })
+  for (const update of syncLockUpdates) accumulator.mutationIds.add(update.id)
+
+  return { analyzedItemCount: anchors.length, mutationIds: Array.from(accumulator.mutationIds) }
+}
+
 function removeTimelineRangesFromItems(
   commandType: 'REMOVE_SILENCE' | 'REMOVE_FILLER_WORDS' | 'REMOVE_TRANSCRIPT_SELECTION',
   itemIds: string[],
@@ -209,6 +359,16 @@ function removeTimelineRangesFromItems(
 ): RemoveSilenceResult {
   if (itemIds.length === 0) {
     return { analyzedItemCount: 0, removedRangeCount: 0, removedItemCount: 0, splitCount: 0 }
+  }
+
+  const preflight = buildRangeRemovalPreflight(itemIds, rangesByMediaId)
+  if (preflight.mutationIds.length === 0 || !canMutateTimelineItems(preflight.mutationIds)) {
+    return {
+      analyzedItemCount: preflight.analyzedItemCount,
+      removedRangeCount: 0,
+      removedItemCount: 0,
+      splitCount: 0,
+    }
   }
 
   return execute(

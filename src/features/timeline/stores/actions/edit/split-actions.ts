@@ -7,7 +7,7 @@ import { execute, applyTransitionRepairs } from '../shared'
 import { getLinkedItemsForEdit } from '../linked-edit'
 import { getUniqueLinkedItemAnchorIds } from '../../../utils/linked-items'
 import { applySplitBookkeeping, type SplitResultEntry } from '../split-bookkeeping'
-import { isLinkedSelectionEnabled, isInTransitionOverlap } from './shared'
+import { canMutateTimelineItems, isLinkedSelectionEnabled, isInTransitionOverlap } from './shared'
 import { emitUiSound } from '@/shared/ui/ui-sound'
 
 export function splitItem(
@@ -16,6 +16,9 @@ export function splitItem(
 ): { leftItem: TimelineItem; rightItem: TimelineItem } | null {
   const items = useItemsStore.getState().items
   const itemsToSplit = getLinkedItemsForEdit(items, id, isLinkedSelectionEnabled())
+  if (itemsToSplit.length === 0 || !canMutateTimelineItems(itemsToSplit.map((item) => item.id))) {
+    return null
+  }
 
   for (const item of itemsToSplit) {
     // Bounds check first — out-of-range splits are a silent no-op (handled by _splitItem),
@@ -77,53 +80,58 @@ export function splitAllItemsAtFrame(splitFrame: number): number {
 
   if (anchorIds.length === 0) return 0
 
+  const splitPlans = anchorIds.flatMap((anchorId) => {
+    const itemsToSplit = getLinkedItemsForEdit(items, anchorId, isLinkedSelectionEnabled())
+    if (itemsToSplit.length === 0) return []
+
+    let blockedByTransition = false
+    const canSplitGroup = itemsToSplit.every((item) => {
+      if (splitFrame <= item.from || splitFrame >= item.from + item.durationInFrames) {
+        return false
+      }
+
+      const relativeFrame = splitFrame - item.from
+      if (isInTransitionOverlap(item.id, relativeFrame, item.durationInFrames)) {
+        blockedByTransition = true
+        return false
+      }
+
+      return true
+    })
+
+    if (!canSplitGroup) {
+      if (blockedByTransition) {
+        toast.warning('Cannot split inside a transition zone')
+        emitUiSound('error')
+      }
+      return []
+    }
+
+    const itemIds = itemsToSplit.map((item) => item.id)
+    return canMutateTimelineItems(itemIds) ? [{ anchorId, itemIds }] : []
+  })
+
+  if (splitPlans.length === 0) return 0
+
   let splitCount = 0
 
   execute(
     'SPLIT_ALL_ITEMS_AT_FRAME',
     () => {
-      for (const anchorId of anchorIds) {
-        const currentItems = useItemsStore.getState().items
-        const itemsToSplit = getLinkedItemsForEdit(
-          currentItems,
-          anchorId,
-          isLinkedSelectionEnabled(),
-        )
-        if (itemsToSplit.length === 0) continue
-
-        let blockedByTransition = false
-        const canSplitGroup = itemsToSplit.every((item) => {
-          if (splitFrame <= item.from || splitFrame >= item.from + item.durationInFrames) {
-            return false
-          }
-
-          const relativeFrame = splitFrame - item.from
-          if (isInTransitionOverlap(item.id, relativeFrame, item.durationInFrames)) {
-            blockedByTransition = true
-            return false
-          }
-
-          return true
-        })
-
-        if (!canSplitGroup) {
-          if (blockedByTransition) {
-            toast.warning('Cannot split inside a transition zone')
-            emitUiSound('error')
-          }
-          continue
-        }
-
-        const splitResults = itemsToSplit
-          .map((item) => ({
-            originalId: item.id,
-            originalLinkedGroupId: item.linkedGroupId,
-            result: useItemsStore.getState()._splitItem(item.id, splitFrame),
-          }))
+      for (const plan of splitPlans) {
+        const splitResults = plan.itemIds
+          .map((itemId) => {
+            const item = useItemsStore.getState().itemById[itemId]
+            return {
+              originalId: itemId,
+              originalLinkedGroupId: item?.linkedGroupId,
+              result: useItemsStore.getState()._splitItem(itemId, splitFrame),
+            }
+          })
           .filter((entry): entry is SplitResultEntry => entry.result !== null)
 
         const anchorResult =
-          splitResults.find((entry) => entry.originalId === anchorId)?.result ?? null
+          splitResults.find((entry) => entry.originalId === plan.anchorId)?.result ?? null
         if (!anchorResult) continue
 
         applySplitBookkeeping(splitResults)
@@ -137,7 +145,7 @@ export function splitAllItemsAtFrame(splitFrame: number): number {
         useTimelineSettingsStore.getState().markDirty()
       }
     },
-    { ids: anchorIds, splitFrame },
+    { ids: splitPlans.map((plan) => plan.anchorId), splitFrame },
   )
 
   if (splitCount > 0) emitUiSound('confirm')
@@ -154,18 +162,19 @@ export function splitItemAtFrames(id: string, splitFrames: number[]): number {
   if (splitFrames.length === 0) return 0
 
   const sorted = [...splitFrames].sort((a, b) => b - a)
+  const itemsToSplit = getLinkedItemsForEdit(
+    useItemsStore.getState().items,
+    id,
+    isLinkedSelectionEnabled(),
+  )
+  if (itemsToSplit.length === 0 || !canMutateTimelineItems(itemsToSplit.map((item) => item.id))) {
+    return 0
+  }
   let splitCount = 0
 
   execute(
     'SPLIT_ITEM_MULTI',
     () => {
-      const itemsToSplit = getLinkedItemsForEdit(
-        useItemsStore.getState().items,
-        id,
-        isLinkedSelectionEnabled(),
-      )
-      if (itemsToSplit.length === 0) return
-
       const rightIdsByOriginalId = new Map(itemsToSplit.map((item) => [item.id, [] as string[]]))
 
       for (const frame of sorted) {

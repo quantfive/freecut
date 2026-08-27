@@ -253,4 +253,129 @@ describe('sync-lock ripple preview helpers', () => {
       linkedGroupId: undefined,
     })
   })
+
+  it('lets track lock win over sync lock in previews and committed propagation', () => {
+    const tracks = [
+      makeTrack({ id: 'edited-track', name: 'Edited', order: 0, kind: 'video' }),
+      makeTrack({
+        id: 'audio-track',
+        name: 'A1',
+        order: 1,
+        kind: 'audio',
+        locked: true,
+        syncLock: true,
+      }),
+    ]
+    const lockedAudio = makeAudioItem({
+      id: 'locked-audio',
+      trackId: 'audio-track',
+      from: 0,
+      durationInFrames: 100,
+      sourceStart: 20,
+      sourceEnd: 120,
+      sourceDuration: 180,
+    })
+
+    expect(
+      buildRemovedIntervalPreviewUpdatesForSyncLockedTracks({
+        items: [lockedAudio],
+        tracks,
+        editedTrackIds: new Set(['edited-track']),
+        intervals: [{ start: 20, end: 40 }],
+      }),
+    ).toEqual([])
+
+    useItemsStore.getState().setTracks(tracks)
+    useItemsStore.getState().setItems([lockedAudio])
+    const result = propagateRemovedIntervalsToSyncLockedTracks({
+      editedTrackIds: new Set(['edited-track']),
+      intervals: [{ start: 20, end: 40 }],
+    })
+
+    expect(result).toEqual({ affectedIds: [], removedIds: [] })
+    expect(useItemsStore.getState().itemById[lockedAudio.id]).toEqual(lockedAudio)
+  })
+
+  it('splits synchronized linked cohorts together and preserves per-side links', () => {
+    useItemsStore
+      .getState()
+      .setTracks([
+        makeTrack({ id: 'edited-track', name: 'Edited', order: 0, kind: 'video' }),
+        makeTrack({ id: 'video-track', name: 'V1', order: 1, kind: 'video' }),
+        makeTrack({ id: 'audio-track', name: 'A1', order: 2, kind: 'audio' }),
+      ])
+    useItemsStore.getState().setItems([
+      makeVideoItem({
+        id: 'linked-video',
+        trackId: 'video-track',
+        linkedGroupId: 'linked-av',
+        sourceStart: 0,
+        sourceEnd: 60,
+        sourceDuration: 120,
+      }),
+      makeAudioItem({
+        id: 'linked-audio',
+        trackId: 'audio-track',
+        linkedGroupId: 'linked-av',
+        sourceStart: 0,
+        sourceEnd: 60,
+        sourceDuration: 120,
+      }),
+    ])
+
+    propagateInsertedGapToSyncLockedTracks({
+      editedTrackIds: new Set(['edited-track']),
+      cutFrame: 20,
+      amount: 10,
+    })
+
+    const videos = useItemsStore
+      .getState()
+      .items.filter((item) => item.trackId === 'video-track')
+      .sort((left, right) => left.from - right.from)
+    const audios = useItemsStore
+      .getState()
+      .items.filter((item) => item.trackId === 'audio-track')
+      .sort((left, right) => left.from - right.from)
+
+    expect(videos.map(({ from, durationInFrames }) => ({ from, durationInFrames }))).toEqual([
+      { from: 0, durationInFrames: 20 },
+      { from: 30, durationInFrames: 40 },
+    ])
+    expect(audios.map(({ from, durationInFrames }) => ({ from, durationInFrames }))).toEqual([
+      { from: 0, durationInFrames: 20 },
+      { from: 30, durationInFrames: 40 },
+    ])
+    expect(videos[0]?.linkedGroupId).toBe(audios[0]?.linkedGroupId)
+    expect(videos[1]?.linkedGroupId).toBe(audios[1]?.linkedGroupId)
+    expect(videos[0]?.linkedGroupId).not.toBe(videos[1]?.linkedGroupId)
+  })
+
+  it('rejects sync-lock mutation when a linked companion is locked', () => {
+    const video = makeVideoItem({
+      id: 'linked-video',
+      trackId: 'video-track',
+      linkedGroupId: 'linked-av',
+    })
+    const audio = makeAudioItem({
+      id: 'linked-audio',
+      trackId: 'audio-track',
+      linkedGroupId: 'linked-av',
+    })
+    useItemsStore
+      .getState()
+      .setTracks([
+        makeTrack({ id: 'edited-track', name: 'Edited', order: 0, kind: 'video' }),
+        makeTrack({ id: 'video-track', name: 'V1', order: 1, kind: 'video' }),
+        makeTrack({ id: 'audio-track', name: 'A1', order: 2, kind: 'audio', locked: true }),
+      ])
+    useItemsStore.getState().setItems([video, audio])
+
+    propagateRemovedIntervalsToSyncLockedTracks({
+      editedTrackIds: new Set(['edited-track']),
+      intervals: [{ start: 20, end: 40 }],
+    })
+
+    expect(useItemsStore.getState().items).toEqual([video, audio])
+  })
 })

@@ -333,13 +333,7 @@ describe('useTimelineTrim', () => {
         .setItems([text, alignedVideo, alignedAudio, earlierVideo, earlierAudio])
       useSelectionStore
         .getState()
-        .selectItems([
-          'text-1',
-          'video-aligned',
-          'audio-aligned',
-          'video-earlier',
-          'audio-earlier',
-        ])
+        .selectItems(['text-1', 'video-aligned', 'audio-aligned', 'video-earlier', 'audio-earlier'])
       const { result } = renderTrimHook(text)
 
       startTrim(result, 'end')
@@ -400,13 +394,7 @@ describe('useTimelineTrim', () => {
         .setItems([text, alignedVideo, alignedAudio, earlierVideo, earlierAudio])
       useSelectionStore
         .getState()
-        .selectItems([
-          'text-1',
-          'video-aligned',
-          'audio-aligned',
-          'video-earlier',
-          'audio-earlier',
-        ])
+        .selectItems(['text-1', 'video-aligned', 'audio-aligned', 'video-earlier', 'audio-earlier'])
       const { result } = renderTrimHook(text)
 
       startTrim(result, 'start')
@@ -464,7 +452,7 @@ describe('useTimelineTrim', () => {
       expect(getItem('video-near').durationInFrames).toBe(60)
     })
 
-    it('leaves a vertically aligned selected companion unchanged on a locked track', () => {
+    it('rejects a vertically aligned trim cohort containing a locked linked companion', () => {
       const text: TextItem = {
         id: 'text-1',
         type: 'text',
@@ -477,21 +465,20 @@ describe('useTimelineTrim', () => {
       }
       const video = makeTimelineVideoItem({ id: 'video-1', linkedGroupId: 'lg-1' })
       const audio = makeTimelineAudioItem({ id: 'audio-1', linkedGroupId: 'lg-1' })
-      useItemsStore
-        .getState()
-        .setTracks([
-          makeTimelineTrack({ id: 'track-v1', name: 'V1', kind: 'video', order: 0 }),
-          makeTimelineTrack({ id: 'track-v2', name: 'V2', kind: 'video', order: 1 }),
-          makeTimelineTrack({
-            id: 'track-a1',
-            name: 'A1',
-            kind: 'audio',
-            order: 2,
-            locked: true,
-          }),
-        ])
+      useItemsStore.getState().setTracks([
+        makeTimelineTrack({ id: 'track-v1', name: 'V1', kind: 'video', order: 0 }),
+        makeTimelineTrack({ id: 'track-v2', name: 'V2', kind: 'video', order: 1 }),
+        makeTimelineTrack({
+          id: 'track-a1',
+          name: 'A1',
+          kind: 'audio',
+          order: 2,
+          locked: true,
+        }),
+      ])
       useItemsStore.getState().setItems([text, video, audio])
       useSelectionStore.getState().selectItems(['text-1', 'video-1', 'audio-1'])
+      const undoDepthBefore = useTimelineCommandStore.getState().undoStack.length
       const { result } = renderTrimHook(text)
 
       startTrim(result, 'end')
@@ -503,9 +490,11 @@ describe('useTimelineTrim', () => {
 
       releaseMouse()
 
-      expect(getItem('text-1').durationInFrames).toBe(50)
-      expect(getItem('video-1').durationInFrames).toBe(50)
+      expect(getItem('text-1').durationInFrames).toBe(60)
+      expect(getItem('video-1').durationInFrames).toBe(60)
       expect(getItem('audio-1').durationInFrames).toBe(60)
+      expect(useTimelineCommandStore.getState().undoStack).toHaveLength(undoDepthBefore)
+      expect(useTimelineSettingsStore.getState().isDirty).toBe(false)
     })
 
     it('uses the tightest neighbor clamp across the vertical trim group', () => {

@@ -8,7 +8,10 @@ import {
   getSynchronizedLinkedCounterpartPairForEdit,
   getSynchronizedLinkedItemsForEdit,
 } from '../linked-edit'
-import { getAttachedCaptionItemIds } from '../../../utils/linked-items'
+import {
+  expandItemIdsWithAttachedCaptions,
+  getAttachedCaptionItemIds,
+} from '../../../utils/linked-items'
 import { computeClampedSlipDelta } from '../../../utils/slip-utils'
 import { computeSlideContinuitySourceDelta } from '../../../utils/slide-utils'
 import { clampSlideDeltaToPreserveKeyframes } from '../../../utils/slide-keyframe-constraints'
@@ -24,11 +27,17 @@ import {
   clampSlipDeltaToPreserveTransitions,
 } from '../../../utils/transition-utils'
 import {
+  buildInsertedGapPreviewUpdatesForSyncLockedTracks,
+  buildRemovedIntervalPreviewUpdatesForSyncLockedTracks,
   propagateInsertedGapToSyncLockedTracks,
   propagateRemovedIntervalsToSyncLockedTracks,
 } from '../sync-lock-ripple'
-import { isLinkedSelectionEnabled, requestPostEditWarmForItems } from './shared'
-import type { TimelineItem } from '@/types/timeline'
+import {
+  canMutateTimelineItems,
+  isLinkedSelectionEnabled,
+  requestPostEditWarmForItems,
+} from './shared'
+import type { TimelineItem, TimelineTrack } from '@/types/timeline'
 
 function keepTightestDelta(requested: number, candidate: number): number {
   return requested < 0 ? Math.max(requested, candidate) : Math.min(requested, candidate)
@@ -71,6 +80,343 @@ function getSynchronizedTrimItems(
   }
 
   return Array.from(synchronizedById.values())
+}
+
+function getClampedSynchronizedTrimAmount(
+  synchronizedItems: TimelineItem[],
+  items: TimelineItem[],
+  handle: 'start' | 'end',
+  trimAmount: number,
+): number {
+  const timelineFps = useTimelineSettingsStore.getState().fps
+  let synchronizedTrimAmount = trimAmount
+  for (const synchronizedItem of synchronizedItems) {
+    const sourceClampedAmount = clampTrimAmount(
+      synchronizedItem,
+      handle,
+      synchronizedTrimAmount,
+      timelineFps,
+    ).clampedAmount
+    synchronizedTrimAmount = keepTightestDelta(
+      synchronizedTrimAmount,
+      clampToAdjacentItems(
+        synchronizedItem,
+        handle,
+        sourceClampedAmount,
+        items,
+        getTransitionLinkedIds(synchronizedItem.id),
+      ),
+    )
+  }
+  return synchronizedTrimAmount
+}
+
+function getAttachedCaptionTrimMutationIds(
+  items: TimelineItem[],
+  synchronizedItems: TimelineItem[],
+  handle: 'start' | 'end',
+  trimAmount: number,
+): string[] {
+  const captionMutationIds = new Set<string>()
+  const itemById = new Map(items.map((item) => [item.id, item] as const))
+
+  for (const clip of synchronizedItems) {
+    if (clip.type === 'text') continue
+    const finalBounds = getFinalTrimmedClipBounds(clip, handle, trimAmount)
+
+    for (const captionId of getAttachedCaptionItemIds(items, clip.id)) {
+      const caption = itemById.get(captionId)
+      if (caption?.type !== 'text') continue
+      if (captionChangesWithinBounds(caption, finalBounds)) captionMutationIds.add(caption.id)
+    }
+  }
+
+  return Array.from(captionMutationIds)
+}
+
+function getFinalTrimmedClipBounds(
+  clip: TimelineItem,
+  handle: 'start' | 'end',
+  trimAmount: number,
+): { start: number; end: number } {
+  return {
+    start: handle === 'start' ? clip.from + trimAmount : clip.from,
+    end:
+      handle === 'start'
+        ? clip.from + clip.durationInFrames
+        : clip.from + clip.durationInFrames + trimAmount,
+  }
+}
+
+function captionChangesWithinBounds(
+  caption: TimelineItem,
+  bounds: { start: number; end: number },
+): boolean {
+  const finalStart = Math.max(caption.from, bounds.start)
+  const finalEnd = Math.min(caption.from + caption.durationInFrames, bounds.end)
+  return (
+    finalEnd <= finalStart ||
+    finalStart !== caption.from ||
+    finalEnd - finalStart !== caption.durationInFrames
+  )
+}
+
+function getSynchronizedTrimMutationIds(
+  id: string,
+  handle: 'start' | 'end',
+  trimAmount: number,
+  options: SynchronizedTrimOptions,
+): string[] {
+  const items = useItemsStore.getState().items
+  const synchronizedItems = getSynchronizedTrimItems(items, id, options)
+  if (!synchronizedItems.some((item) => item.id === id)) return []
+
+  const synchronizedIds = synchronizedItems.map((item) => item.id)
+  const synchronizedTrimAmount = getClampedSynchronizedTrimAmount(
+    synchronizedItems,
+    items,
+    handle,
+    trimAmount,
+  )
+  const shrinksVisibleBounds =
+    handle === 'start' ? synchronizedTrimAmount > 0 : synchronizedTrimAmount < 0
+  return shrinksVisibleBounds
+    ? [
+        ...synchronizedIds,
+        ...getAttachedCaptionTrimMutationIds(
+          items,
+          synchronizedItems,
+          handle,
+          synchronizedTrimAmount,
+        ),
+      ]
+    : synchronizedIds
+}
+
+function getClampedRippleTrimDelta(params: {
+  items: TimelineItem[]
+  synced: TimelineItem[]
+  syncedIds: Set<string>
+  handle: 'start' | 'end'
+  trimDelta: number
+}): number {
+  const transitions = useTransitionsStore.getState().transitions
+  const keyframesByItemId = useKeyframesStore.getState().keyframesByItemId
+  const timelineFps = useTimelineSettingsStore.getState().fps
+  let clampedTrimDelta = params.trimDelta
+  for (const syncedItem of params.synced) {
+    clampedTrimDelta = keepTightestDelta(
+      clampedTrimDelta,
+      clampRippleTrimDeltaToPreserveEditState(
+        syncedItem,
+        params.handle,
+        clampedTrimDelta,
+        params.items,
+        transitions,
+        keyframesByItemId,
+        timelineFps,
+        params.syncedIds,
+        false,
+      ),
+    )
+  }
+  return clampedTrimDelta
+}
+
+function addRippleTrimDownstreamMutationIds(params: {
+  items: TimelineItem[]
+  synced: TimelineItem[]
+  syncedIds: Set<string>
+  mutationIds: Set<string>
+}): void {
+  const transitions = useTransitionsStore.getState().transitions
+  for (const syncedItem of params.synced) {
+    const oldSyncedEnd = syncedItem.from + syncedItem.durationInFrames
+    const transitionNeighbors = new Set(
+      transitions
+        .filter((transition) => transition.leftClipId === syncedItem.id)
+        .map((transition) => transition.rightClipId),
+    )
+    for (const candidate of params.items) {
+      if (params.syncedIds.has(candidate.id) || candidate.trackId !== syncedItem.trackId) continue
+      if (candidate.from >= oldSyncedEnd || transitionNeighbors.has(candidate.id)) {
+        params.mutationIds.add(candidate.id)
+      }
+    }
+  }
+}
+
+function addRippleTrimSyncLockMutationIds(params: {
+  items: TimelineItem[]
+  tracks: TimelineTrack[]
+  synced: TimelineItem[]
+  oldEnd: number
+  shift: number
+  mutationIds: Set<string>
+}): void {
+  const editedTrackIds = new Set(params.synced.map((candidate) => candidate.trackId))
+  const additionalAffectedIds = new Set(params.mutationIds)
+  const previewUpdates =
+    params.shift < 0
+      ? buildRemovedIntervalPreviewUpdatesForSyncLockedTracks({
+          items: params.items,
+          tracks: params.tracks,
+          editedTrackIds,
+          intervals: [{ start: params.oldEnd + params.shift, end: params.oldEnd }],
+          additionalAffectedIds,
+        })
+      : buildInsertedGapPreviewUpdatesForSyncLockedTracks({
+          items: params.items,
+          tracks: params.tracks,
+          editedTrackIds,
+          cutFrame: params.oldEnd,
+          amount: params.shift,
+          additionalAffectedIds,
+        })
+  for (const update of previewUpdates) params.mutationIds.add(update.id)
+}
+
+function getRippleTrimMutationIds(
+  id: string,
+  handle: 'start' | 'end',
+  trimDelta: number,
+): string[] {
+  const store = useItemsStore.getState()
+  const item = store.itemById[id]
+  if (!item) return []
+
+  const synced = getSynchronizedLinkedItemsForEdit(store.items, id, isLinkedSelectionEnabled())
+  const syncedIds = new Set(synced.map((candidate) => candidate.id))
+  const clampedTrimDelta = getClampedRippleTrimDelta({
+    items: store.items,
+    synced,
+    syncedIds,
+    handle,
+    trimDelta,
+  })
+  if (clampedTrimDelta === 0) return []
+
+  const mutationIds = new Set(syncedIds)
+  const shift = handle === 'end' ? clampedTrimDelta : -clampedTrimDelta
+  const oldEnd = item.from + item.durationInFrames
+  addRippleTrimDownstreamMutationIds({ items: store.items, synced, syncedIds, mutationIds })
+
+  const shrinksVisibleBounds = handle === 'start' ? clampedTrimDelta > 0 : clampedTrimDelta < 0
+  if (shrinksVisibleBounds) {
+    for (const captionId of expandItemIdsWithAttachedCaptions(store.items, [...syncedIds])) {
+      mutationIds.add(captionId)
+    }
+  }
+
+  if (shift !== 0) {
+    addRippleTrimSyncLockMutationIds({
+      items: store.items,
+      tracks: store.tracks,
+      synced,
+      oldEnd,
+      shift,
+      mutationIds,
+    })
+  }
+
+  return Array.from(mutationIds)
+}
+
+function getOptionalItem(items: TimelineItem[], itemId: string | null): TimelineItem | null {
+  return itemId ? (items.find((candidate) => candidate.id === itemId) ?? null) : null
+}
+
+function getOptionalSynchronizedCounterpart(params: {
+  items: TimelineItem[]
+  neighborId: string | null
+  trackId: string
+  type: TimelineItem['type']
+}): TimelineItem | null {
+  if (!params.neighborId) return null
+  return getMatchingSynchronizedLinkedCounterpartForEdit(
+    params.items,
+    params.neighborId,
+    params.trackId,
+    params.type,
+    isLinkedSelectionEnabled(),
+  )
+}
+
+function getSlideCounterpartMutationIds(items: TimelineItem[], id: string): string[] {
+  const synchronizedCounterpart =
+    getSynchronizedLinkedItemsForEdit(items, id, isLinkedSelectionEnabled()).find(
+      (candidate) => candidate.id !== id,
+    ) ?? null
+  return synchronizedCounterpart ? [synchronizedCounterpart.id] : []
+}
+
+function getSlideCounterpartNeighborMutationIds(params: {
+  items: TimelineItem[]
+  id: string
+  leftNeighborId: string | null
+  rightNeighborId: string | null
+}): string[] {
+  const synchronizedCounterpart =
+    getSynchronizedLinkedItemsForEdit(params.items, params.id, isLinkedSelectionEnabled()).find(
+      (candidate) => candidate.id !== params.id,
+    ) ?? null
+  if (!synchronizedCounterpart) return []
+
+  const counterpartEnd = synchronizedCounterpart.from + synchronizedCounterpart.durationInFrames
+  const leftCounterpart = getOptionalSynchronizedCounterpart({
+    items: params.items,
+    neighborId: params.leftNeighborId,
+    trackId: synchronizedCounterpart.trackId,
+    type: synchronizedCounterpart.type,
+  })
+  const rightCounterpart = getOptionalSynchronizedCounterpart({
+    items: params.items,
+    neighborId: params.rightNeighborId,
+    trackId: synchronizedCounterpart.trackId,
+    type: synchronizedCounterpart.type,
+  })
+  const cpLeftAdj =
+    params.items.find(
+      (candidate) =>
+        candidate.trackId === synchronizedCounterpart.trackId &&
+        candidate.id !== synchronizedCounterpart.id &&
+        candidate.from + candidate.durationInFrames === synchronizedCounterpart.from,
+    ) ?? leftCounterpart
+  const cpRightAdj =
+    params.items.find(
+      (candidate) =>
+        candidate.trackId === synchronizedCounterpart.trackId &&
+        candidate.id !== synchronizedCounterpart.id &&
+        candidate.from === counterpartEnd,
+    ) ?? rightCounterpart
+  return [cpLeftAdj?.id, cpRightAdj?.id].filter((itemId): itemId is string => !!itemId)
+}
+
+function getSlideMutationIds(
+  id: string,
+  leftNeighborId: string | null,
+  rightNeighborId: string | null,
+): string[] {
+  const items = useItemsStore.getState().items
+  if (!items.some((candidate) => candidate.id === id)) return []
+
+  const mutationIds = new Set<string>([id])
+  const leftNeighbor = getOptionalItem(items, leftNeighborId)
+  const rightNeighbor = getOptionalItem(items, rightNeighborId)
+  if (leftNeighbor) mutationIds.add(leftNeighbor.id)
+  if (rightNeighbor) mutationIds.add(rightNeighbor.id)
+  for (const counterpartId of getSlideCounterpartMutationIds(items, id)) {
+    mutationIds.add(counterpartId)
+  }
+  for (const neighborId of getSlideCounterpartNeighborMutationIds({
+    items,
+    id,
+    leftNeighborId,
+    rightNeighborId,
+  })) {
+    mutationIds.add(neighborId)
+  }
+  return Array.from(mutationIds)
 }
 
 function clampSlideParticipantDelta(
@@ -189,26 +535,12 @@ function applySynchronizedTrim(
   const anchorBefore = synchronizedItems.find((item) => item.id === id)
   if (!anchorBefore) return
 
-  const timelineFps = useTimelineSettingsStore.getState().fps
-  let synchronizedTrimAmount = trimAmount
-  for (const synchronizedItem of synchronizedItems) {
-    const sourceClampedAmount = clampTrimAmount(
-      synchronizedItem,
-      handle,
-      synchronizedTrimAmount,
-      timelineFps,
-    ).clampedAmount
-    synchronizedTrimAmount = keepTightestDelta(
-      synchronizedTrimAmount,
-      clampToAdjacentItems(
-        synchronizedItem,
-        handle,
-        sourceClampedAmount,
-        itemsBefore,
-        getTransitionLinkedIds(synchronizedItem.id),
-      ),
-    )
-  }
+  const synchronizedTrimAmount = getClampedSynchronizedTrimAmount(
+    synchronizedItems,
+    itemsBefore,
+    handle,
+    trimAmount,
+  )
 
   if (handle === 'start') {
     itemsStore._trimItemStart(id, synchronizedTrimAmount, { skipAdjacentClamp: true })
@@ -255,6 +587,9 @@ export function trimItemStart(
   trimAmount: number,
   options: SynchronizedTrimOptions = {},
 ): void {
+  const mutationIds = getSynchronizedTrimMutationIds(id, 'start', trimAmount, options)
+  if (mutationIds.length === 0 || !canMutateTimelineItems(mutationIds)) return
+
   execute(
     'TRIM_ITEM_START',
     () => {
@@ -269,6 +604,9 @@ export function trimItemEnd(
   trimAmount: number,
   options: SynchronizedTrimOptions = {},
 ): void {
+  const mutationIds = getSynchronizedTrimMutationIds(id, 'end', trimAmount, options)
+  if (mutationIds.length === 0 || !canMutateTimelineItems(mutationIds)) return
+
   execute(
     'TRIM_ITEM_END',
     () => {
@@ -285,6 +623,14 @@ export function trimItemBreakingTransition(
   transitionIdsToRemove: string[],
   options: Pick<SynchronizedTrimOptions, 'itemIds'> = {},
 ): void {
+  const mutationIds = new Set(getSynchronizedTrimMutationIds(id, handle, trimAmount, options))
+  for (const transition of useTransitionsStore.getState().transitions) {
+    if (!transitionIdsToRemove.includes(transition.id)) continue
+    mutationIds.add(transition.leftClipId)
+    mutationIds.add(transition.rightClipId)
+  }
+  if (mutationIds.size === 0 || !canMutateTimelineItems(mutationIds)) return
+
   execute(
     handle === 'start' ? 'TRIM_ITEM_START' : 'TRIM_ITEM_END',
     () => {
@@ -321,6 +667,9 @@ export function trimItemBreakingTransition(
  */
 export function rippleTrimItem(id: string, handle: 'start' | 'end', trimDelta: number): void {
   if (trimDelta === 0) return
+  const mutationIds = getRippleTrimMutationIds(id, handle, trimDelta)
+  if (mutationIds.length === 0 || !canMutateTimelineItems(mutationIds)) return
+
   execute(
     'RIPPLE_EDIT',
     () => {
@@ -415,6 +764,7 @@ export function rippleTrimItem(id: string, handle: 'start' | 'end', trimDelta: n
           const result = propagateRemovedIntervalsToSyncLockedTracks({
             editedTrackIds: editedTracks,
             intervals: [interval],
+            additionalAffectedIds: new Set([...syncedIds, ...updates.map((update) => update.id)]),
           })
           lockedAffected = result.affectedIds
           lockedRemoved = result.removedIds
@@ -423,6 +773,7 @@ export function rippleTrimItem(id: string, handle: 'start' | 'end', trimDelta: n
             editedTrackIds: editedTracks,
             cutFrame: insertAt,
             amount: shift,
+            additionalAffectedIds: new Set([...syncedIds, ...updates.map((update) => update.id)]),
           })
           lockedAffected = result.affectedIds
         }
@@ -470,6 +821,23 @@ export function rippleTrimItem(id: string, handle: 'start' | 'end', trimDelta: n
  */
 export function rollingTrimItems(leftId: string, rightId: string, editPointDelta: number): void {
   if (editPointDelta === 0) return
+
+  const items = useItemsStore.getState().items
+  const leftItem = items.find((item) => item.id === leftId)
+  const rightItem = items.find((item) => item.id === rightId)
+  if (!leftItem || !rightItem) return
+  const mutationIds = new Set([leftId, rightId])
+  const counterpartPair = getSynchronizedLinkedCounterpartPairForEdit(
+    items,
+    leftId,
+    rightId,
+    isLinkedSelectionEnabled(),
+  )
+  if (counterpartPair) {
+    mutationIds.add(counterpartPair.leftCounterpart.id)
+    mutationIds.add(counterpartPair.rightCounterpart.id)
+  }
+  if (!canMutateTimelineItems(mutationIds)) return
 
   execute(
     'ROLLING_EDIT',
@@ -576,6 +944,18 @@ export function rollingTrimItems(leftId: string, rightId: string, editPointDelta
 export function slipItem(id: string, slipDelta: number): void {
   if (slipDelta === 0) return
 
+  const items = useItemsStore.getState().items
+  const item = items.find((candidate) => candidate.id === id)
+  if (
+    !item ||
+    (item.type !== 'video' && item.type !== 'audio' && item.type !== 'composition') ||
+    item.sourceEnd === undefined
+  ) {
+    return
+  }
+  const synchronizedItems = getSynchronizedLinkedItemsForEdit(items, id, isLinkedSelectionEnabled())
+  if (!canMutateTimelineItems(synchronizedItems.map((candidate) => candidate.id))) return
+
   execute(
     'SLIP_EDIT',
     () => {
@@ -655,6 +1035,8 @@ export function slideItem(
   rightNeighborId: string | null,
 ): void {
   if (slideDelta === 0) return
+  const mutationIds = getSlideMutationIds(id, leftNeighborId, rightNeighborId)
+  if (mutationIds.length === 0 || !canMutateTimelineItems(mutationIds)) return
 
   execute(
     'SLIDE_EDIT',

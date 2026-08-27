@@ -10,6 +10,7 @@ import { useSnapCalculator } from './use-snap-calculator'
 import { trackPushItems } from '../stores/actions/item-actions'
 import type { SnapTarget } from '../types/drag'
 import { setActiveSnapTargetIfChanged } from '../utils/snap-target-state'
+import { partitionItemMutationIdsByLock } from '../utils/track-lock-invariants'
 
 interface TrackPushState {
   isActive: boolean
@@ -145,16 +146,19 @@ export function useTrackPush(
       e.preventDefault()
       commitPreviewFrameToCurrentFrame()
 
-      const { items: allItems, itemsByTrackId } = useItemsStore.getState()
+      const { items: allItems, itemsByTrackId, tracks } = useItemsStore.getState()
       const cutFrame = item.from
 
-      // Collect ALL items at or after the anchor's position, across every track
-      const shiftedIds = new Set<string>()
-      for (const ti of allItems) {
-        if (ti.from >= cutFrame) {
-          shiftedIds.add(ti.id)
-        }
-      }
+      // Locked tracks stay fixed. If one proposed item belongs to a linked
+      // cohort with a locked companion, reject the gesture instead of
+      // previewing an A/V desync that the commit cannot accept.
+      const mutationPartition = partitionItemMutationIdsByLock({
+        items: allItems,
+        tracks,
+        itemIds: allItems.filter((candidate) => candidate.from >= cutFrame).map(({ id }) => id),
+      })
+      const shiftedIds = new Set(mutationPartition.allowedIds)
+      if (mutationPartition.blockedByLockedLinkedCohort || !shiftedIds.has(item.id)) return
 
       // Compute the tightest gap across all tracks.
       // Per track, find the first shifted item and the last non-shifted item
