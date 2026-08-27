@@ -100,6 +100,10 @@ vi.mock('../utils/media-resolver', () => ({
   resolveMediaUrl: vi.fn().mockResolvedValue('blob:media-1'),
 }))
 
+vi.mock('@/infrastructure/browser/blob-url-manager', () => ({
+  useBlobUrlVersion: () => 0,
+}))
+
 vi.mock('@/features/preview/deps/media-library', () => {
   const useMediaLibraryStore = Object.assign(
     (selector: (state: typeof mediaStoreState) => unknown) => selector(mediaStoreState),

@@ -31,7 +31,10 @@ function releaseDeletedMediaResources(
   const previousMediaById = new Map(previousItems.map((item) => [item.id, item]))
 
   for (const id of ids) {
-    blobUrlManager.release(id)
+    // Deletion is a source retirement, not a consumer release. Advance the
+    // media epoch even when no URL has settled yet so a pending storage read
+    // cannot resurrect the deleted source.
+    blobUrlManager.invalidate(id)
     proxyService.clearProxyKey(id)
     // Drop every Scene Browser cache tied to this media — thumbnail blob
     // URLs (which otherwise pin the JPEG in memory forever), lazy-thumb

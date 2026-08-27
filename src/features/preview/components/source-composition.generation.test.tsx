@@ -238,9 +238,12 @@ describe('SourceComposition source generations', () => {
   it('closes a stale bitmap completion without marking the replacement decoded', async () => {
     const staleBitmap = { close: vi.fn() }
     const bitmapCompletion = deferred<typeof staleBitmap>()
+    const replacementDraw = deferred<boolean>()
     decoderHarness.createImageBitmap.mockReturnValueOnce(bitmapCompletion.promise)
     decoderHarness.extractors.set('blob:old', makeExtractor())
-    decoderHarness.extractors.set('blob:new', makeExtractor(Promise.resolve(false)))
+    const replacementExtractor = makeExtractor()
+    replacementExtractor.drawFrame.mockReturnValue(replacementDraw.promise)
+    decoderHarness.extractors.set('blob:new', replacementExtractor)
 
     const rendered = render(
       <SourceComposition mediaId="same-media" src="blob:old" mediaType="video" />,
@@ -257,6 +260,36 @@ describe('SourceComposition source generations', () => {
     expect(staleBitmap.close).toHaveBeenCalledOnce()
     expect(visibleContext.drawImage).toHaveBeenCalledTimes(drawCountBeforeReset)
     expect(visibleCanvas.style.display).toBe('none')
+    await waitFor(() => expect(replacementExtractor.drawFrame).toHaveBeenCalledOnce())
+    expect(visibleCanvas.style.display).toBe('none')
+
+    replacementDraw.resolve(false)
+    await flushDeferredWork()
+  })
+
+  it('closes a deferred bitmap after unmount without repainting the retired canvas', async () => {
+    const staleBitmap = { close: vi.fn() }
+    const bitmapCompletion = deferred<typeof staleBitmap>()
+    decoderHarness.createImageBitmap.mockReturnValueOnce(bitmapCompletion.promise)
+    decoderHarness.extractors.set('blob:old', makeExtractor())
+
+    const rendered = render(
+      <SourceComposition mediaId="same-media" src="blob:old" mediaType="video" />,
+    )
+    await waitFor(() => expect(decoderHarness.createImageBitmap).toHaveBeenCalledOnce())
+    const visibleCanvas = rendered.container.querySelector('canvas')!
+    const visibleContext = getCanvasContext(visibleCanvas)
+    const drawCountBeforeUnmount = visibleContext.drawImage.mock.calls.length
+    const clearCountBeforeUnmount = visibleContext.clearRect.mock.calls.length
+
+    rendered.unmount()
+    expect(visibleContext.clearRect.mock.calls.length).toBeGreaterThan(clearCountBeforeUnmount)
+
+    bitmapCompletion.resolve(staleBitmap)
+    await flushDeferredWork()
+
+    expect(staleBitmap.close).toHaveBeenCalledOnce()
+    expect(visibleContext.drawImage).toHaveBeenCalledTimes(drawCountBeforeUnmount)
   })
 
   it('ignores an in-flight shared-cache completion from the old source', async () => {

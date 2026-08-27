@@ -410,4 +410,49 @@ describe('useClipboardShortcuts paste placement', () => {
     expect(useTimelineStore.getState().tracks[0]?.id).toBe(TARGET_TRACK.id)
     expect(useTimelineStore.getState().items).toEqual([])
   })
+
+  it('creates and atomically undoes a missing linked audio lane after a video collision', () => {
+    useTimelineStore.setState({
+      tracks: [TARGET_TRACK],
+      items: [makeVideoItem({ id: 'occupied-video', from: 200 })],
+    })
+    useClipboardStore.getState().copyItems(
+      [
+        makeVideoItem({
+          id: 'linked-video',
+          trackId: 'missing-video',
+          linkedGroupId: 'source-pair',
+        }),
+        makeAudioItem({
+          id: 'linked-audio',
+          trackId: 'missing-audio',
+          linkedGroupId: 'source-pair',
+        }),
+      ],
+      0,
+      'copy',
+    )
+
+    render(<ShortcutHarness />)
+    act(() => getPasteCallback()({ preventDefault: vi.fn() }))
+
+    const pasted = useTimelineStore.getState().items.filter((item) => item.id !== 'occupied-video')
+    expect(pasted).toHaveLength(2)
+    expect(pasted.map((item) => item.from)).toEqual([210, 210])
+    expect(pasted[0]!.linkedGroupId).toBeTruthy()
+    expect(pasted[1]!.linkedGroupId).toBe(pasted[0]!.linkedGroupId)
+    expect(useTimelineStore.getState().tracks.map((track) => track.kind)).toEqual([
+      'video',
+      'audio',
+    ])
+    expect(useTimelineCommandStore.getState().undoStack).toHaveLength(1)
+
+    act(() => useTimelineCommandStore.getState().undo())
+    expect(useTimelineStore.getState().tracks).toHaveLength(1)
+    expect(useTimelineStore.getState().tracks[0]).toMatchObject({
+      id: TARGET_TRACK.id,
+      kind: 'video',
+    })
+    expect(useTimelineStore.getState().items.map((item) => item.id)).toEqual(['occupied-video'])
+  })
 })

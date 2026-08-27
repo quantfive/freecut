@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback, useMemo, memo } from 'react'
+import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo, memo } from 'react'
 import {
   X,
   Play,
@@ -70,6 +70,7 @@ import {
 import { formatTimecodeCompact } from '@/shared/utils/time-utils'
 import { getPreviewPixelSnapSize } from '../utils/preview-pixel-snap'
 import type { TimelineTrack } from '@/types/timeline'
+import { useBlobUrlVersion } from '@/infrastructure/browser/blob-url-manager'
 
 interface SourceMonitorProps {
   mediaId: string
@@ -205,6 +206,7 @@ const SourceMonitorContent = memo(function SourceMonitorContent({
 }: SourceMonitorProps) {
   const [blobUrl, setBlobUrl] = useState<string>('')
   const media = useMediaLibraryStore((s) => s.mediaById[mediaId])
+  const blobUrlVersion = useBlobUrlVersion()
 
   // Sync current media ID into source player store for I/O points
   useEffect(() => {
@@ -228,8 +230,14 @@ const SourceMonitorContent = memo(function SourceMonitorContent({
     }
   }, [media, onClose])
 
-  // Resolve the original source URL once. SourceComposition can swap to a
-  // ready proxy for video preview without losing the original fallback URL.
+  // Blank the retired source in layout so a same-ID relink cannot leave its
+  // canvas visible while the replacement URL resolves.
+  useLayoutEffect(() => {
+    setBlobUrl('')
+  }, [blobUrlVersion, mediaId])
+
+  // SourceComposition can swap to a ready proxy for video preview without
+  // losing the original fallback URL. Blob invalidation retries the same ID.
   useEffect(() => {
     let cancelled = false
     resolveMediaUrl(mediaId)
@@ -242,7 +250,7 @@ const SourceMonitorContent = memo(function SourceMonitorContent({
     return () => {
       cancelled = true
     }
-  }, [mediaId])
+  }, [blobUrlVersion, mediaId])
 
   if (!media) return null
 
