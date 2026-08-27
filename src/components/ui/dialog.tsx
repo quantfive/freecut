@@ -7,8 +7,6 @@ import { cn } from '@/shared/ui/cn'
 
 const Dialog = DialogPrimitive.Root
 
-const DialogPortal = DialogPrimitive.Portal
-
 const DialogOverlay = React.forwardRef<
   React.ElementRef<typeof DialogPrimitive.Overlay>,
   React.ComponentPropsWithoutRef<typeof DialogPrimitive.Overlay>
@@ -28,16 +26,18 @@ interface DialogContentProps extends React.ComponentPropsWithoutRef<
   typeof DialogPrimitive.Content
 > {
   hideCloseButton?: boolean
+  container?: HTMLElement | null
+  overlayClassName?: string
 }
 
 const DialogContent = React.forwardRef<
   React.ElementRef<typeof DialogPrimitive.Content>,
   DialogContentProps
->(({ className, children, hideCloseButton, ...props }, ref) => {
+>(({ className, children, hideCloseButton, container, overlayClassName, ...props }, ref) => {
   const { t } = useTranslation()
   return (
-    <DialogPortal>
-      <DialogOverlay />
+    <DialogPrimitive.Portal container={container ?? undefined}>
+      <DialogOverlay className={overlayClassName} />
       <DialogPrimitive.Content
         ref={ref}
         className={cn(
@@ -54,7 +54,7 @@ const DialogContent = React.forwardRef<
           </DialogPrimitive.Close>
         )}
       </DialogPrimitive.Content>
-    </DialogPortal>
+    </DialogPrimitive.Portal>
   )
 })
 DialogContent.displayName = DialogPrimitive.Content.displayName

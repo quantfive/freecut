@@ -196,7 +196,11 @@ const AudioEqPanelSurface = memo(function AudioEqPanelSurface({
   )
 })
 
-export const AudioMeterPanel = memo(function AudioMeterPanel() {
+export const AudioMeterPanel = memo(function AudioMeterPanel({
+  mobileDrawer = false,
+}: {
+  mobileDrawer?: boolean
+}) {
   const { t } = useTranslation()
   const [panelMode, setPanelMode] = useState<PanelMode>('meter')
   const [eqPanelTarget, setEqPanelTarget] = useState<EqPanelTarget | null>(null)
@@ -215,8 +219,7 @@ export const AudioMeterPanel = memo(function AudioMeterPanel() {
   const audioGraphItems = useItemsStore(
     useShallow((state) =>
       state.items.filter(
-        (item) =>
-          item.type === 'audio' || item.type === 'video' || item.type === 'composition',
+        (item) => item.type === 'audio' || item.type === 'video' || item.type === 'composition',
       ),
     ),
   )
@@ -1112,8 +1115,9 @@ export const AudioMeterPanel = memo(function AudioMeterPanel() {
       {floatingMixer}
       <aside
         className="panel-bg border-l border-border flex h-full flex-col overflow-hidden"
-        style={{ width: EDITOR_LAYOUT_CSS_VALUES.timelineMeterWidth }}
+        style={{ width: mobileDrawer ? '100%' : EDITOR_LAYOUT_CSS_VALUES.timelineMeterWidth }}
         aria-label={t('editor.audioMeters.audioMeter')}
+        data-audio-meter-panel={mobileDrawer ? 'drawer' : 'inline'}
       >
         <div
           className="flex min-w-0 items-center justify-between gap-1 border-b border-border bg-secondary/20 px-1.5"

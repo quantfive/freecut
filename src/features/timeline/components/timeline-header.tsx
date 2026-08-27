@@ -13,6 +13,7 @@ import {
   ZoomIn,
   ZoomOut,
   Maximize2,
+  MoreHorizontal,
   Magnet,
   Scissors,
   Gauge,
@@ -43,6 +44,7 @@ import { useResolvedHotkeys } from '@/features/timeline/deps/settings'
 import { MicRecordControl } from './mic-record-control'
 
 interface TimelineHeaderProps {
+  compact?: boolean
   onZoomChange?: (newZoom: number) => void
   onZoomIn?: () => void
   onZoomOut?: () => void
@@ -446,6 +448,7 @@ const TimelineZoomControls = memo(function TimelineZoomControls({
  */
 // fallow-ignore-next-line complexity
 export const TimelineHeader = memo(function TimelineHeader({
+  compact = false,
   onZoomChange,
   onZoomIn,
   onZoomOut,
@@ -529,13 +532,17 @@ export const TimelineHeader = memo(function TimelineHeader({
 
   return (
     <div
-      className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 border-b border-border px-3"
+      className={`grid items-center border-b border-border ${
+        compact
+          ? 'grid-cols-[minmax(0,1fr)_auto_auto] gap-1 px-1'
+          : 'grid-cols-[auto_minmax(0,1fr)_auto] gap-3 px-3'
+      }`}
       style={{ height: EDITOR_LAYOUT_CSS_VALUES.timelineHeaderHeight }}
       role="toolbar"
       aria-label={t('timeline.header.controls')}
     >
       {/* Left: Title */}
-      <div className="flex min-w-0 items-center gap-2.5">
+      <div className={compact ? 'hidden' : 'flex min-w-0 items-center gap-2.5'}>
         <h2 className="text-xs font-semibold tracking-wide uppercase text-muted-foreground flex items-center gap-2">
           <Film className="w-3 h-3" />
           {t('timeline.header.title')}
@@ -543,7 +550,12 @@ export const TimelineHeader = memo(function TimelineHeader({
       </div>
 
       {/* Middle: Timeline Controls */}
-      <div className="min-w-0 overflow-x-auto overflow-y-hidden">
+      <div
+        className={
+          compact ? 'min-w-0 overflow-hidden' : 'min-w-0 overflow-x-auto overflow-y-hidden'
+        }
+        data-compact-timeline-controls={compact ? '' : undefined}
+      >
         <div className="flex w-max min-w-full items-center justify-center gap-2.5">
           {/* Timeline Tools */}
           <div className="flex items-center gap-1">
@@ -896,6 +908,58 @@ export const TimelineHeader = memo(function TimelineHeader({
         onZoomOut={onZoomOut}
         onZoomToFit={onZoomToFit}
       />
+
+      {compact && (
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="ghost" size="icon" style={btnSize} aria-label="More timeline actions">
+              <MoreHorizontal className="h-3.5 w-3.5" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            {!hostMode && (
+              <>
+                <DropdownMenuItem onSelect={handleUndo} disabled={!canUndo}>
+                  <Undo2 className="h-4 w-4" />
+                  {t('timeline.header.undo')}
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={handleRedo} disabled={!canRedo}>
+                  <Redo2 className="h-4 w-4" />
+                  {t('timeline.header.redo')}
+                </DropdownMenuItem>
+              </>
+            )}
+            <DropdownMenuItem onSelect={toggleSnap}>
+              <Magnet className="h-4 w-4" />
+              {snapEnabled
+                ? t('timeline.header.disableSnapping')
+                : t('timeline.header.enableSnapping')}
+            </DropdownMenuItem>
+            <DropdownMenuItem onSelect={toggleAudioSkimming}>
+              <Volume2 className="h-4 w-4" />
+              {audioSkimmingEnabled
+                ? t('timeline.header.disableAudioSkimming')
+                : t('timeline.header.enableAudioSkimming')}
+            </DropdownMenuItem>
+            {!hostMode && (
+              <DropdownMenuItem onSelect={toggleEditKeyframePanel}>
+                <Diamond className="h-4 w-4" />
+                {t(
+                  inlineKeyframesOpen
+                    ? 'timeline.keyframeEditor.editLane.hide'
+                    : 'timeline.keyframeEditor.editLane.show',
+                )}
+              </DropdownMenuItem>
+            )}
+            <DropdownMenuItem onSelect={() => setLinkedSelectionEnabled(!linkedSelectionEnabled)}>
+              <Link2 className="h-4 w-4" />
+              {linkedSelectionEnabled
+                ? t('timeline.header.disableLinkedSelection')
+                : t('timeline.header.enableLinkedSelection')}
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      )}
     </div>
   )
 })

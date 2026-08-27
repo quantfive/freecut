@@ -83,6 +83,10 @@ body.canvas-translate-cursor-not-allowed * {
   }
 }
 
+[data-compact-timeline-controls] > div > :not(:first-child) {
+  display: none;
+}
+
 @layer base {
   * {
     @apply border-border;

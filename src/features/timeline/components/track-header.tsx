@@ -19,6 +19,7 @@ import { isTrackSyncLockActive } from '../utils/track-sync-lock'
 import { useEditorStore } from '@/shared/state/editor'
 
 interface TrackHeaderProps {
+  compact?: boolean
   track: TimelineTrack
   isActive: boolean
   isSelected: boolean
@@ -43,6 +44,7 @@ interface TrackHeaderProps {
 function areTrackHeaderPropsEqual(prev: TrackHeaderProps, next: TrackHeaderProps): boolean {
   return (
     prev.track === next.track &&
+    prev.compact === next.compact &&
     prev.isActive === next.isActive &&
     prev.isSelected === next.isSelected &&
     prev.canAddTrack === next.canAddTrack &&
@@ -63,6 +65,7 @@ function areTrackHeaderPropsEqual(prev: TrackHeaderProps, next: TrackHeaderProps
  */
 // fallow-ignore-next-line complexity
 export const TrackHeader = memo(function TrackHeader({
+  compact = false,
   track,
   isActive,
   isSelected,
@@ -98,8 +101,9 @@ export const TrackHeader = memo(function TrackHeader({
           style={{
             height: `${track.height}px`,
             contentVisibility: 'auto',
-            containIntrinsicSize: `${TIMELINE_SIDEBAR_WIDTH}px ${track.height}px`,
+            containIntrinsicSize: `${compact ? 80 : TIMELINE_SIDEBAR_WIDTH}px ${track.height}px`,
           }}
+          data-track-control-strip={compact ? 'compact' : 'desktop'}
           data-track-id={track.id}
           data-track-disabled={trackDisabled ? 'true' : undefined}
         >
@@ -154,33 +158,35 @@ export const TrackHeader = memo(function TrackHeader({
               </Button>
 
               {/* Solo Button */}
-              <Button
-                variant="ghost"
-                size="icon"
-                className="rounded hover:bg-secondary"
-                style={{
-                  width: EDITOR_LAYOUT_CSS_VALUES.toolbarButtonSize,
-                  height: EDITOR_LAYOUT_CSS_VALUES.toolbarButtonSize,
-                }}
-                onClick={(e) => {
-                  e.stopPropagation()
-                  onToggleSolo()
-                }}
-                onMouseDown={(e) => e.stopPropagation()}
-                disabled={hostMode}
-                aria-label={
-                  track.solo
-                    ? t('timeline.trackHeader.unsoloTrack')
-                    : t('timeline.trackHeader.soloTrack')
-                }
-                data-tooltip={
-                  track.solo
-                    ? t('timeline.trackHeader.unsoloTrack')
-                    : t('timeline.trackHeader.soloTrack')
-                }
-              >
-                <Radio className={`w-3 h-3 ${track.solo ? 'text-primary' : ''}`} />
-              </Button>
+              {!compact && (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="rounded hover:bg-secondary"
+                  style={{
+                    width: EDITOR_LAYOUT_CSS_VALUES.toolbarButtonSize,
+                    height: EDITOR_LAYOUT_CSS_VALUES.toolbarButtonSize,
+                  }}
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    onToggleSolo()
+                  }}
+                  onMouseDown={(e) => e.stopPropagation()}
+                  disabled={hostMode}
+                  aria-label={
+                    track.solo
+                      ? t('timeline.trackHeader.unsoloTrack')
+                      : t('timeline.trackHeader.soloTrack')
+                  }
+                  data-tooltip={
+                    track.solo
+                      ? t('timeline.trackHeader.unsoloTrack')
+                      : t('timeline.trackHeader.soloTrack')
+                  }
+                >
+                  <Radio className={`w-3 h-3 ${track.solo ? 'text-primary' : ''}`} />
+                </Button>
+              )}
 
               {/* Lock Button */}
               <Button
@@ -211,62 +217,68 @@ export const TrackHeader = memo(function TrackHeader({
                 <Lock className={`w-3 h-3 ${track.locked ? 'text-primary' : 'opacity-70'}`} />
               </Button>
 
-              <Button
-                variant="ghost"
-                size="icon"
-                className="rounded hover:bg-secondary"
-                style={{
-                  width: EDITOR_LAYOUT_CSS_VALUES.toolbarButtonSize,
-                  height: EDITOR_LAYOUT_CSS_VALUES.toolbarButtonSize,
-                }}
-                onClick={(e) => {
-                  e.stopPropagation()
-                  onToggleSyncLock()
-                }}
-                onMouseDown={(e) => e.stopPropagation()}
-                disabled={hostMode}
-                aria-label={
-                  syncLockEnabled
-                    ? t('timeline.trackHeader.disableSyncLock')
-                    : t('timeline.trackHeader.enableSyncLock')
-                }
-                data-tooltip={
-                  syncLockEnabled
-                    ? t('timeline.trackHeader.disableSyncLock')
-                    : t('timeline.trackHeader.enableSyncLock')
-                }
-              >
-                <Link2 className={`w-3 h-3 ${syncLockEnabled ? 'text-primary' : 'opacity-70'}`} />
-              </Button>
+              {!compact && (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="rounded hover:bg-secondary"
+                  style={{
+                    width: EDITOR_LAYOUT_CSS_VALUES.toolbarButtonSize,
+                    height: EDITOR_LAYOUT_CSS_VALUES.toolbarButtonSize,
+                  }}
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    onToggleSyncLock()
+                  }}
+                  onMouseDown={(e) => e.stopPropagation()}
+                  disabled={hostMode}
+                  aria-label={
+                    syncLockEnabled
+                      ? t('timeline.trackHeader.disableSyncLock')
+                      : t('timeline.trackHeader.enableSyncLock')
+                  }
+                  data-tooltip={
+                    syncLockEnabled
+                      ? t('timeline.trackHeader.disableSyncLock')
+                      : t('timeline.trackHeader.enableSyncLock')
+                  }
+                >
+                  <Link2 className={`w-3 h-3 ${syncLockEnabled ? 'text-primary' : 'opacity-70'}`} />
+                </Button>
+              )}
 
-              <Button
-                variant="ghost"
-                size="icon"
-                className="rounded hover:bg-secondary"
-                style={{
-                  width: EDITOR_LAYOUT_CSS_VALUES.toolbarButtonSize,
-                  height: EDITOR_LAYOUT_CSS_VALUES.toolbarButtonSize,
-                }}
-                onClick={(e) => {
-                  e.stopPropagation()
-                  onCloseGaps?.()
-                }}
-                onMouseDown={(e) => e.stopPropagation()}
-                disabled={hostMode}
-                aria-label={t('timeline.trackHeader.closeAllGaps')}
-                data-tooltip={t('timeline.trackHeader.closeAllGaps')}
-              >
-                <FoldHorizontal className="w-3 h-3" />
-              </Button>
+              {!compact && (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="rounded hover:bg-secondary"
+                  style={{
+                    width: EDITOR_LAYOUT_CSS_VALUES.toolbarButtonSize,
+                    height: EDITOR_LAYOUT_CSS_VALUES.toolbarButtonSize,
+                  }}
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    onCloseGaps?.()
+                  }}
+                  onMouseDown={(e) => e.stopPropagation()}
+                  disabled={hostMode}
+                  aria-label={t('timeline.trackHeader.closeAllGaps')}
+                  data-tooltip={t('timeline.trackHeader.closeAllGaps')}
+                >
+                  <FoldHorizontal className="w-3 h-3" />
+                </Button>
+              )}
             </div>
 
             <div className="flex min-h-0 flex-1 items-center gap-1.5 overflow-hidden px-1.5">
               <span className="min-w-0 truncate text-xs font-semibold leading-none font-mono">
                 {track.name}
               </span>
-              <span className="shrink-0 text-[10px] leading-none text-muted-foreground">
-                {itemCountLabel}
-              </span>
+              {!compact && (
+                <span className="shrink-0 text-[10px] leading-none text-muted-foreground">
+                  {itemCountLabel}
+                </span>
+              )}
             </div>
           </div>
         </div>

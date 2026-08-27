@@ -32,6 +32,7 @@ interface PreviewAreaProps {
   }
   durationInFrames?: number
   preferProjectStoreMetadata?: boolean
+  compact?: boolean
 }
 
 type PreviewChrome = 'edit' | 'color'
@@ -181,6 +182,7 @@ export const PreviewArea = memo(function PreviewArea({
   project,
   durationInFrames,
   preferProjectStoreMetadata = true,
+  compact = false,
 }: PreviewAreaProps) {
   const { t } = useTranslation()
   const previewContainerRef = useRef<HTMLDivElement>(null)
@@ -507,7 +509,8 @@ export const PreviewArea = memo(function PreviewArea({
     }
   }, [])
 
-  const hasSidePanels = !!sourcePreviewMediaId || scopesPanelOpen
+  const showInlineSourceMonitor = !!sourcePreviewMediaId && !compact
+  const hasSidePanels = showInlineSourceMonitor || scopesPanelOpen
   const previewChrome: PreviewChrome = workspace === 'color' ? 'color' : 'edit'
   const programPanelPercent = Math.max(
     0,
@@ -521,7 +524,7 @@ export const PreviewArea = memo(function PreviewArea({
       role="region"
       aria-label="Preview area"
     >
-      {sourcePreviewMediaId && (
+      {showInlineSourceMonitor && sourcePreviewMediaId && (
         <>
           <InteractionLockRegion
             locked={isMaskEditingActive}
@@ -756,3 +759,19 @@ export const PreviewArea = memo(function PreviewArea({
     </div>
   )
 })
+
+export function MobileSourceMonitor({
+  mediaId,
+  onClose,
+}: {
+  mediaId: string
+  onClose: () => void
+}) {
+  return (
+    <div className="flex h-full min-h-0 flex-col">
+      <Suspense fallback={null}>
+        <LazySourceMonitor mediaId={mediaId} onClose={onClose} />
+      </Suspense>
+    </div>
+  )
+}

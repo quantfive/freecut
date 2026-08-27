@@ -22,7 +22,11 @@ const WORKSPACE_ITEMS: readonly {
  * (scopes, inspector tab, sidebar tab, timeline split) without touching
  * selection, playhead, or project state.
  */
-export const WorkspaceSwitcher = memo(function WorkspaceSwitcher() {
+export const WorkspaceSwitcher = memo(function WorkspaceSwitcher({
+  compact = false,
+}: {
+  compact?: boolean
+}) {
   const { t } = useTranslation()
   const workspace = useEditorStore((s) => s.workspace)
   const setWorkspace = useEditorStore((s) => s.setWorkspace)
@@ -49,7 +53,8 @@ export const WorkspaceSwitcher = memo(function WorkspaceSwitcher() {
             aria-selected={isActive}
             onClick={() => setWorkspace(id)}
             className={cn(
-              'flex h-7 items-center gap-1.5 rounded-[5px] px-3 text-xs font-medium transition-colors',
+              'flex h-7 min-w-0 items-center gap-1 rounded-[5px] text-xs font-medium transition-colors',
+              compact ? 'px-1.5' : 'gap-1.5 px-3',
               isActive
                 ? 'bg-background text-foreground shadow-sm'
                 : 'text-muted-foreground hover:text-foreground',

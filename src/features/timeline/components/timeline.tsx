@@ -71,6 +71,7 @@ const TRACK_SIZE_OPTIONS = [
 
 interface TimelineProps {
   duration: number // Total timeline duration in seconds
+  compact?: boolean
 }
 
 /**
@@ -83,7 +84,7 @@ interface TimelineProps {
  *
  * Follows modular architecture with granular Zustand selectors
  */
-export const Timeline = memo(function Timeline({ duration }: TimelineProps) {
+export const Timeline = memo(function Timeline({ duration, compact = false }: TimelineProps) {
   const { t } = useTranslation()
   const hostMode = useEditorStore((s) => s.hostMode)
   const canAddTrack = useEditorCapability('timeline.track')
@@ -856,6 +857,7 @@ export const Timeline = memo(function Timeline({ duration }: TimelineProps) {
                 resizeHandlePosition={getTrackKind(track) === 'video' ? 'top' : 'bottom'}
               >
                 <TrackHeader
+                  compact={compact}
                   track={track}
                   isActive={activeTrackId === track.id}
                   isSelected={selectedTrackIdsSet.has(track.id)}
@@ -923,11 +925,16 @@ export const Timeline = memo(function Timeline({ duration }: TimelineProps) {
   return (
     <div
       className="timeline-bg h-full border-t border-border flex flex-col overflow-hidden"
+      data-compact-timeline={compact ? 'true' : 'false'}
+      style={
+        compact ? ({ '--editor-timeline-sidebar-width': '80px' } as React.CSSProperties) : undefined
+      }
       role="region"
       aria-label={t('timeline.region')}
     >
       {/* Timeline Header */}
       <TimelineHeader
+        compact={compact}
         onZoomChange={zoomHandlers?.handleZoomChange}
         onZoomIn={zoomHandlers?.handleZoomIn}
         onZoomOut={zoomHandlers?.handleZoomOut}
@@ -949,6 +956,7 @@ export const Timeline = memo(function Timeline({ duration }: TimelineProps) {
         <div
           className="border-r border-border panel-bg flex-shrink-0 flex flex-col overflow-x-hidden"
           style={{ width: EDITOR_LAYOUT_CSS_VALUES.timelineSidebarWidth }}
+          data-timeline-track-strip
         >
           {/* Tracks label with controls */}
           <div
@@ -1114,7 +1122,7 @@ export const Timeline = memo(function Timeline({ duration }: TimelineProps) {
         isOpen={!hostMode && keyframePanelOpen}
         placement="bottom"
         surface="edit"
-        propertyColumnWidth={editorLayout.timelineSidebarWidth - 1}
+        propertyColumnWidth={(compact ? 80 : editorLayout.timelineSidebarWidth) - 1}
         timelineScrollContainerRef={timelineContentRef}
         onClose={() => setKeyframePanelOpen(false)}
       />
