@@ -53,10 +53,7 @@ import {
 } from '../utils/source-io'
 import { useMediaLibraryStore, getMediaType } from '@/features/preview/deps/media-library'
 import { useItemsStore } from '@/features/preview/deps/timeline-store'
-import {
-  useResolvedHotkeys,
-  useSettingsStore,
-} from '@/features/preview/deps/settings'
+import { useResolvedHotkeys, useSettingsStore } from '@/features/preview/deps/settings'
 import { useEditorStore } from '@/shared/state/editor'
 import { useSourcePlayerStore } from '@/shared/state/source-player'
 import { getNextShuttleRate } from '@/shared/state/playback/shuttle'
