@@ -1384,7 +1384,7 @@ export const TimelineContent = memo(function TimelineContent({
   const handleContainerClick = (e: React.MouseEvent) => {
     const target = e.target as HTMLElement
     const interactionJustFinished =
-      marqueeWasActiveRef.current || dragWasActiveRef.current || scrubWasActiveRef.current
+      marqueeWasActiveRef.current || scrubWasActiveRef.current
     // Radix menus render outside the timeline DOM, but their synthetic events
     // still bubble through this component tree.
     if (shouldIgnoreTimelineContainerClick(target, interactionJustFinished)) {

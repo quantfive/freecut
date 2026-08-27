@@ -91,7 +91,6 @@ function makeInput(
     activeToolRef: { current: activeTool },
     smartTrimIntentRef: { current: null },
     smartBodyIntent: null,
-    dragWasActiveRef: { current: false },
     isTrimming: false,
     isStretching: false,
     isSlipSlideActive: false,

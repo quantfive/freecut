@@ -342,7 +342,6 @@ export const TimelineItem = memo(function TimelineItem({
   const {
     dragAffectsJoin,
     isAnyDragActiveRef,
-    dragWasActiveRef,
     isAltDrag,
     isPartOfDrag,
     isBeingDragged,
@@ -602,7 +601,6 @@ export const TimelineItem = memo(function TimelineItem({
       activeToolRef,
       smartTrimIntentRef,
       smartBodyIntent,
-      dragWasActiveRef,
       isTrimming,
       isStretching,
       isSlipSlideActive,

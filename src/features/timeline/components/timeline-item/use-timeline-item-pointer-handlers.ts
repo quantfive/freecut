@@ -32,14 +32,12 @@ import {
 } from '../../utils/smart-trim-zones'
 import { isRateStretchableItem } from '../../hooks/use-rate-stretch'
 import { getTimelineClipLabelRowHeightPx } from './hover-layout'
-import { shouldSuppressTimelineItemClickAfterDrag } from './post-drag-click-guard'
 import { emitUiSound } from '@/shared/ui/ui-sound'
 import type { useTimelineDrag } from '../../hooks/use-timeline-drag'
 import type { useTimelineTrim } from '../../hooks/use-timeline-trim'
 import type { useRateStretch } from '../../hooks/use-rate-stretch'
 import type { useTimelineSlipSlide } from '../../hooks/use-timeline-slip-slide'
 import type { useSmartTrimHover } from './use-smart-trim-hover'
-import type { useDragVisualState } from './use-drag-visual-state'
 
 export interface TimelineItemPointerHint {
   x: number
@@ -55,7 +53,6 @@ export interface TimelineItemPointerHandlersInput {
   activeToolRef: RefObject<SelectionState['activeTool']>
   smartTrimIntentRef: ReturnType<typeof useSmartTrimHover>['smartTrimIntentRef']
   smartBodyIntent: SmartBodyIntent
-  dragWasActiveRef: ReturnType<typeof useDragVisualState>['dragWasActiveRef']
   isTrimming: boolean
   isStretching: boolean
   isSlipSlideActive: boolean
@@ -91,7 +88,6 @@ export function useTimelineItemPointerHandlers({
   activeToolRef,
   smartTrimIntentRef,
   smartBodyIntent,
-  dragWasActiveRef,
   isTrimming,
   isStretching,
   isSlipSlideActive,
@@ -110,9 +106,6 @@ export function useTimelineItemPointerHandlers({
         emitUiSound('error')
         return
       }
-      if (shouldSuppressTimelineItemClickAfterDrag(activeToolRef.current, dragWasActiveRef.current))
-        return
-
       // Razor tool: split item at click position
       if (activeToolRef.current === 'razor') {
         const tracksContainer = e.currentTarget.closest('.timeline-tracks') as HTMLElement | null
@@ -216,7 +209,6 @@ export function useTimelineItemPointerHandlers({
     },
     [
       activeToolRef,
-      dragWasActiveRef,
       trackLocked,
       item.durationInFrames,
       item.from,
