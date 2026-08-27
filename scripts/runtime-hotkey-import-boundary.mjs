@@ -20,7 +20,6 @@ import {
   isStringLiteral,
   isTemplateExpression,
   isTypeAssertion,
-  isVariableStatement,
 } from 'typescript/unstable/ast'
 
 const REACT_HOTKEYS_HOOK_MODULE = 'react-hotkeys-hook'
@@ -33,74 +32,280 @@ const CONSTANT_STRING_WRAPPER_CHECKS = [
   isTypeAssertion,
 ]
 
-function evaluateTemplateString(expression, constantBindings, resolving) {
+const FUNCTION_SCOPE_KINDS = new Set([
+  SyntaxKind.FunctionDeclaration,
+  SyntaxKind.FunctionExpression,
+  SyntaxKind.ArrowFunction,
+  SyntaxKind.MethodDeclaration,
+  SyntaxKind.Constructor,
+  SyntaxKind.GetAccessor,
+  SyntaxKind.SetAccessor,
+])
+
+const NAMED_FUNCTION_SCOPE_KINDS = new Set([
+  SyntaxKind.FunctionDeclaration,
+  SyntaxKind.FunctionExpression,
+])
+
+const CLASS_SCOPE_KINDS = new Set([SyntaxKind.ClassDeclaration, SyntaxKind.ClassExpression])
+
+const LOOP_SCOPE_KINDS = new Set([
+  SyntaxKind.ForStatement,
+  SyntaxKind.ForInStatement,
+  SyntaxKind.ForOfStatement,
+])
+
+const BLOCK_SCOPE_KINDS = new Set([
+  SyntaxKind.Block,
+  SyntaxKind.ClassStaticBlockDeclaration,
+  SyntaxKind.ModuleBlock,
+])
+
+const BLOCK_VAR_SCOPE_KINDS = new Set([
+  SyntaxKind.ClassStaticBlockDeclaration,
+  SyntaxKind.ModuleBlock,
+])
+
+const BARRIER_DECLARATION_KINDS = new Set([
+  SyntaxKind.EnumDeclaration,
+  SyntaxKind.ModuleDeclaration,
+])
+
+function createScope(parent, kind, isVarScope = false, isConstantBoundary = false) {
+  return { parent, kind, isVarScope, isConstantBoundary, bindings: new Map() }
+}
+
+function declareBinding(scope, name, binding) {
+  if (scope.bindings.has(name)) {
+    scope.bindings.set(name, { kind: 'barrier' })
+    return
+  }
+  scope.bindings.set(name, binding)
+}
+
+function bindingNames(name) {
+  if (isIdentifier(name)) return [name.text]
+  if (name.kind !== SyntaxKind.ObjectBindingPattern && name.kind !== SyntaxKind.ArrayBindingPattern) {
+    return []
+  }
+  return name.elements.flatMap((element) => (element.name ? bindingNames(element.name) : []))
+}
+
+function declareBarrier(scope, name) {
+  for (const identifier of bindingNames(name)) {
+    declareBinding(scope, identifier, { kind: 'barrier' })
+  }
+}
+
+function nearestVarScope(scope) {
+  let current = scope
+  while (current.parent && !current.isVarScope) current = current.parent
+  return current
+}
+
+function declareVariableList(declarationList, scope) {
+  const isConst = Boolean(declarationList.flags & NodeFlags.Const)
+  const isBlockScoped = Boolean(declarationList.flags & NodeFlags.BlockScoped)
+  const declarationScope = isBlockScoped ? scope : nearestVarScope(scope)
+  // Rolldown keeps loop-header identifier imports dynamic even when the
+  // header declares a const literal, so those bindings remain barriers.
+  const isResolvableConst = isConst && declarationScope.kind !== 'loop'
+
+  for (const declaration of declarationList.declarations) {
+    if (isResolvableConst && isIdentifier(declaration.name) && declaration.initializer) {
+      declareBinding(declarationScope, declaration.name.text, {
+        kind: 'constant',
+        initializer: declaration.initializer,
+        scope: declarationScope,
+      })
+      continue
+    }
+    declareBarrier(declarationScope, declaration.name)
+  }
+}
+
+function declareImportBindings(node, scope) {
+  if (isImportEqualsDeclaration(node)) {
+    declareBarrier(scope, node.name)
+    return
+  }
+  if (!isImportDeclaration(node) || !node.importClause) return
+
+  const { name, namedBindings } = node.importClause
+  if (name) declareBarrier(scope, name)
+  if (!namedBindings) return
+  if (namedBindings.name) {
+    declareBarrier(scope, namedBindings.name)
+    return
+  }
+  for (const element of namedBindings.elements) declareBarrier(scope, element.name)
+}
+
+function createFunctionLexicalScope(node, currentScope) {
+  if (node.kind === SyntaxKind.FunctionDeclaration && node.name) {
+    declareBarrier(currentScope, node.name)
+  }
+
+  const functionScope = createScope(currentScope, 'function', true, true)
+  if (NAMED_FUNCTION_SCOPE_KINDS.has(node.kind) && node.name) {
+    declareBarrier(functionScope, node.name)
+  }
+  for (const parameter of node.parameters ?? []) declareBarrier(functionScope, parameter.name)
+  return functionScope
+}
+
+function createClassLexicalScope(node, currentScope) {
+  if (node.kind === SyntaxKind.ClassDeclaration && node.name) {
+    declareBarrier(currentScope, node.name)
+  }
+
+  const classScope = createScope(currentScope, 'class', false, true)
+  if (node.name) declareBarrier(classScope, node.name)
+  return classScope
+}
+
+function createChildLexicalScope(node, currentScope) {
+  if (FUNCTION_SCOPE_KINDS.has(node.kind)) {
+    return createFunctionLexicalScope(node, currentScope)
+  }
+  if (CLASS_SCOPE_KINDS.has(node.kind)) {
+    return createClassLexicalScope(node, currentScope)
+  }
+  if (node.kind === SyntaxKind.CatchClause) {
+    const catchScope = createScope(currentScope, 'catch')
+    if (node.variableDeclaration) declareBarrier(catchScope, node.variableDeclaration.name)
+    return catchScope
+  }
+  if (LOOP_SCOPE_KINDS.has(node.kind)) return createScope(currentScope, 'loop')
+  if (node.kind === SyntaxKind.SwitchStatement) return createScope(currentScope, 'block')
+  if (!BLOCK_SCOPE_KINDS.has(node.kind)) return undefined
+
+  return createScope(
+    currentScope,
+    'block',
+    BLOCK_VAR_SCOPE_KINDS.has(node.kind),
+    node.kind === SyntaxKind.ModuleBlock,
+  )
+}
+
+function predeclareNodeBindings(node, currentScope) {
+  if (node.kind === SyntaxKind.VariableDeclarationList) {
+    declareVariableList(node, currentScope)
+    return
+  }
+  if (isImportDeclaration(node) || isImportEqualsDeclaration(node)) {
+    declareImportBindings(node, currentScope)
+    return
+  }
+  if (BARRIER_DECLARATION_KINDS.has(node.kind) && node.name) {
+    declareBarrier(currentScope, node.name)
+  }
+}
+
+function buildLexicalScopes(sourceFile) {
+  const sourceScope = createScope(undefined, 'source', true, true)
+  const nodeScopes = new WeakMap()
+
+  function visit(node, currentScope) {
+    nodeScopes.set(node, currentScope)
+    const childScope = createChildLexicalScope(node, currentScope)
+    if (!childScope) predeclareNodeBindings(node, currentScope)
+    node.forEachChild((child) => visit(child, childScope ?? currentScope))
+  }
+
+  visit(sourceFile, sourceScope)
+  return { nodeScopes, sourceScope }
+}
+
+function findBinding(scope, name) {
+  let current = scope
+  while (current) {
+    const binding = current.bindings.get(name)
+    if (binding) return binding
+    // Rolldown folds through lexical blocks, but not through captured
+    // function, class, or namespace environments.
+    if (current.isConstantBoundary) return undefined
+    current = current.parent
+  }
+  return undefined
+}
+
+function evaluateTemplateString(expression, scope, resolving, referenceScope) {
   let value = expression.head.text
   for (const span of expression.templateSpans) {
-    const interpolation = evaluateConstantString(span.expression, constantBindings, resolving)
+    const interpolation = evaluateConstantString(
+      span.expression,
+      scope,
+      resolving,
+      referenceScope,
+    )
     if (interpolation === undefined) return undefined
     value += interpolation + span.literal.text
   }
   return value
 }
 
-function evaluateConcatenatedString(expression, constantBindings, resolving) {
+function evaluateConcatenatedString(expression, scope, resolving, referenceScope) {
   if (expression.operatorToken.kind !== SyntaxKind.PlusToken) return undefined
-  const left = evaluateConstantString(expression.left, constantBindings, resolving)
-  const right = evaluateConstantString(expression.right, constantBindings, resolving)
+  const left = evaluateConstantString(expression.left, scope, resolving, referenceScope)
+  const right = evaluateConstantString(expression.right, scope, resolving, referenceScope)
   return left === undefined || right === undefined ? undefined : left + right
 }
 
-function evaluateConstantBinding(expression, constantBindings, resolving) {
-  if (!constantBindings.has(expression.text) || resolving.has(expression.text)) return undefined
-  const nextResolving = new Set(resolving).add(expression.text)
-  return evaluateConstantString(
-    constantBindings.get(expression.text),
-    constantBindings,
-    nextResolving,
-  )
+function evaluateConstantBinding(expression, scope, resolving, referenceScope) {
+  const binding = findBinding(scope, expression.text)
+  // Initializers use their declaration environment, but Rolldown only folds
+  // an alias when that referenced binding is still the one visible at use.
+  if (
+    !binding ||
+    binding.kind !== 'constant' ||
+    resolving.has(binding) ||
+    findBinding(referenceScope, expression.text) !== binding
+  ) {
+    return undefined
+  }
+  const nextResolving = new Set(resolving).add(binding)
+  return evaluateConstantString(binding.initializer, binding.scope, nextResolving, referenceScope)
 }
 
-function evaluateConstantString(expression, constantBindings, resolving = new Set()) {
+function evaluateConstantString(expression, scope, resolving = new Set(), referenceScope = scope) {
   if (!expression) return undefined
   if (isStringLiteral(expression) || isNoSubstitutionTemplateLiteral(expression)) {
     return expression.text
   }
   if (CONSTANT_STRING_WRAPPER_CHECKS.some((check) => check(expression))) {
-    return evaluateConstantString(expression.expression, constantBindings, resolving)
+    return evaluateConstantString(expression.expression, scope, resolving, referenceScope)
   }
   if (isTemplateExpression(expression)) {
-    return evaluateTemplateString(expression, constantBindings, resolving)
+    return evaluateTemplateString(expression, scope, resolving, referenceScope)
   }
   if (isBinaryExpression(expression)) {
-    return evaluateConcatenatedString(expression, constantBindings, resolving)
+    return evaluateConcatenatedString(expression, scope, resolving, referenceScope)
   }
   if (isIdentifier(expression)) {
-    return evaluateConstantBinding(expression, constantBindings, resolving)
+    return evaluateConstantBinding(expression, scope, resolving, referenceScope)
   }
   return undefined
 }
 
-function isReactHotkeysSource(source, constantBindings) {
-  return evaluateConstantString(source, constantBindings) === REACT_HOTKEYS_HOOK_MODULE
+function isReactHotkeysSource(source, scope) {
+  return evaluateConstantString(source, scope) === REACT_HOTKEYS_HOOK_MODULE
 }
 
-function isStaticReactHotkeysImport(node, constantBindings) {
+function isStaticReactHotkeysImport(node, scope) {
   return (
     (isImportDeclaration(node) || isExportDeclaration(node)) &&
-    isReactHotkeysSource(node.moduleSpecifier, constantBindings)
+    isReactHotkeysSource(node.moduleSpecifier, scope)
   )
 }
 
-function isTypeScriptReactHotkeysImport(node, constantBindings) {
+function isTypeScriptReactHotkeysImport(node, scope) {
   if (!isImportEqualsDeclaration(node)) return false
   const reference = node.moduleReference
-  return (
-    isExternalModuleReference(reference) &&
-    isReactHotkeysSource(reference.expression, constantBindings)
-  )
+  return isExternalModuleReference(reference) && isReactHotkeysSource(reference.expression, scope)
 }
 
-function isReactHotkeysCallImport(node, constantBindings) {
+function isReactHotkeysCallImport(node, scope) {
   if (!isCallExpression(node)) return false
   const { expression, arguments: args } = node
   const isRequire = isIdentifier(expression) && expression.text === 'require'
@@ -108,7 +313,7 @@ function isReactHotkeysCallImport(node, constantBindings) {
   return (
     (isRequire || isDynamicImport) &&
     args.length === 1 &&
-    isReactHotkeysSource(args[0], constantBindings)
+    isReactHotkeysSource(args[0], scope)
   )
 }
 
@@ -121,21 +326,6 @@ const IMPORT_NODE_CHECKS = [
 function walkAst(node, onNode) {
   onNode(node)
   node.forEachChild((child) => walkAst(child, onNode))
-}
-
-function topLevelConstantBindings(sourceFile) {
-  const bindings = new Map()
-  for (const statement of sourceFile.statements) {
-    if (!isVariableStatement(statement)) continue
-    const declarationList = statement.declarationList
-    if (!(declarationList.flags & NodeFlags.Const)) continue
-    for (const declaration of declarationList.declarations) {
-      if (isIdentifier(declaration.name) && declaration.initializer) {
-        bindings.set(declaration.name.text, declaration.initializer)
-      }
-    }
-  }
-  return bindings
 }
 
 export function findReactHotkeysHookImportViolations(
@@ -170,7 +360,7 @@ export function findReactHotkeysHookImportViolations(
     for (const [virtualPath, { path }] of virtualSources) {
       const sourceFile = project?.program.getSourceFile(virtualPath)
       if (!sourceFile) throw new Error(`TypeScript could not parse in-memory source: ${path}`)
-      const constantBindings = topLevelConstantBindings(sourceFile)
+      const { nodeScopes, sourceScope } = buildLexicalScopes(sourceFile)
 
       function record(node) {
         if (path === allowedPath) return
@@ -187,7 +377,8 @@ export function findReactHotkeysHookImportViolations(
       }
 
       walkAst(sourceFile, (node) => {
-        if (IMPORT_NODE_CHECKS.some((check) => check(node, constantBindings))) record(node)
+        const scope = nodeScopes.get(node) ?? sourceScope
+        if (IMPORT_NODE_CHECKS.some((check) => check(node, scope))) record(node)
       })
     }
   } finally {
