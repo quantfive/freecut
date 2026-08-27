@@ -225,7 +225,7 @@ describe('buildPreviewCompositionData', () => {
       { frame: 10, srcs: ['blob://video'] },
       { frame: 70, srcs: ['blob://video'] },
     ])
-    expect(result.totalFrames).toBe(220)
+    expect(result.totalFrames).toBe(70)
     const playbackVideoItem = result.inputProps.tracks[0]?.items[0]
     const scrubVideoItem = result.fastScrubInputProps.tracks[0]?.items[0]
     expect(playbackVideoItem?.type).toBe('video')
@@ -236,6 +236,62 @@ describe('buildPreviewCompositionData', () => {
       expect(playbackVideoItem.audioSrc).toBe('blob://video')
       expect(scrubVideoItem.audioSrc).toBe('blob://video')
     }
+  })
+
+  it('uses the exclusive end of adjacent clips as the canonical player duration', () => {
+    const track: TimelineTrack = {
+      id: 'track-1',
+      name: 'Video',
+      height: 80,
+      locked: false,
+      visible: true,
+      muted: false,
+      solo: false,
+      order: 1,
+      items: [
+        {
+          id: 'red',
+          trackId: 'track-1',
+          type: 'video',
+          mediaId: 'media-red',
+          src: 'blob:red',
+          label: 'Red',
+          from: 1,
+          durationInFrames: 90,
+        },
+        {
+          id: 'blue',
+          trackId: 'track-1',
+          type: 'video',
+          mediaId: 'media-blue',
+          src: 'blob:blue',
+          label: 'Blue',
+          from: 91,
+          durationInFrames: 90,
+        },
+      ],
+    }
+
+    const result = buildPreviewCompositionData({
+      combinedTracks: [track],
+      fps: 30,
+      items: track.items,
+      keyframes: [],
+      transitions: [],
+      resolvedUrls: new Map([
+        ['media-red', 'blob:red'],
+        ['media-blue', 'blob:blue'],
+      ]),
+      useProxy: false,
+      blobUrlVersion: 0,
+      project: { width: 1920, height: 1080, backgroundColor: '#000000' },
+    })
+
+    expect(result.totalFrames).toBe(181)
+    expect(result.playbackVideoSourceSpans).toEqual([
+      { src: 'blob:red', startFrame: 1, endFrame: 91 },
+      { src: 'blob:blue', startFrame: 91, endFrame: 181 },
+    ])
   })
 
   it('uses proxy media for playback and fast scrubbing when proxies are enabled', () => {

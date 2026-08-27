@@ -121,36 +121,55 @@ const rendererMockState = vi.hoisted(() => {
   }
 
   const instances: RendererMock[] = []
+  const renderedSources: Array<{ frame: number; src: string | null }> = []
   const getBestDomVideoElementForItem = vi.fn<(itemId: string) => HTMLVideoElement | null>(
     () => null,
   )
-  const create = vi.fn(async () => {
-    const prewarmFrame = vi.fn(async (frame: number) => {
-      void frame
-    })
-    const renderer: RendererMock = {
-      preload: vi.fn(async () => {}),
-      renderFrame: vi.fn(async () => {}),
-      prewarmFrame,
-      prewarmFrames: vi.fn(async (frames: number[]) => {
-        for (const frame of frames) {
-          await prewarmFrame(frame)
-        }
-      }),
-      invalidateFrameCache: vi.fn(),
-      setDomVideoElementProvider: vi.fn(),
-      wasLastRenderAborted: vi.fn(() => false),
-      getScrubbingCache: () => null,
-      dispose: vi.fn(),
-    }
-    instances.push(renderer)
-    return renderer
-  })
+  const create = vi.fn(
+    async (inputProps?: {
+      tracks?: Array<{
+        items?: Array<{ type?: string; from?: number; durationInFrames?: number; src?: string }>
+      }>
+    }) => {
+      const prewarmFrame = vi.fn(async (frame: number) => {
+        void frame
+      })
+      const renderFrame = vi.fn(async (frame: number) => {
+        const activeItem = (inputProps?.tracks ?? [])
+          .flatMap((track) => track.items ?? [])
+          .find(
+            (item) =>
+              item.type === 'video' &&
+              frame >= (item.from ?? 0) &&
+              frame < (item.from ?? 0) + (item.durationInFrames ?? 0),
+          )
+        renderedSources.push({ frame, src: activeItem?.src ?? null })
+      })
+      const renderer: RendererMock = {
+        preload: vi.fn(async () => {}),
+        renderFrame,
+        prewarmFrame,
+        prewarmFrames: vi.fn(async (frames: number[]) => {
+          for (const frame of frames) {
+            await prewarmFrame(frame)
+          }
+        }),
+        invalidateFrameCache: vi.fn(),
+        setDomVideoElementProvider: vi.fn(),
+        wasLastRenderAborted: vi.fn(() => false),
+        getScrubbingCache: () => null,
+        dispose: vi.fn(),
+      }
+      instances.push(renderer)
+      return renderer
+    },
+  )
 
   return {
     create,
     getBestDomVideoElementForItem,
     instances,
+    renderedSources,
   }
 })
 
@@ -976,6 +995,7 @@ describe('VideoPreview sync behavior', () => {
     completeDeferredPlayerSeek = null
     lastPlayerDimensions = null
     playerDimensionsHistory = []
+    rendererMockState.renderedSources.length = 0
     seekToMock.mockReset()
     playMock.mockReset()
     pauseMock.mockReset()
@@ -4833,6 +4853,50 @@ describe('VideoPreview sync behavior', () => {
     await waitFor(() => {
       expect(getDisplayedFrame()).toBe(48)
       expect(scrubCanvas.style.visibility).toBe('visible')
+    })
+  })
+
+  it('repaints a visible scrub canvas from the exact source after a paused cross-clip seek', async () => {
+    setMockBlobUrl('media-red', 'blob:red')
+    setMockBlobUrl('media-blue', 'blob:blue')
+    setSingleVideoTrack()
+    useItemsStore.getState().setItems([
+      {
+        id: 'red',
+        label: 'Red',
+        type: 'video',
+        trackId: 'track-video',
+        mediaId: 'media-red',
+        src: 'blob:red',
+        from: 1,
+        durationInFrames: 90,
+      },
+      {
+        id: 'blue',
+        label: 'Blue',
+        type: 'video',
+        trackId: 'track-video',
+        mediaId: 'media-blue',
+        src: 'blob:blue',
+        from: 91,
+        durationInFrames: 90,
+      },
+    ] as TimelineItem[])
+
+    const { container } = renderDefaultPreview()
+    const scrubCanvas = getScrubCanvas(container)
+    await setScrubFrameAndWaitVisible(scrubCanvas, 45)
+
+    act(() => {
+      usePlaybackStore.getState().setPreviewFrame(null)
+      usePlaybackStore.getState().setCurrentFrame(135)
+    })
+
+    await waitFor(() => {
+      expect(usePlaybackStore.getState().currentFrame).toBe(135)
+      expect(getDisplayedFrame()).toBe(135)
+      expect(scrubCanvas.style.visibility).toBe('visible')
+      expect(rendererMockState.renderedSources).toContainEqual({ frame: 135, src: 'blob:blue' })
     })
   })
 

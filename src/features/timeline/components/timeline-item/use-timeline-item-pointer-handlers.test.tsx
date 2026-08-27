@@ -150,13 +150,18 @@ describe('useTimelineItemPointerHandlers', () => {
       expect(selectItems).toHaveBeenCalledWith(['item-1'])
     })
 
-    it('commits the hover preview when selecting a clip', () => {
-      usePlaybackStore.setState({ currentFrame: 0, previewFrame: 34, isPlaying: true })
+    it('seeks from click geometry when the hover preview is stale at the next boundary', () => {
+      usePlaybackStore.setState({
+        currentFrame: 0,
+        previewFrame: 50,
+        previewItemId: 'item-1',
+        isPlaying: true,
+      })
       const handlers = renderHandlers(makeInput({ activeTool: 'select' }))
 
-      handlers.handleClick(makeMouseEvent())
+      handlers.handleClick(makeMouseEvent({ clientX: 2 }))
 
-      expect(usePlaybackStore.getState().currentFrame).toBe(34)
+      expect(usePlaybackStore.getState().currentFrame).toBe(20)
       expect(usePlaybackStore.getState().previewFrame).toBeNull()
       expect(usePlaybackStore.getState().isPlaying).toBe(false)
     })

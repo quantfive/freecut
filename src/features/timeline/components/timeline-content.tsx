@@ -1343,6 +1343,7 @@ export const TimelineContent = memo(function TimelineContent({
       const target = e.target as HTMLElement
       // Check if mousedown is on a playhead handle or timeline ruler
       if (target.closest('[data-playhead-handle]') || target.closest('.timeline-ruler')) {
+        cancelPendingHoverPreview()
         scrubWasActiveRef.current = true
       }
     }
@@ -1374,7 +1375,7 @@ export const TimelineContent = memo(function TimelineContent({
         scrubTimeoutRef.current = null
       }
     }
-  }, [])
+  }, [cancelPendingHoverPreview])
 
   // Commit the hover skimmer on a normal timeline click. Ruler clicks own their
   // own scrub path, while drag/marquee/razor gestures must not move playback.
