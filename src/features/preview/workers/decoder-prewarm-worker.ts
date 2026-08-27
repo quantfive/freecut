@@ -7,6 +7,7 @@
  */
 
 import { createMediabunnyInputSource } from '@/infrastructure/browser/mediabunny-input-source'
+import { consumeVideoSamples } from './consume-video-samples'
 import type { ObjectUrlSourceMetadata } from '@/infrastructure/browser/object-url-registry'
 
 const TIMESTAMP_EPSILON = 1e-4
@@ -266,11 +267,10 @@ function resetSampleIterator(state: ExtractorState, startTimestamp: number): voi
   // decoding a range. Starting at the requested presentation timestamp keeps
   // that necessary GOP decode inside the sink without yielding a keyframe-to-
   // target runway that this worker would only close and discard.
-  state.sampleIterator = state.sink.samples(Math.max(0, startTimestamp), Infinity) as AsyncGenerator<
-    WorkerSample,
-    void,
-    unknown
-  >
+  state.sampleIterator = state.sink.samples(
+    Math.max(0, startTimestamp),
+    Infinity,
+  ) as AsyncGenerator<WorkerSample, void, unknown>
   state.iteratorDone = false
   state.lastRequestedTimestamp = null
 }
@@ -560,31 +560,12 @@ async function batchPreseek(
       // samplesAtTimestamps uses an optimized pipeline that shares decoder
       // state across the batch — each packet decoded at most once.
       const iterator = state.sink.samplesAtTimestamps(timestamps)
-      let i = 0
-      try {
-        for await (const sample of iterator) {
-          if (!shouldContinue()) break
-          const timestamp = timestamps[i]
-          i++
-
-          if (!sample) {
-            continue
-          }
-
-          try {
-            // Defensive: mediabunny should yield at most one sample per requested
-            // timestamp, but an over-producing iterator must not leak the extra
-            // VideoSample while the stream is being torn down.
-            if (timestamp === undefined) continue
-            const bitmap = renderSampleToBitmap(state, sample, maxDimension)
-            if (bitmap) results.set(timestamp, bitmap)
-          } finally {
-            sample.close?.()
-          }
+      await consumeVideoSamples(iterator, timestamps, shouldContinue, (sample, timestamp) => {
+        if (sample) {
+          const bitmap = renderSampleToBitmap(state, sample, maxDimension)
+          if (bitmap) results.set(timestamp, bitmap)
         }
-      } finally {
-        await iterator.return?.()
-      }
+      })
     } catch {
       // Batch decode failed — return whatever we got
     }
@@ -624,10 +605,7 @@ self.onmessage = async (event: MessageEvent) => {
     if (src) {
       activePreviewGenerationBySrc.set(
         src,
-        Math.max(
-          activePreviewGenerationBySrc.get(src) ?? 0,
-          Number(msg.generation) || 0,
-        ),
+        Math.max(activePreviewGenerationBySrc.get(src) ?? 0, Number(msg.generation) || 0),
       )
     }
     return
@@ -687,10 +665,7 @@ self.onmessage = async (event: MessageEvent) => {
   if (isActivePreviewRequest) {
     activePreviewGenerationBySrc.set(
       msg.src,
-      Math.max(
-        activePreviewGenerationBySrc.get(msg.src) ?? 0,
-        Number(msg.generation) || 0,
-      ),
+      Math.max(activePreviewGenerationBySrc.get(msg.src) ?? 0, Number(msg.generation) || 0),
     )
   }
 

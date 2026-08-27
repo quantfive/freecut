@@ -219,6 +219,37 @@ describe('TimelineMarkers ruler scrub cancellation', () => {
     expect(usePlaybackStore.getState().previewFrame).toBe(30)
   })
 
+  it('does not restore a queued ruler hover after click-seek release', () => {
+    const frameCallbacks: FrameRequestCallback[] = []
+    vi.spyOn(window, 'requestAnimationFrame').mockImplementation((callback) => {
+      frameCallbacks.push(callback)
+      return frameCallbacks.length
+    })
+    const { container } = render(
+      <div className="timeline-container" data-timeline-scroll-container>
+        <TimelineMarkers duration={10} width={1000} />
+      </div>,
+    )
+    const ruler = container.querySelector('[style*="cursor: ew-resize"]') as HTMLDivElement
+    ruler.getBoundingClientRect = () =>
+      ({
+        left: 0,
+        right: 1000,
+        top: 0,
+        bottom: 34,
+        width: 1000,
+        height: 34,
+      }) as DOMRect
+
+    fireEvent.mouseMove(ruler, { clientX: 100 })
+    fireEvent.mouseDown(ruler, { button: 0, clientX: 260 })
+    fireEvent.mouseUp(document, { clientX: 260 })
+    act(() => frameCallbacks.splice(0).forEach((callback) => callback(performance.now())))
+
+    expect(usePlaybackStore.getState().currentFrame).toBe(78)
+    expect(usePlaybackStore.getState().previewFrame).toBeNull()
+  })
+
   it('keeps the IO strip in its own lane above the viewport ruler canvas', () => {
     useTimelineStore.setState({ inPoint: 15, outPoint: 45 })
 

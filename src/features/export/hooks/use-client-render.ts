@@ -31,11 +31,13 @@ import { buildTranscriptSubtitleCues } from '../utils/embedded-subtitle-export'
 import { serializeSrt } from '@/shared/utils/subtitles'
 import { releaseTemporaryExportOutput } from '../utils/export-output-target'
 import { useTimelineStore } from '@/features/export/deps/timeline'
+import type { ExportableSequence } from '@/features/export/deps/timeline-compositions'
 import { useProjectStore } from '@/features/export/deps/projects'
 import { DEFAULT_PROJECT_HEIGHT, DEFAULT_PROJECT_WIDTH } from '@/shared/projects/defaults'
 import { resolveMediaUrls } from '@/features/export/deps/media-library'
 import { usePlaybackStore } from '@/shared/state/playback'
 import { createLogger, createOperationId } from '@/shared/logging/logger'
+import { resolveClientRenderSource } from './client-render-source'
 
 const log = createLogger('Export')
 
@@ -61,7 +63,10 @@ interface UseClientRenderReturn {
   result: ClientRenderResult | null
 
   // Actions
-  startExport: (settings: ExportSettings | ExtendedExportSettings) => Promise<void>
+  startExport: (
+    settings: ExportSettings | ExtendedExportSettings,
+    sequence?: ExportableSequence,
+  ) => Promise<void>
   cancelExport: () => void
   downloadVideo: () => void
   resetState: () => void
@@ -84,15 +89,40 @@ export function useClientRender(): UseClientRenderReturn {
   const [status, setStatus] = useState<ClientRenderStatus>('idle')
   const [error, setError] = useState<string | null>(null)
   const [result, setResult] = useState<ClientRenderResult | null>(null)
-  const resultRef = useRef<ClientRenderResult | null>(null)
+  const resultOwnerRef = useRef<{
+    runToken: number
+    result: ClientRenderResult
+    released: boolean
+  } | null>(null)
 
-  // AbortController for cancellation
-  const abortControllerRef = useRef<AbortController | null>(null)
+  const activeRunRef = useRef<{
+    token: number
+    controller: AbortController
+  } | null>(null)
+  const latestRunTokenRef = useRef(0)
+
+  const abortActiveRun = useCallback(() => {
+    const run = activeRunRef.current
+    if (!run) return
+    activeRunRef.current = null
+    if (!run.controller.signal.aborted) run.controller.abort()
+  }, [])
+
+  const releaseOwnedResult = useCallback(
+    (
+      owner: { runToken: number; result: ClientRenderResult; released: boolean } | null | undefined,
+    ) => {
+      if (!owner || owner.released) return
+      owner.released = true
+      void releaseTemporaryExportOutput(owner.result)
+    },
+    [],
+  )
 
   /**
    * Handle progress updates from the render engine
    */
-  const handleProgress = useCallback((progressData: RenderProgress) => {
+  const applyProgress = useCallback((progressData: RenderProgress) => {
     setProgress(progressData.progress)
     setProgressMessage(progressData.message)
     setRenderedFrames(progressData.currentFrame)
@@ -119,14 +149,38 @@ export function useClientRender(): UseClientRenderReturn {
    * Start client-side export
    */
   const startExport = useCallback(
-    async (settings: ExportSettings | ExtendedExportSettings) => {
+    async (settings: ExportSettings | ExtendedExportSettings, sequence?: ExportableSequence) => {
       const opId = createOperationId()
       const event = log.startEvent('render', opId)
+      const runToken = ++latestRunTokenRef.current
+      abortActiveRun()
+      const controller = new AbortController()
+      const run = { token: runToken, controller }
+      activeRunRef.current = run
+      let temporaryResult: ClientRenderResult | null = null
+
+      const releaseTemporaryResult = () => {
+        const ownedResult = temporaryResult
+        temporaryResult = null
+        if (ownedResult) void releaseTemporaryExportOutput(ownedResult)
+      }
+      const isActive = () =>
+        activeRunRef.current === run &&
+        latestRunTokenRef.current === runToken &&
+        !controller.signal.aborted
+      const ensureActive = () => {
+        if (!isActive()) {
+          throw new DOMException('Render cancelled', 'AbortError')
+        }
+      }
+      const handleRunProgress = (progressData: RenderProgress) => {
+        if (isActive()) applyProgress(progressData)
+      }
 
       try {
-        const previousResult = resultRef.current
-        resultRef.current = null
-        void releaseTemporaryExportOutput(previousResult)
+        const previousResultOwner = resultOwnerRef.current
+        resultOwnerRef.current = null
+        releaseOwnedResult(previousResultOwner)
         setIsExporting(true)
         setProgress(0)
         setProgressMessage(undefined)
@@ -134,28 +188,31 @@ export function useClientRender(): UseClientRenderReturn {
         setResult(null)
         setStatus('preparing')
 
-        // Create abort controller for cancellation
-        abortControllerRef.current = new AbortController()
-
         // Read current state from stores
         const state = useTimelineStore.getState()
-        const { tracks, items, transitions, fps, inPoint, outPoint, keyframes } = state
-
-        // Get project metadata (background color and native resolution)
         const currentProject = useProjectStore.getState().currentProject
-        const busAudioEq = usePlaybackStore.getState().busAudioEq
-        const masterBusDb = usePlaybackStore.getState().masterBusDb
-        const backgroundColor = currentProject?.metadata?.backgroundColor
-        // Use PROJECT resolution for composition (transform calculations match preview)
-        const projectWidth = currentProject?.metadata?.width ?? DEFAULT_PROJECT_WIDTH
-        const projectHeight = currentProject?.metadata?.height ?? DEFAULT_PROJECT_HEIGHT
+        const playback = usePlaybackStore.getState()
+        const {
+          tracks,
+          items,
+          transitions,
+          fps,
+          inPoint,
+          outPoint,
+          keyframes,
+          busAudioEq,
+          masterBusDb,
+          backgroundColor,
+          width: projectWidth,
+          height: projectHeight,
+        } = resolveClientRenderSource(sequence, state, playback, currentProject?.metadata)
 
         const requested = mapRequestedClientSettings(settings, fps)
         // When renderWholeProject is true, ignore in/out points.
         const { exportMode, renderWholeProject } = requested
         const effectiveInPoint = renderWholeProject ? null : inPoint
         const effectiveOutPoint = renderWholeProject ? null : outPoint
-        const signal = abortControllerRef.current.signal
+        const signal = controller.signal
 
         const smartCopy = await trySmartCopyExport(
           {
@@ -173,12 +230,19 @@ export function useClientRender(): UseClientRenderReturn {
             masterBusDb,
           },
           signal,
-          handleProgress,
+          handleRunProgress,
         )
+        ensureActive()
 
         if (smartCopy.result) {
-          resultRef.current = smartCopy.result
-          setResult(smartCopy.result)
+          temporaryResult = smartCopy.result
+          setResult(temporaryResult)
+          resultOwnerRef.current = {
+            runToken,
+            result: temporaryResult,
+            released: false,
+          }
+          temporaryResult = null
           setStatus('completed')
           setProgress(100)
           event.set('renderPath', 'smart-copy')
@@ -192,6 +256,7 @@ export function useClientRender(): UseClientRenderReturn {
 
         // Resolve settings + codec fallback only when an encoder is required.
         const { clientSettings, codecFallback } = await resolveClientSettings(settings, fps)
+        ensureActive()
         if (codecFallback) event.set('codecFallback', codecFallback)
 
         const extended = isExtendedSettings(settings)
@@ -246,7 +311,11 @@ export function useClientRender(): UseClientRenderReturn {
 
         // Resolve media URLs (convert mediaIds to blob URLs)
         // Export always uses full-res source, never proxies
-        const resolvedTracks = await resolveMediaUrls(composition.tracks, { useProxy: false })
+        const resolvedTracks = await resolveMediaUrls(composition.tracks, {
+          useProxy: false,
+          signal,
+        })
+        ensureActive()
         composition.tracks = resolvedTracks
 
         // Count resolved items for diagnostics
@@ -291,8 +360,10 @@ export function useClientRender(): UseClientRenderReturn {
           exportMode,
           composition,
           signal,
-          onProgress: handleProgress,
+          onProgress: handleRunProgress,
         })
+        temporaryResult = renderResult
+        ensureActive()
         if (fallbackReason) event.set('workerFallbackReason', fallbackReason)
 
         // Sidecar mode: the video is muxed clean; build the .srt from the same
@@ -310,8 +381,10 @@ export function useClientRender(): UseClientRenderReturn {
           }
         }
 
-        resultRef.current = finalResult
+        if (finalResult !== renderResult) temporaryResult = finalResult
         setResult(finalResult)
+        resultOwnerRef.current = { runToken, result: finalResult, released: false }
+        temporaryResult = null
         setStatus('completed')
         setProgress(100)
 
@@ -322,6 +395,8 @@ export function useClientRender(): UseClientRenderReturn {
           duration: renderResult.duration,
         })
       } catch (err) {
+        releaseTemporaryResult()
+        if (runToken !== latestRunTokenRef.current) return
         if (err instanceof DOMException && err.name === 'AbortError') {
           event.set('outcome', 'cancelled')
           event.set('duration_ms', Date.now())
@@ -334,11 +409,13 @@ export function useClientRender(): UseClientRenderReturn {
           setStatus('failed')
         }
       } finally {
-        setIsExporting(false)
-        abortControllerRef.current = null
+        if (activeRunRef.current === run) {
+          activeRunRef.current = null
+          setIsExporting(false)
+        }
       }
     },
-    [handleProgress],
+    [abortActiveRun, applyProgress, releaseOwnedResult],
   )
 
   /**
@@ -346,12 +423,12 @@ export function useClientRender(): UseClientRenderReturn {
    * which posts the cancel to its worker and terminates it.
    */
   const cancelExport = useCallback(() => {
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort()
+    if (activeRunRef.current) {
+      abortActiveRun()
       setStatus('cancelled')
       setIsExporting(false)
     }
-  }, [])
+  }, [abortActiveRun])
 
   /**
    * Download the rendered video/audio
@@ -402,8 +479,8 @@ export function useClientRender(): UseClientRenderReturn {
    * Reset state
    */
   const resetState = useCallback(() => {
-    abortControllerRef.current?.abort()
-    abortControllerRef.current = null
+    latestRunTokenRef.current++
+    abortActiveRun()
     setIsExporting(false)
     setProgress(0)
     setProgressMessage(undefined)
@@ -411,18 +488,21 @@ export function useClientRender(): UseClientRenderReturn {
     setTotalFrames(undefined)
     setStatus('idle')
     setError(null)
-    const previousResult = resultRef.current
-    resultRef.current = null
-    void releaseTemporaryExportOutput(previousResult)
+    const previousResultOwner = resultOwnerRef.current
+    resultOwnerRef.current = null
+    releaseOwnedResult(previousResultOwner)
     setResult(null)
-  }, [])
+  }, [abortActiveRun, releaseOwnedResult])
 
   useEffect(
     () => () => {
-      void releaseTemporaryExportOutput(resultRef.current)
-      resultRef.current = null
+      latestRunTokenRef.current++
+      abortActiveRun()
+      const ownedResult = resultOwnerRef.current
+      resultOwnerRef.current = null
+      releaseOwnedResult(ownedResult)
     },
-    [],
+    [abortActiveRun, releaseOwnedResult],
   )
 
   /**

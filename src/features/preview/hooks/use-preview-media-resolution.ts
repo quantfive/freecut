@@ -24,6 +24,11 @@ type ResolveMediaBatchResult = {
   failedIds: string[]
 }
 
+interface PendingPreviewResolve {
+  epoch: string
+  promise: Promise<string | null>
+}
+
 interface UsePreviewMediaResolutionParams {
   fps: number
   combinedTracks: TimelineTrack[]
@@ -58,7 +63,7 @@ export function usePreviewMediaResolution({
 
   const unresolvedMediaIdsRef = useRef<string[]>([])
   const unresolvedMediaIdSetRef = useRef<Set<string>>(new Set())
-  const pendingResolvePromisesRef = useRef<Map<string, Promise<string | null>>>(new Map())
+  const pendingResolvePromisesRef = useRef<Map<string, PendingPreviewResolve>>(new Map())
   const preloadResolveInFlightRef = useRef(false)
   const preloadBurstRemainingRef = useRef(0)
   const preloadScanTrackCursorRef = useRef(0)
@@ -234,19 +239,23 @@ export function usePreviewMediaResolution({
 
   const resolveMediaUrlDeduped = useCallback((mediaId: string): Promise<string | null> => {
     const pendingMap = pendingResolvePromisesRef.current
-    const existingPromise = pendingMap.get(mediaId)
-    if (existingPromise) {
-      return existingPromise
+    const epoch = blobUrlManager.getEpoch(mediaId)
+    const existingRequest = pendingMap.get(mediaId)
+    if (existingRequest?.epoch === epoch) {
+      return existingRequest.promise
     }
 
-    const promise = resolveMediaUrl(mediaId)
+    let promise!: Promise<string | null>
+    promise = resolveMediaUrl(mediaId)
       .then((url) => url ?? null)
       .catch(() => null)
       .finally(() => {
-        pendingMap.delete(mediaId)
+        if (pendingMap.get(mediaId)?.promise === promise) {
+          pendingMap.delete(mediaId)
+        }
       })
 
-    pendingMap.set(mediaId, promise)
+    pendingMap.set(mediaId, { epoch, promise })
     return promise
   }, [])
 

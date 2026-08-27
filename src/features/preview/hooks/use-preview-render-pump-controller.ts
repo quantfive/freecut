@@ -2490,6 +2490,9 @@ export function usePreviewRenderPump({
       const playStateChanged =
         state.isPlaying !== prev.isPlaying || renderedPlaybackActive !== renderedPlaybackWasActive
       const isAtomicScrubTarget = isAtomicPreviewTarget(state)
+      const visibleOverlayNeedsCurrentFrame =
+        showFastScrubOverlayRef.current &&
+        usePreviewBridgeStore.getState().displayedFrame !== state.currentFrame
 
       // Pointer release keeps the same numerical target, but it is still a
       // first-class committed request. Let it refresh the latest-target
@@ -2498,7 +2501,8 @@ export function usePreviewRenderPump({
       if (
         targetFrame === prevTargetFrame &&
         !playStateChanged &&
-        settlingReleasedScrubFrame === null
+        settlingReleasedScrubFrame === null &&
+        !visibleOverlayNeedsCurrentFrame
       ) {
         return
       }
@@ -2633,7 +2637,14 @@ export function usePreviewRenderPump({
           const requiresRenderedPath =
             forceFastScrubOverlay || shouldPreserveHighFidelityBackwardPreview(state.currentFrame)
           if (showFastScrubOverlayRef.current) {
-            if (settlingReleasedScrubFrame !== null && requiresRenderedPath) {
+            if (
+              (settlingReleasedScrubFrame !== null && requiresRenderedPath) ||
+              visibleOverlayNeedsCurrentFrame
+            ) {
+              // A prior skim canvas still covers the Player. A direct paused
+              // seek can move the Player to the exact frame without changing
+              // overlay ownership, so repaint that visible canvas as well;
+              // otherwise its previous clip remains on top indefinitely.
               scrubRequestedFrameRef.current = state.currentFrame
               void pumpRenderLoop()
             }

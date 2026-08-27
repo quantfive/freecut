@@ -403,7 +403,7 @@ describe('selectPreviewVideoSource', () => {
     ).toEqual(['blob:original', null, null])
   })
 
-  it('includes cached proxies when proxy media is selected', () => {
+  it('keeps the authoritative current source ahead of stale item and registered URLs', () => {
     expect(
       getPreviewVideoSourceCandidates({
         itemSource: 'blob:proxy',
@@ -412,7 +412,21 @@ describe('selectPreviewVideoSource', () => {
         cachedSource: 'blob:source',
         useProxyMedia: true,
       }),
-    ).toEqual(['blob:proxy', 'blob:proxy', 'blob:registered-proxy', 'blob:source'])
+    ).toEqual(['blob:proxy', 'blob:source', 'blob:registered-proxy', 'blob:proxy'])
+  })
+
+  it('selects a relinked current source instead of stale registered and item fallbacks', () => {
+    expect(
+      selectPreviewVideoSource({
+        candidates: getPreviewVideoSourceCandidates({
+          itemSource: 'blob:old-item',
+          proxySource: null,
+          registeredSource: 'blob:old-registered',
+          cachedSource: 'blob:new-current',
+          useProxyMedia: true,
+        }),
+      }),
+    ).toBe('blob:new-current')
   })
 
   it('selects the cached proxy when a compound item still carries its original source', () => {

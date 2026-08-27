@@ -9,7 +9,11 @@ import { blobUrlManager } from '@/infrastructure/browser/blob-url-manager'
 import { isColorGradeEffectType } from '@/infrastructure/gpu-effects'
 import { usePlaybackStore } from '@/shared/state/playback'
 import { resolveEffectiveTrackStates } from '@/features/preview/deps/timeline-utils'
-import { useCompositionsStore, useItemsStore } from '@/features/preview/deps/timeline-store'
+import {
+  useCompositionsStore,
+  useItemsStore,
+  type SubComposition,
+} from '@/features/preview/deps/timeline-store'
 import { appendVirtualTranscriptCaptionTrack } from '@/features/preview/deps/caption-items'
 import { useCornerPinStore } from '../stores/corner-pin-store'
 import { useGizmoStore, type ItemPreview } from '../stores/gizmo-store'
@@ -78,6 +82,7 @@ interface BuildPreviewCompositionDataParams {
   previewRenderSize?: PreviewPlayerSize
   resolveProxyUrlFn?: (mediaId: string) => string | null
   getBlobUrlFn?: (mediaId: string) => string | null
+  authoritativeSourceUrls?: ReadonlyMap<string, string>
 }
 
 interface UsePreviewCompositionModelParams {
@@ -99,6 +104,63 @@ interface UsePreviewCompositionBaseModelParams {
   tracks: TimelineTrack[]
   itemsByTrackId: Record<string, TimelineItem[]>
   mediaById: Record<string, Parameters<typeof getMediaResolveCost>[0]>
+}
+
+interface PreviewSourceBindings {
+  identity: string
+  urls: ReadonlyMap<string, string>
+}
+
+function getRenderableMediaId(item: TimelineItem): string | null {
+  if (!item.mediaId) return null
+  switch (item.type) {
+    case 'video':
+    case 'audio':
+    case 'image':
+    case 'lottie':
+      return item.mediaId
+    default:
+      return null
+  }
+}
+
+export function buildPreviewSourceBindings({
+  tracks,
+  compositionById,
+  getEpoch,
+  getUrl,
+}: {
+  tracks: TimelineTrack[]
+  compositionById: Readonly<Record<string, Pick<SubComposition, 'items'> | undefined>>
+  getEpoch: (mediaId: string) => string
+  getUrl: (mediaId: string) => string | null
+}): PreviewSourceBindings {
+  const urls = new Map<string, string>()
+  const identities: Array<[mediaId: string, epoch: string, url: string]> = []
+  const reachableMediaIds = new Set<string>()
+  const visitedCompositionIds = new Set<string>()
+
+  const visitItems = (items: readonly TimelineItem[]) => {
+    for (const item of items) {
+      const mediaId = getRenderableMediaId(item)
+      if (mediaId) reachableMediaIds.add(mediaId)
+
+      if (!item.compositionId || visitedCompositionIds.has(item.compositionId)) continue
+      visitedCompositionIds.add(item.compositionId)
+      const composition = compositionById[item.compositionId]
+      if (composition) visitItems(composition.items)
+    }
+  }
+
+  for (const track of tracks) visitItems(track.items)
+
+  for (const mediaId of [...reachableMediaIds].sort()) {
+    const url = getUrl(mediaId) ?? ''
+    if (url) urls.set(mediaId, url)
+    identities.push([mediaId, getEpoch(mediaId), url])
+  }
+
+  return { identity: JSON.stringify(identities), urls }
 }
 
 /**
@@ -224,6 +286,20 @@ export function usePreviewCompositionModel({
     () => ({ width: previewRenderWidth, height: previewRenderHeight }),
     [previewRenderHeight, previewRenderWidth],
   )
+  const compositionById = useCompositionsStore((state) => state.compositionById)
+  const sourceBindings = useMemo(() => {
+    // Blob URL notifications are synchronous external-store updates. Snapshot
+    // the active media epochs and URLs during render so a relink/invalidation
+    // cannot leave the passive-effect-backed resolvedUrls map owning a retired
+    // source for the next layout/presentation phase.
+    void blobUrlVersion
+    return buildPreviewSourceBindings({
+      tracks: combinedTracks,
+      compositionById,
+      getEpoch: (mediaId) => blobUrlManager.getEpoch(mediaId),
+      getUrl: (mediaId) => blobUrlManager.get(mediaId),
+    })
+  }, [blobUrlVersion, combinedTracks, compositionById])
   const {
     playbackVideoSourceSpans,
     scrubVideoSourceSpans,
@@ -252,6 +328,7 @@ export function usePreviewCompositionModel({
       blobUrlVersion,
       project,
       previewRenderSize,
+      authoritativeSourceUrls: sourceBindings.urls,
     })
   }, [
     blobUrlVersion,
@@ -264,6 +341,7 @@ export function usePreviewCompositionModel({
     previewRenderSize,
     proxyReadyCount,
     resolvedUrls,
+    sourceBindings.urls,
     transitions,
     useProxy,
   ])
@@ -374,6 +452,7 @@ export function usePreviewCompositionModel({
     fastScrubInputProps,
     fastScrubPreviewItems,
     fastScrubTracksTopologyFingerprint,
+    sourceBindingIdentity: sourceBindings.identity,
     getPreviewTransformOverride,
     getPreviewEffectsOverride,
     getPreviewCornerPinOverride,
@@ -397,6 +476,7 @@ export function buildPreviewCompositionData({
   previewRenderSize,
   resolveProxyUrlFn = resolveProxyUrl,
   getBlobUrlFn = (mediaId: string) => blobUrlManager.get(mediaId),
+  authoritativeSourceUrls,
 }: BuildPreviewCompositionDataParams) {
   void blobUrlVersion
   const resolvedTrackList: CompositionInputProps['tracks'] = []
@@ -423,9 +503,13 @@ export function buildPreviewCompositionData({
         continue
       }
 
-      const sourceUrl = resolvedUrls.get(item.mediaId) ?? getBlobUrlFn(item.mediaId) ?? ''
+      const sourceUrl = authoritativeSourceUrls
+        ? (authoritativeSourceUrls.get(item.mediaId) ?? '')
+        : (getBlobUrlFn(item.mediaId) ?? resolvedUrls.get(item.mediaId) ?? '')
       const proxyUrl =
-        item.type === 'video' ? resolveProxyUrlFn(item.mediaId) || sourceUrl : sourceUrl
+        item.type === 'video' && (!authoritativeSourceUrls || sourceUrl)
+          ? resolveProxyUrlFn(item.mediaId) || sourceUrl
+          : sourceUrl
       const resolvedSrc = useProxy && item.type === 'video' ? proxyUrl : sourceUrl
       const fastScrubSrc = resolvedSrc
       const hasMatchingAudioSrc = item.type !== 'video' || item.audioSrc === sourceUrl
@@ -509,7 +593,7 @@ export function buildPreviewCompositionData({
     (max, item) => Math.max(max, item.from + item.durationInFrames),
     0,
   )
-  const totalFrames = furthestItemEndFrame === 0 ? 900 : furthestItemEndFrame + fps * 5
+  const totalFrames = furthestItemEndFrame === 0 ? 900 : furthestItemEndFrame
   const inputProps: CompositionInputProps = {
     fps,
     width: project.width,

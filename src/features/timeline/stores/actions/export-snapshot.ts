@@ -52,6 +52,10 @@ function furthestItemEnd(items: TimelineItem[]): number {
   return Math.max(...items.map((item) => item.from + item.durationInFrames))
 }
 
+function cloneAudioEq(busAudioEq: AudioEqSettings | undefined): AudioEqSettings | undefined {
+  return busAudioEq ? { ...busAudioEq } : undefined
+}
+
 /** The active top-level tab (null = Main) — the picker's default selection. */
 export function getActiveExportSequenceId(): string | null {
   return getActiveTabId(useCompositionNavigationStore.getState().breadcrumbs)
@@ -87,7 +91,6 @@ export function getExportableSequence(sequenceId: string | null): ExportableSequ
   const activeTabId = getActiveTabId(nav.breadcrumbs)
   const playback = usePlaybackStore.getState()
   const markersState = useMarkersStore.getState()
-  const isActiveTab = sequenceId === activeTabId
   // The markers store holds the range of whatever timeline is *loaded* — the
   // deepest drill level, which is not the tab root once you drill into a comp.
   // Keying this on the tab id reported a drilled-into comp's range as Main's,
@@ -124,8 +127,16 @@ export function getExportableSequence(sequenceId: string | null): ExportableSequ
   if (sequenceId === null) {
     const root = getRootTimelineSnapshot(current)
     const metadata = useProjectStore.getState().currentProject?.metadata
-    // Main's audio bus / range are live when Main is active, else held aside.
-    const busAudioEq = activeTabId === null ? playback.busAudioEq : nav.mainHolder?.busAudioEq
+    // Main owns the live mixer/range only when Main itself is the loaded
+    // composition. While drilling from Main, its complete snapshot is the
+    // null-composition root stash; while another tab is active it is held in
+    // mainHolder. The active tab alone cannot distinguish Main from a drilled
+    // child because both retain a null root breadcrumb.
+    const heldRoot =
+      activeTabId === null
+        ? nav.stashStack.find((stash) => stash.compositionId === null)
+        : nav.mainHolder
+    const busAudioEq = nav.activeCompositionId === null ? playback.busAudioEq : heldRoot?.busAudioEq
     return {
       id: null,
       name: MAIN_LABEL,
@@ -137,10 +148,10 @@ export function getExportableSequence(sequenceId: string | null): ExportableSequ
       width: metadata?.width ?? DEFAULT_PROJECT_WIDTH,
       height: metadata?.height ?? DEFAULT_PROJECT_HEIGHT,
       backgroundColor: metadata?.backgroundColor,
-      busAudioEq,
+      busAudioEq: cloneAudioEq(busAudioEq),
       masterBusDb: playback.masterBusDb,
       durationFrames: furthestItemEnd(root.items),
-      ...range(nav.mainHolder),
+      ...range(heldRoot),
     }
   }
 
@@ -160,9 +171,12 @@ export function getExportableSequence(sequenceId: string | null): ExportableSequ
     width: comp.width,
     height: comp.height,
     backgroundColor: comp.backgroundColor,
-    // Live mixer edits live in the playback store for the active sequence; the
-    // registry entry is only up to date once we've switched away from it.
-    busAudioEq: isActiveTab ? playback.busAudioEq : comp.busAudioEq,
+    // Live mixer edits belong to the deepest composition being edited, not the
+    // top-level tab. A drilled child therefore owns playback.busAudioEq while
+    // its tab root must continue using the registry snapshot.
+    busAudioEq: cloneAudioEq(
+      sequenceId === nav.activeCompositionId ? playback.busAudioEq : comp.busAudioEq,
+    ),
     masterBusDb: playback.masterBusDb,
     durationFrames: comp.durationInFrames || furthestItemEnd(comp.items),
     ...range(comp),

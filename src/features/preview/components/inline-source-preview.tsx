@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useState } from 'react'
+import { memo, useEffect, useLayoutEffect, useMemo, useState } from 'react'
 import {
   PlayerEmitterProvider,
   ClockBridgeProvider,
@@ -11,6 +11,7 @@ import { SourceComposition } from './source-composition'
 import { usePlaybackStore } from '@/shared/state/playback'
 import { EDITOR_LAYOUT_CSS_VALUES } from '@/config/editor-layout'
 import { getPreviewNeedsOverflow, getPreviewPlayerSize } from '../utils/preview-pixel-snap'
+import { useBlobUrlEpoch } from '@/infrastructure/browser/blob-url-manager'
 
 interface InlineSourcePreviewProps {
   mediaId: string
@@ -53,14 +54,17 @@ const InlineSourcePreviewContent = memo(function InlineSourcePreviewContent({
 }: InlineSourcePreviewProps) {
   const [blobUrl, setBlobUrl] = useState('')
   const media = useMediaLibraryStore((s) => s.mediaById[mediaId])
+  const blobUrlEpoch = useBlobUrlEpoch(mediaId)
   const zoom = usePlaybackStore((s) => s.zoom)
   const mediaWidth = media?.width || 640
   const mediaHeight = media?.height || 360
 
+  useLayoutEffect(() => {
+    setBlobUrl('')
+  }, [blobUrlEpoch, mediaId])
+
   useEffect(() => {
     let cancelled = false
-    setBlobUrl('')
-
     resolveMediaUrl(mediaId)
       .then((url) => {
         if (!cancelled) {
@@ -74,7 +78,7 @@ const InlineSourcePreviewContent = memo(function InlineSourcePreviewContent({
     return () => {
       cancelled = true
     }
-  }, [mediaId])
+  }, [blobUrlEpoch, mediaId])
 
   const containerWidth = containerSize.width
   const containerHeight = containerSize.height

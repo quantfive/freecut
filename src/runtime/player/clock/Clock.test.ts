@@ -186,4 +186,44 @@ describe('Clock playback timing', () => {
 
     clock.dispose()
   })
+
+  it('crosses adjacent clip sources before applying genuine end or loop behavior', () => {
+    const sources = [
+      { from: 1, end: 91, picture: 'red', audioHz: 440 },
+      { from: 91, end: 181, picture: 'blue', audioHz: 880 },
+    ]
+    const sourceAt = (frame: number) =>
+      sources.find((source) => frame >= source.from && frame < source.end) ?? null
+    const clock = new Clock({
+      fps: 30,
+      durationInFrames: 181,
+      initialFrame: 90,
+    })
+
+    expect(sourceAt(clock.currentFrame)).toMatchObject({ picture: 'red', audioHz: 440 })
+    clock.play()
+    runNextAnimationFrame(34)
+    expect(clock.currentFrame).toBe(91)
+    expect(sourceAt(clock.currentFrame)).toMatchObject({ picture: 'blue', audioHz: 880 })
+
+    runNextAnimationFrame(4_000)
+    expect(clock.currentFrame).toBe(180)
+    expect(sourceAt(clock.currentFrame)).toMatchObject({ picture: 'blue', audioHz: 880 })
+    expect(clock.isPlaying).toBe(false)
+    clock.dispose()
+
+    nowMs = 0
+    const loopingClock = new Clock({
+      fps: 30,
+      durationInFrames: 181,
+      initialFrame: 180,
+      loop: true,
+    })
+    loopingClock.play()
+    expect(loopingClock.currentFrame).toBe(0)
+    runNextAnimationFrame(34)
+    expect(loopingClock.currentFrame).toBe(1)
+    expect(sourceAt(loopingClock.currentFrame)).toMatchObject({ picture: 'red', audioHz: 440 })
+    loopingClock.dispose()
+  })
 })

@@ -9,6 +9,7 @@ import { useTimelineSettingsStore } from '../stores/timeline-settings-store'
 import { useTimelineViewportStore } from '../stores/timeline-viewport-store'
 import { registerZoomTo100, useZoomStore } from '../stores/zoom-store'
 import { usePlaybackStore } from '@/shared/state/playback'
+import { isMicRecordingActive, useMicRecordingStore } from '@/shared/state/mic-recording-store'
 import { useEditorStore } from '@/shared/state/editor'
 import { useSelectionStore } from '@/shared/state/selection'
 
@@ -89,6 +90,64 @@ const FINE_ZOOM_FACTOR = 1.1
 const DENSE_TIMELINE_HOVER_PREVIEW_DELAY_MS = 150
 
 type TrackScrollbarSection = 'video' | 'audio' | 'single'
+
+function shouldIgnoreTimelineContainerClick(
+  target: HTMLElement,
+  interactionJustFinished: boolean,
+): boolean {
+  return (
+    interactionJustFinished ||
+    Boolean(target.closest('[role="menu"]')) ||
+    isMicRecordingActive(useMicRecordingStore.getState().status)
+  )
+}
+
+function shouldIgnoreTimelineMouseDownCapture(button: number): boolean {
+  return button !== 0 || isMicRecordingActive(useMicRecordingStore.getState().status)
+}
+
+function resolveTimelineContainerClickFrame(
+  clientX: number,
+  container: HTMLDivElement | null,
+  pixelsToFrame: (pixels: number) => number,
+  maxTimelineFrame: number,
+): number {
+  const playback = usePlaybackStore.getState()
+  if (playback.previewFrame !== null) return playback.previewFrame
+  if (!container) return playback.currentFrame
+
+  const localX = clientX - container.getBoundingClientRect().left + container.scrollLeft
+  return Math.max(0, Math.min(Math.round(pixelsToFrame(localX)), maxTimelineFrame))
+}
+
+function seekTimelineTrackAtPointer({
+  target,
+  clientX,
+  container,
+  pixelsToFrame,
+  maxTimelineFrame,
+}: {
+  target: HTMLElement
+  clientX: number
+  container: HTMLDivElement | null
+  pixelsToFrame: (pixels: number) => number
+  maxTimelineFrame: number
+}): void {
+  if (!target.closest('[data-track-id]')) return
+  if (useSelectionStore.getState().activeTool === 'razor') return
+  if (isMicRecordingActive(useMicRecordingStore.getState().status)) return
+
+  const playback = usePlaybackStore.getState()
+  const frame = resolveTimelineContainerClickFrame(
+    clientX,
+    container,
+    pixelsToFrame,
+    maxTimelineFrame,
+  )
+  playback.pause()
+  playback.setPreviewFrame(null)
+  playback.setCurrentFrame(frame)
+}
 
 function revealTrackInScrollContainer(container: HTMLDivElement | null, trackId: string): boolean {
   if (!container) {
@@ -823,9 +882,11 @@ export const TimelineContent = memo(function TimelineContent({
   const setPreviewFrame = usePlaybackStore((s) => s.setPreviewFrame)
   const setPreviewFrameRef = useRef(setPreviewFrame)
   setPreviewFrameRef.current = setPreviewFrame
+  const previewInteractionEpochRef = useRef(0)
   const previewRafRef = useRef<number | null>(null)
   const previewDelayTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const cancelPendingHoverPreview = useCallback(() => {
+    previewInteractionEpochRef.current += 1
     if (previewDelayTimeoutRef.current !== null) {
       clearTimeout(previewDelayTimeoutRef.current)
       previewDelayTimeoutRef.current = null
@@ -833,6 +894,10 @@ export const TimelineContent = memo(function TimelineContent({
     if (previewRafRef.current !== null) {
       cancelAnimationFrame(previewRafRef.current)
       previewRafRef.current = null
+    }
+    if (marqueeReleaseRafRef.current !== null) {
+      cancelAnimationFrame(marqueeReleaseRafRef.current)
+      marqueeReleaseRafRef.current = null
     }
   }, [])
   useTimelineAudioSkimPreview()
@@ -1275,6 +1340,7 @@ export const TimelineContent = memo(function TimelineContent({
       const target = e.target as HTMLElement
       // Check if mousedown is on a playhead handle or timeline ruler
       if (target.closest('[data-playhead-handle]') || target.closest('.timeline-ruler')) {
+        cancelPendingHoverPreview()
         scrubWasActiveRef.current = true
       }
     }
@@ -1306,31 +1372,53 @@ export const TimelineContent = memo(function TimelineContent({
         scrubTimeoutRef.current = null
       }
     }
-  }, [])
+  }, [cancelPendingHoverPreview])
 
-  // Click empty space to deselect items and markers (but preserve track selection)
+  // Commit the hover skimmer on a normal timeline click. Ruler clicks own their
+  // own scrub path, while drag/marquee/razor gestures must not move playback.
   const handleContainerClick = (e: React.MouseEvent) => {
-    // Don't deselect if marquee selection, drag, or scrubbing just finished
-    if (marqueeWasActiveRef.current || dragWasActiveRef.current || scrubWasActiveRef.current) {
-      return
-    }
-
-    // Don't deselect if clicking inside a context menu portal (Radix renders
-    // menus in a portal outside the timeline DOM, but React synthetic events
-    // still bubble through the component tree)
     const target = e.target as HTMLElement
-    if (target.closest('[role="menu"]')) {
+    const interactionJustFinished =
+      marqueeWasActiveRef.current || dragWasActiveRef.current || scrubWasActiveRef.current
+    // Radix menus render outside the timeline DOM, but their synthetic events
+    // still bubble through this component tree.
+    if (shouldIgnoreTimelineContainerClick(target, interactionJustFinished)) {
       return
     }
 
-    // Deselect items and markers if NOT clicking on a timeline item
+    // A normal background click arrives after the marquee mouseup callback.
+    // Cancel its queued preview restore before committing the click so the
+    // program monitor follows currentFrame instead of resurrecting the hover
+    // frame on the next animation frame.
+    cancelPendingHoverPreview()
     const clickedOnItem = target.closest('[data-item-id]')
+    seekTimelineTrackAtPointer({
+      target,
+      clientX: e.clientX,
+      container: containerRef.current,
+      pixelsToFrame: pixelsToFrameRef.current,
+      maxTimelineFrame: maxTimelineFrameRef.current,
+    })
 
+    // Deselect items and markers if NOT clicking on a timeline item.
     if (!clickedOnItem) {
       clearItemSelection()
       selectMarker(null) // Also clear marker selection
     }
   }
+
+  const handleTimelineClickCapture = useCallback(
+    (e: React.MouseEvent) => {
+      if (e.button !== 0) return
+      const target = e.target as HTMLElement
+      if (!target.closest('[data-track-id]')) return
+
+      // Item clicks stop propagation, so invalidate hover work here before the
+      // item's click handler commits its own geometry-derived seek.
+      cancelPendingHoverPreview()
+    },
+    [cancelPendingHoverPreview],
+  )
 
   // Build snap targets for razor shift-snap (item edges, grid, playhead, markers)
   // Called on-demand during mouse move — reads stores directly to avoid subscriptions
@@ -1356,37 +1444,33 @@ export const TimelineContent = memo(function TimelineContent({
   }, [])
 
   // Preview scrubber: show ghost playhead on hover
-  const handleTimelineMouseDownCapture = useCallback((e: React.MouseEvent) => {
-    if (e.button !== 0) return
+  const handleTimelineMouseDownCapture = useCallback(
+    (e: React.MouseEvent) => {
+      if (shouldIgnoreTimelineMouseDownCapture(e.button)) return
 
-    const target = e.target as HTMLElement
-    if (
-      !target.closest('[data-track-id]') ||
-      target.closest('[data-item-id]') ||
-      target.closest('[data-timeline-density-bucket]')
-    ) {
-      return
-    }
+      const target = e.target as HTMLElement
+      if (!target.closest('[data-track-id]')) return
 
-    // A press on track background is a potential marquee gesture. Freeze the
-    // skim target immediately so the few pixels before marquee activation do
-    // not briefly seek the preview away from the mouse-down frame.
-    marqueePointerDownRef.current = true
-    if (marqueeReleaseRafRef.current !== null) {
-      cancelAnimationFrame(marqueeReleaseRafRef.current)
-      marqueeReleaseRafRef.current = null
-    }
-    const playback = usePlaybackStore.getState()
-    marqueeStartPreviewFrameRef.current = playback.previewFrame
-    marqueeReleasePreviewRef.current =
-      playback.previewFrame === null
-        ? null
-        : { frame: playback.previewFrame, itemId: playback.previewItemId ?? undefined }
-    if (previewRafRef.current !== null) {
-      cancelAnimationFrame(previewRafRef.current)
-      previewRafRef.current = null
-    }
-  }, [])
+      // Start a new interaction epoch before item/background handlers run. A
+      // hover callback already dequeued by the browser can no longer take display
+      // ownership during this pointer interaction.
+      cancelPendingHoverPreview()
+      if (target.closest('[data-item-id]') || target.closest('[data-timeline-density-bucket]'))
+        return
+
+      // A press on track background is a potential marquee gesture. Freeze the
+      // skim target immediately so the few pixels before marquee activation do
+      // not briefly seek the preview away from the mouse-down frame.
+      marqueePointerDownRef.current = true
+      const playback = usePlaybackStore.getState()
+      marqueeStartPreviewFrameRef.current = playback.previewFrame
+      marqueeReleasePreviewRef.current =
+        playback.previewFrame === null
+          ? null
+          : { frame: playback.previewFrame, itemId: playback.previewItemId ?? undefined }
+    },
+    [cancelPendingHoverPreview],
+  )
 
   const finishMarqueePointerGesture = useCallback((e: MouseEvent) => {
     const wasMarqueePointerGesture = marqueePointerDownRef.current
@@ -1409,10 +1493,15 @@ export const TimelineContent = memo(function TimelineContent({
     if (pointerIsInsideTimeline && releasePreview) {
       // Complete marquee teardown first. Its mouseup path may clear transient
       // preview state later in the same event dispatch.
-      marqueeReleaseRafRef.current = requestAnimationFrame(() => {
-        marqueeReleaseRafRef.current = null
+      const previewEpoch = previewInteractionEpochRef.current
+      const releaseRafId = requestAnimationFrame(() => {
+        if (marqueeReleaseRafRef.current === releaseRafId) {
+          marqueeReleaseRafRef.current = null
+        }
+        if (previewEpoch !== previewInteractionEpochRef.current) return
         setPreviewFrameRef.current(releasePreview.frame, releasePreview.itemId)
       })
+      marqueeReleaseRafRef.current = releaseRafId
     } else {
       setPreviewFrameRef.current(null)
     }
@@ -1534,21 +1623,29 @@ export const TimelineContent = memo(function TimelineContent({
       // normal hover responsive while allowing Ctrl/Cmd-wheel to cancel the
       // pending preview before it can compete with the first zoom frame.
       cancelPendingHoverPreview()
+      const previewEpoch = previewInteractionEpochRef.current
       const schedulePreviewFrame = () => {
-        previewDelayTimeoutRef.current = null
-        previewRafRef.current = requestAnimationFrame(() => {
-          previewRafRef.current = null
+        if (previewEpoch !== previewInteractionEpochRef.current) return
+        const previewRafId = requestAnimationFrame(() => {
+          if (previewRafRef.current === previewRafId) {
+            previewRafRef.current = null
+          }
+          if (previewEpoch !== previewInteractionEpochRef.current) return
           withPerfMeasure('tl.raf.previewHover', () => setPreviewFrameRef.current(frame, itemId))
         })
+        previewRafRef.current = previewRafId
       }
       if (
         useItemsStore.getState().items.length >= DENSE_TIMELINE_TRACK_ITEM_THRESHOLD &&
         usePlaybackStore.getState().previewFrame === null
       ) {
-        previewDelayTimeoutRef.current = setTimeout(
-          schedulePreviewFrame,
-          DENSE_TIMELINE_HOVER_PREVIEW_DELAY_MS,
-        )
+        const previewDelayTimeout = setTimeout(() => {
+          if (previewDelayTimeoutRef.current === previewDelayTimeout) {
+            previewDelayTimeoutRef.current = null
+          }
+          schedulePreviewFrame()
+        }, DENSE_TIMELINE_HOVER_PREVIEW_DELAY_MS)
+        previewDelayTimeoutRef.current = previewDelayTimeout
       } else {
         schedulePreviewFrame()
       }
@@ -2141,6 +2238,7 @@ export const TimelineContent = memo(function TimelineContent({
           willChange: 'scroll-position',
         }}
         onMouseDownCapture={handleTimelineMouseDownCapture}
+        onClickCapture={handleTimelineClickCapture}
         onClick={handleContainerClick}
         onMouseMove={handleTimelineMouseMove}
         onMouseLeave={handleTimelineMouseLeave}

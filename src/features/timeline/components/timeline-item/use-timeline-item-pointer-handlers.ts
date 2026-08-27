@@ -2,6 +2,7 @@ import { useCallback, type Dispatch, type RefObject, type SetStateAction } from 
 import type { TimelineItem as TimelineItemType } from '@/types/timeline'
 import type { SelectionState } from '@/shared/state/selection'
 import { usePlaybackStore } from '@/shared/state/playback'
+import { isMicRecordingActive, useMicRecordingStore } from '@/shared/state/mic-recording-store'
 import { useEditorStore } from '@/shared/state/editor'
 import { useSourcePlayerStore } from '@/shared/state/source-player'
 import { useSelectionStore } from '@/shared/state/selection'
@@ -156,6 +157,26 @@ export function useTimelineItemPointerHandlers({
         return
       }
 
+      // Clip clicks stop propagation for selection, so they must explicitly
+      // seek from this click's own geometry. The hover skimmer can still hold
+      // the previous pointer event (including the next clip boundary), so it
+      // must never own the committed click frame.
+      if (!isMicRecordingActive(useMicRecordingStore.getState().status)) {
+        const playback = usePlaybackStore.getState()
+        const rect = e.currentTarget.getBoundingClientRect()
+        const relativeX = Math.max(0, Math.min(e.clientX - rect.left, rect.width))
+        const frameOffset =
+          rect.width > 0
+            ? Math.min(
+                Math.max(0, item.durationInFrames - 1),
+                Math.floor((relativeX / rect.width) * item.durationInFrames),
+              )
+            : 0
+        const clickedFrame = Math.max(0, item.from + frameOffset)
+        playback.pause()
+        playback.finishScrub(clickedFrame)
+      }
+
       if (activeToolRef.current === 'select' || activeToolRef.current === 'trim-edit') {
         const bridgedHandle = smartTrimIntentToHandle(smartTrimIntentRef.current)
         if (bridgedHandle) {
@@ -193,7 +214,15 @@ export function useTimelineItemPointerHandlers({
         selectItems(targetIds)
       }
     },
-    [activeToolRef, dragWasActiveRef, trackLocked, item.from, item.id, smartTrimIntentRef],
+    [
+      activeToolRef,
+      dragWasActiveRef,
+      trackLocked,
+      item.durationInFrames,
+      item.from,
+      item.id,
+      smartTrimIntentRef,
+    ],
   )
 
   // Double-click: open media in source monitor with clip's source range as I/O
