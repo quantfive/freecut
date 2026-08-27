@@ -17,6 +17,89 @@ const ROLLDOWN_PARITY_CASES = [
     resolves: true,
   },
   {
+    name: 'function-local let initializer',
+    source: "export function load() { let pkg = 'react-hotkeys-hook'; return import(pkg) }",
+    resolves: true,
+  },
+  {
+    name: 'function-local var initializer',
+    source: "export function load() { var pkg = 'react-hotkeys-hook'; return import(pkg) }",
+    resolves: true,
+  },
+  {
+    name: 'function-local let simple assignment',
+    source: "export function load() { let pkg; pkg = 'react-hotkeys-hook'; return import(pkg) }",
+    resolves: true,
+  },
+  {
+    name: 'function-local var simple assignment',
+    source: "export function load() { var pkg; pkg = 'react-hotkeys-hook'; return import(pkg) }",
+    resolves: true,
+  },
+  {
+    name: 'mutable read before assignment',
+    source: "export function load() { let pkg; import(pkg); pkg = 'react-hotkeys-hook' }",
+    resolves: false,
+  },
+  {
+    name: 'mutable reassignment before use',
+    source:
+      "export function load() { let pkg = 'react-hotkeys-hook'; pkg = 'other'; return import(pkg) }",
+    resolves: false,
+  },
+  {
+    name: 'mutable reassignment after use',
+    source: "export function load() { let pkg = 'react-hotkeys-hook'; import(pkg); pkg = 'other' }",
+    resolves: false,
+  },
+  {
+    name: 'mutable branch write',
+    source:
+      "declare const enabled: boolean; export function load() { let pkg; if (enabled) pkg = 'react-hotkeys-hook'; return import(pkg) }",
+    resolves: false,
+  },
+  {
+    name: 'mutable loop write',
+    source:
+      "declare const enabled: boolean; export function load() { let pkg; while (enabled) pkg = 'react-hotkeys-hook'; return import(pkg) }",
+    resolves: false,
+  },
+  {
+    name: 'mutable unknown write',
+    source:
+      "declare function moduleName(): string; export function load() { let pkg = 'react-hotkeys-hook'; pkg = moduleName(); return import(pkg) }",
+    resolves: false,
+  },
+  {
+    name: 'mutable nested block assignment',
+    source: "export function load() { let pkg; { pkg = 'react-hotkeys-hook' } return import(pkg) }",
+    resolves: true,
+  },
+  {
+    name: 'mutable alias after assignment',
+    source:
+      "export function load() { let pkg; pkg = 'react-hotkeys-hook'; const alias = pkg; return import(alias) }",
+    resolves: true,
+  },
+  {
+    name: 'mutable alias before assignment',
+    source:
+      "export function load() { let pkg; const alias = pkg; pkg = 'react-hotkeys-hook'; return import(alias) }",
+    resolves: false,
+  },
+  {
+    name: 'mutable alias captured before later write',
+    source:
+      "export function load() { let pkg = 'react-hotkeys-hook'; const alias = pkg; pkg = 'other'; return import(alias) }",
+    resolves: false,
+  },
+  {
+    name: 'mutable closure uncertainty',
+    source:
+      "export function load() { let pkg = 'react-hotkeys-hook'; const inner = () => import(pkg); return inner }",
+    resolves: false,
+  },
+  {
     name: 'shadowed parameter',
     source:
       "const pkg = 'react-hotkeys-hook'; export function load(pkg: string) { return import(pkg) }",
@@ -512,6 +595,72 @@ const ROLLDOWN_PARITY_CASES = [
   {
     name: 'global require',
     source: "export function load() { return require('react-hotkeys-hook') }",
+    resolves: true,
+  },
+  {
+    name: 'type-only named require binding',
+    source:
+      "import { type require } from 'runtime-name'; export function load() { return require('react-hotkeys-hook') }",
+    resolves: true,
+  },
+  {
+    name: 'type-only default require binding',
+    source:
+      "import type require from 'runtime-name'; export function load() { return require('react-hotkeys-hook') }",
+    resolves: true,
+  },
+  {
+    name: 'type-only namespace require binding',
+    source:
+      "import type * as require from 'runtime-name'; export function load() { return require('react-hotkeys-hook') }",
+    resolves: true,
+  },
+  {
+    name: 'type-only import does not shadow package binding',
+    source:
+      "const pkg = 'react-hotkeys-hook'; import type { pkg } from 'runtime-name'; import(pkg)",
+    resolves: true,
+  },
+  {
+    name: 'mixed value import still shadows require',
+    source:
+      "import { type Other, require } from 'runtime-name'; export function load() { return require('react-hotkeys-hook') }",
+    resolves: false,
+  },
+  {
+    name: 'ambient function require binding',
+    source:
+      "declare function require(id: string): unknown; export function load() { return require('react-hotkeys-hook') }",
+    resolves: true,
+  },
+  {
+    name: 'ambient const require binding',
+    source:
+      "declare const require: (id: string) => unknown; export function load() { return require('react-hotkeys-hook') }",
+    resolves: true,
+  },
+  {
+    name: 'ambient let require binding',
+    source:
+      "declare let require: (id: string) => unknown; export function load() { return require('react-hotkeys-hook') }",
+    resolves: true,
+  },
+  {
+    name: 'ambient var require binding',
+    source:
+      "declare var require: (id: string) => unknown; export function load() { return require('react-hotkeys-hook') }",
+    resolves: true,
+  },
+  {
+    name: 'ambient class require binding',
+    source:
+      "declare class require {} export function load() { return require('react-hotkeys-hook') }",
+    resolves: true,
+  },
+  {
+    name: 'ambient namespace require binding',
+    source:
+      "declare namespace require {} export function load() { return require('react-hotkeys-hook') }",
     resolves: true,
   },
   {
