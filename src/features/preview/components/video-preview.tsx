@@ -72,6 +72,27 @@ interface PreviewItemsSnapshot {
   itemsByTrackId: Record<string, TimelineItem[]>
 }
 
+function hasResolvedVisualSourceAtFrame(
+  tracks: Array<{ visible?: boolean; solo?: boolean; items: TimelineItem[] }>,
+  frame: number,
+): boolean {
+  const hasSoloTrack = tracks.some((track) => track.solo)
+  for (const track of tracks) {
+    if (track.visible === false || (hasSoloTrack && !track.solo)) continue
+    for (const item of track.items) {
+      if (frame < item.from || frame >= item.from + item.durationInFrames) continue
+      if (
+        item.mediaId &&
+        (item.type === 'video' || item.type === 'image' || item.type === 'lottie') &&
+        (!('src' in item) || !item.src)
+      ) {
+        return false
+      }
+    }
+  }
+  return true
+}
+
 /**
  * Video Preview Component
  *
@@ -296,6 +317,7 @@ const VideoPreviewBase = memo(function VideoPreviewBase({
     fastScrubInputProps,
     fastScrubPreviewItems,
     fastScrubTracksTopologyFingerprint,
+    sourceBindingIdentity,
     getPreviewTransformOverride,
     getPreviewEffectsOverride,
     getPreviewCornerPinOverride,
@@ -382,6 +404,7 @@ const VideoPreviewBase = memo(function VideoPreviewBase({
         renderSize.height,
         project.backgroundColor ?? '',
         useProxy ? 'proxy' : 'source',
+        sourceBindingIdentity,
         fastScrubTracksTopologyFingerprint,
         domTextScrubOverlayPlan.enabled ? 'dom-text-overlay' : 'composited-text',
         playbackTransitionFingerprint,
@@ -396,6 +419,7 @@ const VideoPreviewBase = memo(function VideoPreviewBase({
       project.width,
       renderSize.height,
       renderSize.width,
+      sourceBindingIdentity,
       useProxy,
     ],
   )
@@ -914,6 +938,14 @@ const VideoPreviewBase = memo(function VideoPreviewBase({
     stageColorGradeComparisonMode === 'split' && comparisonDisplayedFrame !== null
       ? comparisonDisplayedFrame
       : baseComparisonTargetFrame
+  const isComparisonSourceBindingReady = hasResolvedVisualSourceAtFrame(
+    fastScrubScaledTracks as Array<{
+      visible?: boolean
+      solo?: boolean
+      items: TimelineItem[]
+    }>,
+    comparisonTargetFrame,
+  )
 
   // Leaving split comparison clears the rendered after-frame. Kept as its own
   // effect keyed only on the mode so the per-frame `comparisonTargetFrame`
@@ -926,6 +958,11 @@ const VideoPreviewBase = memo(function VideoPreviewBase({
 
   useEffect(() => {
     if (stageColorGradeComparisonMode !== 'split') return
+    if (!isComparisonSourceBindingReady) {
+      splitAfterPendingFrameRef.current = null
+      setSplitAfterPresentation((presentation) => (presentation === null ? presentation : null))
+      return
+    }
 
     let cancelled = false
     const renderGeneration = ++splitAfterRenderGenerationRef.current
@@ -1005,6 +1042,7 @@ const VideoPreviewBase = memo(function VideoPreviewBase({
     ensureSplitAfterRenderer,
     fastScrubRendererStructureKey,
     gpuEffectsCanvasRef,
+    isComparisonSourceBindingReady,
     livePreviewEdits,
     stageColorGradeComparisonMode,
   ])
@@ -1018,6 +1056,7 @@ const VideoPreviewBase = memo(function VideoPreviewBase({
   const isColorGradeComparisonActive = stageColorGradeComparisonMode !== 'off'
   const isSplitGradeComparison = stageColorGradeComparisonMode === 'split'
   const isColorGradeComparisonFrameReady =
+    isComparisonSourceBindingReady &&
     comparisonDisplayedFrame === comparisonTargetFrame &&
     (isSplitGradeComparison
       ? splitAfterPresentation?.frame === comparisonTargetFrame &&
