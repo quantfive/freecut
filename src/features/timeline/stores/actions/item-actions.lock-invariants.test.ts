@@ -3,18 +3,23 @@
 import { beforeEach, describe, expect, it } from 'vite-plus/test'
 import type { AudioItem, TimelineTrack, VideoItem } from '@/types/timeline'
 import { useEditorStore } from '@/shared/state/editor'
+import { useSelectionStore } from '@/shared/state/selection'
 import { useItemsStore } from '../items-store'
 import { useKeyframesStore } from '../keyframes-store'
 import { useTimelineCommandStore } from '../timeline-command-store'
 import { useTimelineSettingsStore } from '../timeline-settings-store'
 import { useTransitionsStore } from '../transitions-store'
+import { useReverseConformDialogStore } from '../reverse-conform-dialog-store'
 import {
   closeAllGapsOnTrack,
   closeGapAtPosition,
   moveItem,
   moveItems,
+  linkItems,
+  commitPreparedReverseItems,
   removeItems,
   rippleDeleteItems,
+  reverseItems,
   unlinkItems,
   updateItem,
 } from './item-actions'
@@ -73,18 +78,21 @@ function makeAudioItem(overrides: Partial<AudioItem> = {}): AudioItem {
 
 function expectNoHistory(): void {
   expect(useTimelineCommandStore.getState().undoStack).toHaveLength(0)
+  expect(useTimelineCommandStore.getState().redoStack).toHaveLength(0)
   expect(useTimelineSettingsStore.getState().isDirty).toBe(false)
 }
 
 describe('track lock mutation invariants', () => {
   beforeEach(() => {
     useEditorStore.setState({ linkedSelectionEnabled: true })
+    useSelectionStore.getState().clearSelection()
     useItemsStore.getState().setItems([])
     useItemsStore.getState().setTracks([])
     useTransitionsStore.getState().setTransitions([])
     useKeyframesStore.getState().setKeyframes([])
     useTimelineCommandStore.getState().clearHistory()
     useTimelineSettingsStore.setState({ fps: 30, isDirty: false })
+    useReverseConformDialogStore.setState({ request: null })
   })
 
   it('rejects direct timing, track, source-placement, and delete mutations on a locked item', () => {
@@ -145,33 +153,142 @@ describe('track lock mutation invariants', () => {
     expectNoHistory()
   })
 
-  it('requires explicit unlink before deleting away from a locked companion', () => {
-    useEditorStore.setState({ linkedSelectionEnabled: false })
-    useItemsStore.getState().setTracks([
-      makeTrack({ id: 'video-track', name: 'V1', kind: 'video', order: 0 }),
-      makeTrack({
-        id: 'audio-track',
-        name: 'A1',
-        kind: 'audio',
-        order: 1,
-        locked: true,
-      }),
+  it.each([true, false])(
+    'rejects unlinking and deleting away from a locked companion when linked selection is %s',
+    (linkedSelectionEnabled) => {
+      useEditorStore.setState({ linkedSelectionEnabled })
+      useItemsStore.getState().setTracks([
+        makeTrack({ id: 'video-track', name: 'V1', kind: 'video', order: 0 }),
+        makeTrack({
+          id: 'audio-track',
+          name: 'A1',
+          kind: 'audio',
+          order: 1,
+          locked: true,
+        }),
+      ])
+      const video = makeVideoItem({ linkedGroupId: 'linked-av' })
+      const audio = makeAudioItem({ linkedGroupId: 'linked-av' })
+      useItemsStore.getState().setItems([video, audio])
+
+      useSelectionStore.getState().selectItems([video.id])
+      const selectionBefore = useSelectionStore.getState().selectedItemIds
+
+      removeItems([video.id])
+      unlinkItems([video.id])
+      removeItems([video.id])
+
+      expect(useItemsStore.getState().items).toEqual([video, audio])
+      expect(useSelectionStore.getState().selectedItemIds).toEqual(selectionBefore)
+      expectNoHistory()
+    },
+  )
+
+  it('rejects a prepared reverse commit when a nested linked track locks during conforming', () => {
+    const group = makeTrack({
+      id: 'group',
+      name: 'Group',
+      kind: 'audio',
+      order: 1,
+      isGroup: true,
+    })
+    const videoTrack = makeTrack({ id: 'video-track', name: 'V1', kind: 'video', order: 0 })
+    const audioTrack = makeTrack({
+      id: 'audio-track',
+      name: 'A1',
+      kind: 'audio',
+      order: 2,
+      parentTrackId: group.id,
+    })
+    const linkedVideo = makeVideoItem({ linkedGroupId: 'linked-av' })
+    const linkedAudio = makeAudioItem({ linkedGroupId: 'linked-av' })
+    useItemsStore.getState().setTracks([videoTrack, group, audioTrack])
+    useItemsStore.getState().setItems([linkedVideo, linkedAudio])
+
+    reverseItems([linkedVideo.id])
+    const request = useReverseConformDialogStore.getState().request
+    expect(request).not.toBeNull()
+    useItemsStore.getState().setTracks([videoTrack, { ...group, locked: true }, audioTrack])
+    const itemsBefore = structuredClone(useItemsStore.getState().items)
+
+    commitPreparedReverseItems(request?.items ?? [], [
+      {
+        itemId: linkedVideo.id,
+        src: 'blob:reverse',
+        path: 'reverse/video.mp4',
+        key: 'reverse-key',
+        quality: 'preview',
+        usesProxy: true,
+        isSourceLevel: true,
+      },
     ])
-    const video = makeVideoItem({ linkedGroupId: 'linked-av' })
-    const audio = makeAudioItem({ linkedGroupId: 'linked-av' })
-    useItemsStore.getState().setItems([video, audio])
 
-    removeItems([video.id])
-    expect(useItemsStore.getState().items).toHaveLength(2)
+    expect(useItemsStore.getState().items).toEqual(itemsBefore)
     expectNoHistory()
-
-    unlinkItems([video.id])
-    removeItems([video.id])
-
-    expect(useItemsStore.getState().itemById[video.id]).toBeUndefined()
-    expect(useItemsStore.getState().itemById[audio.id]).toBeDefined()
-    expect(useTimelineCommandStore.getState().undoStack).toHaveLength(2)
   })
+
+  it.each([true, false])(
+    'rejects mixed locked/unlocked delete requests atomically when linked selection is %s',
+    (linkedSelectionEnabled) => {
+      useEditorStore.setState({ linkedSelectionEnabled })
+      useItemsStore.getState().setTracks([
+        makeTrack({ id: 'video-track', name: 'V1', kind: 'video', order: 0 }),
+        makeTrack({
+          id: 'audio-track',
+          name: 'A1',
+          kind: 'audio',
+          order: 1,
+          locked: true,
+        }),
+      ])
+      const unlocked = makeVideoItem({ id: 'unlocked' })
+      const locked = makeAudioItem({ id: 'locked' })
+      useItemsStore.getState().setItems([unlocked, locked])
+      useSelectionStore.getState().selectItems([unlocked.id, locked.id])
+
+      for (const action of [removeItems, rippleDeleteItems]) {
+        action([unlocked.id, locked.id])
+        expect(useItemsStore.getState().items).toEqual([unlocked, locked])
+        expect(useSelectionStore.getState().selectedItemIds).toEqual([unlocked.id, locked.id])
+        expectNoHistory()
+      }
+    },
+  )
+
+  it.each([true, false])(
+    'preflights every link membership mutation when linked selection is %s',
+    (linkedSelectionEnabled) => {
+      useEditorStore.setState({ linkedSelectionEnabled })
+      useItemsStore.getState().setTracks([
+        makeTrack({
+          id: 'group',
+          name: 'Group',
+          kind: 'video',
+          order: 0,
+          isGroup: true,
+          locked: true,
+        }),
+        makeTrack({
+          id: 'video-track',
+          name: 'V1',
+          kind: 'video',
+          order: 1,
+          parentTrackId: 'group',
+        }),
+        makeTrack({ id: 'audio-track', name: 'A1', kind: 'audio', order: 2 }),
+      ])
+      const lockedVideo = makeVideoItem({ linkedGroupId: 'video-1' })
+      const audio = makeAudioItem({ linkedGroupId: 'audio-1' })
+      useItemsStore.getState().setItems([lockedVideo, audio])
+      useSelectionStore.getState().selectItems([lockedVideo.id])
+
+      expect(linkItems([lockedVideo.id, audio.id])).toBe(false)
+
+      expect(useItemsStore.getState().items).toEqual([lockedVideo, audio])
+      expect(useSelectionStore.getState().selectedItemIds).toEqual([lockedVideo.id])
+      expectNoHistory()
+    },
+  )
 
   it('allows ripple delete on unlocked tracks while a locked sync-lock track stays byte-for-byte fixed', () => {
     const videoTrack = makeTrack({

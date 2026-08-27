@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it } from 'vite-plus/test'
 import type { LottieItem, TextItem, TimelineItem, TimelineTrack } from '@/types/timeline'
 import type { Transition } from '@/types/transition'
 import { useEditorStore } from '@/shared/state/editor'
+import { useSelectionStore } from '@/shared/state/selection'
 import { makeTimelineAudioItem, makeTimelineTrack, makeTimelineVideoItem } from '../../test-helpers'
 import { useItemsStore } from '../items-store'
 import { useKeyframesStore } from '../keyframes-store'
@@ -79,6 +80,7 @@ function snapshot() {
     undoDepth: useTimelineCommandStore.getState().undoStack.length,
     redoDepth: useTimelineCommandStore.getState().redoStack.length,
     dirty: useTimelineSettingsStore.getState().isDirty,
+    selection: structuredClone(useSelectionStore.getState().selectedItemIds),
   }
 }
 
@@ -90,11 +92,13 @@ function expectUnchanged(before: ReturnType<typeof snapshot>): void {
   expect(useTimelineCommandStore.getState().undoStack).toHaveLength(before.undoDepth)
   expect(useTimelineCommandStore.getState().redoStack).toHaveLength(before.redoDepth)
   expect(useTimelineSettingsStore.getState().isDirty).toBe(before.dirty)
+  expect(useSelectionStore.getState().selectedItemIds).toEqual(before.selection)
 }
 
 describe('public item edit lock preflights', () => {
   beforeEach(() => {
     useEditorStore.setState({ linkedSelectionEnabled: true })
+    useSelectionStore.getState().clearSelection()
     useItemsStore.getState().setTracks(tracks())
     useItemsStore.getState().setItems([])
     useTransitionsStore.getState().setTransitions([])
@@ -254,13 +258,13 @@ describe('public item edit lock preflights', () => {
     expectUnchanged(before)
   })
 
-  it('rejects normal trim when attached caption repair would mutate a locked caption', () => {
+  it('allows normal trim when a locked attached caption remains wholly within final bounds', () => {
     const caption: TextItem = {
       id: 'caption',
       type: 'text',
       trackId: 'caption-track',
-      from: 100,
-      durationInFrames: 30,
+      from: 70,
+      durationInFrames: 10,
       label: 'Caption',
       text: 'Caption',
       color: '#fff',
@@ -277,12 +281,50 @@ describe('public item edit lock preflights', () => {
       }),
     ])
     useItemsStore.getState().setItems([video(), caption])
-    const before = snapshot()
 
     trimItemEnd('middle', -30)
 
-    expectUnchanged(before)
+    expect(useItemsStore.getState().itemById.middle).toMatchObject({ durationInFrames: 30 })
+    expect(useItemsStore.getState().itemById.caption).toEqual(caption)
+    expect(useTimelineCommandStore.getState().undoStack).toHaveLength(1)
+    expect(useTimelineSettingsStore.getState().isDirty).toBe(true)
   })
+
+  it.each([
+    ['crossing', 80, 20],
+    ['removed', 100, 30],
+  ] as const)(
+    'rejects normal trim when a locked attached caption would be %s',
+    (_case, from, durationInFrames) => {
+      const caption: TextItem = {
+        id: 'caption',
+        type: 'text',
+        trackId: 'caption-track',
+        from,
+        durationInFrames,
+        label: 'Caption',
+        text: 'Caption',
+        color: '#fff',
+        textRole: 'caption',
+        captionSource: { type: 'transcript', clipId: 'middle', mediaId: 'media-1' },
+      }
+      useItemsStore.getState().setTracks([
+        tracks()[0]!,
+        makeTimelineTrack({
+          id: 'caption-track',
+          name: 'Captions',
+          order: 1,
+          locked: true,
+        }),
+      ])
+      useItemsStore.getState().setItems([video(), caption])
+      const before = snapshot()
+
+      trimItemEnd('middle', -30)
+
+      expectUnchanged(before)
+    },
+  )
 
   it.each([
     ['reversed', { reversed: true }],

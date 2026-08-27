@@ -61,6 +61,108 @@ describe('group-utils', () => {
     })
   })
 
+  it('propagates every effective state through a nested grandparent group', () => {
+    const [effectiveChild] = resolveEffectiveTrackStates([
+      makeTrack({
+        id: 'grandparent',
+        isGroup: true,
+        locked: true,
+        visible: false,
+      }),
+      makeTrack({
+        id: 'parent',
+        isGroup: true,
+        parentTrackId: 'grandparent',
+        muted: true,
+        solo: true,
+      }),
+      makeTrack({ id: 'child', parentTrackId: 'parent' }),
+    ])
+
+    expect(effectiveChild).toMatchObject({
+      id: 'child',
+      locked: true,
+      muted: true,
+      visible: false,
+      solo: true,
+    })
+  })
+
+  it('resolves a deep tree without depending on input order', () => {
+    const depth = 1_000
+    const groups = Array.from({ length: depth }, (_, index) =>
+      makeTrack({
+        id: `group-${index}`,
+        isGroup: true,
+        parentTrackId: index === 0 ? undefined : `group-${index - 1}`,
+        locked: index === 17,
+        muted: index === 217,
+        visible: index !== 617,
+        solo: index === 917,
+      }),
+    )
+    const child = makeTrack({ id: 'deep-child', parentTrackId: `group-${depth - 1}` })
+
+    const [effectiveChild] = resolveEffectiveTrackStates([child, ...groups.toReversed()])
+
+    expect(effectiveChild).toMatchObject({
+      id: 'deep-child',
+      locked: true,
+      muted: true,
+      visible: false,
+      solo: true,
+    })
+  })
+
+  it('fails closed when a parent track is missing', () => {
+    const [effectiveChild] = resolveEffectiveTrackStates([
+      makeTrack({
+        id: 'orphan',
+        parentTrackId: 'missing-parent',
+        solo: true,
+      }),
+    ])
+
+    expect(effectiveChild).toMatchObject({
+      locked: true,
+      muted: true,
+      visible: false,
+      solo: false,
+    })
+  })
+
+  it('fails closed for a self-parent cycle', () => {
+    const [effectiveChild] = resolveEffectiveTrackStates([
+      makeTrack({ id: 'self-cycle', parentTrackId: 'self-cycle', solo: true }),
+    ])
+
+    expect(effectiveChild).toMatchObject({
+      locked: true,
+      muted: true,
+      visible: false,
+      solo: false,
+    })
+  })
+
+  it('fails closed for every lane whose ancestry reaches a multi-node cycle', () => {
+    const effectiveTracks = resolveEffectiveTrackStates([
+      makeTrack({ id: 'group-a', isGroup: true, parentTrackId: 'group-b' }),
+      makeTrack({ id: 'group-b', isGroup: true, parentTrackId: 'group-a' }),
+      makeTrack({ id: 'child-a', parentTrackId: 'group-a', solo: true }),
+      makeTrack({ id: 'child-b', parentTrackId: 'group-b' }),
+    ])
+
+    expect(effectiveTracks).toHaveLength(2)
+    for (const effectiveTrack of effectiveTracks) {
+      expect(effectiveTrack).toMatchObject({
+        locked: true,
+        muted: true,
+        visible: false,
+        solo: false,
+      })
+    }
+  })
+
   it('uses propagated visibility when collecting visible track ids', () => {
     const visibleTrackIds = getVisibleTrackIds([
       makeTrack({ id: 'group-1', isGroup: true, visible: false }),
