@@ -4,7 +4,7 @@ import type { TimelineItem, TimelineTrack } from '@/types/timeline'
 import type { DragState, UseTimelineDragReturn, SnapTarget } from '../types/drag'
 import { useTimelineStore } from '../stores/timeline-store'
 import { useEditorStore } from '@/shared/state/editor'
-import { useSelectionStore } from '@/shared/state/selection'
+import { useSelectionStore, type SelectionState } from '@/shared/state/selection'
 import {
   pixelsToFramePreciseNow,
   frameToPixelsNow,
@@ -459,6 +459,27 @@ interface DraggedItemState {
   initialTrackId: string
 }
 
+type DragSelectionSnapshot = Pick<
+  SelectionState,
+  | 'selectedItemIds'
+  | 'selectedItemIdSet'
+  | 'selectedMarkerId'
+  | 'selectedTransitionId'
+  | 'selectionType'
+  | 'expandedKeyframeLanes'
+>
+
+function captureDragSelectionSnapshot(state: SelectionState): DragSelectionSnapshot {
+  return {
+    selectedItemIds: [...state.selectedItemIds],
+    selectedItemIdSet: new Set(state.selectedItemIdSet),
+    selectedMarkerId: state.selectedMarkerId,
+    selectedTransitionId: state.selectedTransitionId,
+    selectionType: state.selectionType,
+    expandedKeyframeLanes: new Set(state.expandedKeyframeLanes),
+  }
+}
+
 function getEffectiveTrackStateById(tracks: TimelineTrack[]): ReadonlyMap<string, TimelineTrack> {
   return new Map(resolveEffectiveTrackStates(tracks).map((track) => [track.id, track]))
 }
@@ -568,12 +589,15 @@ export function useTimelineDrag(
   const isLinkedCohortDragRef = useRef(false)
   const dragVisualTopByTrackIdRef = useRef<Map<string, number>>(new Map())
   const linkedMovePreviewSignatureRef = useRef('')
+  const selectionRollbackRef = useRef<DragSelectionSnapshot | null>(null)
+  const removeDragThresholdListenersRef = useRef<(() => void) | null>(null)
 
   // Track Alt key state for duplication mode (dynamic toggle during drag)
   const isAltDragRef = useRef(false)
 
   // Track previous snap target to avoid unnecessary store updates
   const prevSnapTargetRef = useRef<{ frame: number; type: string } | null>(null)
+  const magneticSnapTargetsRef = useRef<SnapTarget[]>([])
 
   // Get store actions with granular selectors
   const moveItem = useTimelineStore((s) => s.moveItem)
@@ -625,6 +649,51 @@ export function useTimelineDrag(
     [],
   )
 
+  const finishDragInteraction = useCallback(
+    ({
+      rollbackSelection,
+      updateReactState = true,
+    }: {
+      rollbackSelection: boolean
+      updateReactState?: boolean
+    }) => {
+      const removeDragThresholdListeners = removeDragThresholdListenersRef.current
+      removeDragThresholdListenersRef.current = null
+      removeDragThresholdListeners?.()
+
+      if (elementRef?.current) {
+        elementRef.current.style.transform = ''
+      }
+      dragOffsetRef.current = { x: 0, y: 0 }
+      dragVisualTopByTrackIdRef.current.clear()
+      dragPreviewOffsetByItemRef.current = {}
+      clearLargeAltDragCanvas()
+      clearLinkedMovePreview()
+      prevSnapTargetRef.current = null
+      magneticSnapTargetsRef.current = []
+      dragStateRef.current = null
+      isLinkedCohortDragRef.current = false
+      isAltDragRef.current = false
+      clearGlobalDragCursor()
+      document.body.style.userSelect = ''
+
+      const selectionSnapshot = selectionRollbackRef.current
+      selectionRollbackRef.current = null
+      useSelectionStore.setState({
+        ...(rollbackSelection && selectionSnapshot ? selectionSnapshot : {}),
+        dragState: null,
+        activeSnapTarget: null,
+        activeLinkedDropTarget: null,
+      })
+
+      if (updateReactState) {
+        setIsDragging(false)
+        setDragOffset({ x: 0, y: 0 })
+      }
+    },
+    [clearLinkedMovePreview, elementRef],
+  )
+
   // Get zoom utilities
   // Zoom conversions are read imperatively (via store.getState()) at call-time
   // to avoid subscribing every TimelineItem to the live zoom store.
@@ -652,7 +721,6 @@ export function useTimelineDrag(
   // Helper to get items on-demand (avoids subscription that would cause all items to re-render)
   const getItems = useCallback(() => useTimelineStore.getState().items, [])
   // Update refs synchronously (not in useEffect) so they're always current
-  const magneticSnapTargetsRef = useRef<SnapTarget[]>([])
   const getSnapThresholdFramesRef = useRef(getSnapThresholdFrames)
   getSnapThresholdFramesRef.current = getSnapThresholdFrames
 
@@ -862,6 +930,8 @@ export function useTimelineDrag(
    */
   const handleDragStart = useCallback(
     (e: React.MouseEvent) => {
+      if (dragStateRef.current) return
+
       const allItems = getItems()
       const currentTracks = useTimelineStore.getState().tracks
       const anchorTrack = getEffectiveTrackStateById(currentTracks).get(item.trackId)
@@ -879,7 +949,8 @@ export function useTimelineDrag(
       e.stopPropagation()
 
       // Check if this item is in current selection
-      const currentSelectedIds = useSelectionStore.getState().selectedItemIds
+      const currentSelectionState = useSelectionStore.getState()
+      const currentSelectedIds = currentSelectionState.selectedItemIds
       const isInSelection = currentSelectedIds.includes(item.id)
 
       const linkedSelectionEnabled = useEditorStore.getState().linkedSelectionEnabled
@@ -905,6 +976,7 @@ export function useTimelineDrag(
       // validation. A rejected linked gesture is otherwise not atomic.
       const isMultiSelectClick = e.ctrlKey || e.metaKey
       if (!isInSelection && !isMultiSelectClick) {
+        selectionRollbackRef.current = captureDragSelectionSnapshot(currentSelectionState)
         selectItems(linkedIds)
       }
 
@@ -916,6 +988,7 @@ export function useTimelineDrag(
         baseItemsToDrag.length === selectedIdSet.size &&
         baseItemsToDrag.every((id) => selectedIdSet.has(id))
       if (isInSelection && !cohortMatchesSelection) {
+        selectionRollbackRef.current = captureDragSelectionSnapshot(currentSelectionState)
         selectItems(baseItemsToDrag)
       }
 
@@ -970,29 +1043,31 @@ export function useTimelineDrag(
           setActiveLinkedDropTarget(null)
           clearLinkedMovePreview()
 
-          // Remove this listener - the main useEffect will handle it now
-          window.removeEventListener('mousemove', checkDragThreshold)
-          window.removeEventListener('mouseup', cancelDrag)
+          // Remove these listeners - the main useEffect will handle it now.
+          removeDragThresholdListeners()
         }
       }
 
       const cancelDrag = () => {
-        // Clean up if mouse released before threshold
-        dragStateRef.current = null
-        magneticSnapTargetsRef.current = []
-        dragVisualTopByTrackIdRef.current.clear()
-        dragPreviewOffsetByItemRef.current = {}
-        clearLargeAltDragCanvas()
-        clearLinkedMovePreview()
-        window.removeEventListener('mousemove', checkDragThreshold)
-        window.removeEventListener('mouseup', cancelDrag)
+        // A click released before the threshold is a cancelled drag attempt.
+        finishDragInteraction({ rollbackSelection: true })
       }
 
+      function removeDragThresholdListeners() {
+        window.removeEventListener('mousemove', checkDragThreshold)
+        window.removeEventListener('mouseup', cancelDrag)
+        if (removeDragThresholdListenersRef.current === removeDragThresholdListeners) {
+          removeDragThresholdListenersRef.current = null
+        }
+      }
+
+      removeDragThresholdListenersRef.current = removeDragThresholdListeners
       window.addEventListener('mousemove', checkDragThreshold)
       window.addEventListener('mouseup', cancelDrag)
     },
     [
       clearLinkedMovePreview,
+      finishDragInteraction,
       item.id,
       item.from,
       item.trackId,
@@ -1335,6 +1410,7 @@ export function useTimelineDrag(
       const dragState = dragStateRef.current
       const deltaX = dragState.currentMouseX - dragState.startMouseX
       const isAltDrag = isAltDragRef.current
+      let dropAccepted = false
 
       // Calculate frame delta
       const deltaFrames = pixelsToFramePreciseRef.current(deltaX)
@@ -1515,6 +1591,7 @@ export function useTimelineDrag(
           } else {
             duplicateItemsRef.current(itemIds, positions)
           }
+          dropAccepted = true
         } else {
           // Normal drag: Apply the snap to ALL items in the group
           const allUpdates = movedItems.map((m) => ({
@@ -1531,6 +1608,7 @@ export function useTimelineDrag(
           } else {
             moveItemsRef.current(allUpdates)
           }
+          dropAccepted = true
         }
       } else {
         // Single item drag
@@ -1573,6 +1651,7 @@ export function useTimelineDrag(
                 [{ from: roundedFinalFrame, trackId: newTrackId }],
               )
             }
+            dropAccepted = true
           } else {
             // Normal drag: Move item
             const trackChanged = newTrackId !== dragState.startTrackId
@@ -1583,6 +1662,7 @@ export function useTimelineDrag(
             } else {
               moveItemRef.current(item.id, roundedFinalFrame, trackChanged ? newTrackId : undefined)
             }
+            dropAccepted = true
           }
         } else {
           // No space available - cancel drag (keep at original position)
@@ -1596,35 +1676,7 @@ export function useTimelineDrag(
         }
       }
 
-      // Clean up - defer drag state clearing to avoid multiple render cycles
-      // The move operation already triggered a re-render; clearing drag state
-      // should happen after that render completes
-      if (elementRef?.current) {
-        elementRef.current.style.transform = ''
-      }
-      dragOffsetRef.current = { x: 0, y: 0 } // Reset shared ref immediately
-      dragVisualTopByTrackIdRef.current.clear()
-      dragPreviewOffsetByItemRef.current = {}
-      clearLargeAltDragCanvas()
-      clearLinkedMovePreview()
-      prevSnapTargetRef.current = null // Reset snap target tracking
-      magneticSnapTargetsRef.current = []
-      dragStateRef.current = null
-      isAltDragRef.current = false // Reset alt drag state
-      clearGlobalDragCursor()
-      document.body.style.userSelect = ''
-
-      // Batch React state updates (React 18 batches these automatically)
-      setIsDragging(false)
-      setDragOffset({ x: 0, y: 0 })
-
-      // Defer selection store cleanup to next microtask to avoid
-      // synchronous re-render cascade after move operation
-      queueMicrotask(() => {
-        setActiveSnapTarget(null)
-        setActiveLinkedDropTarget(null)
-        setDragState(null)
-      })
+      finishDragInteraction({ rollbackSelection: !dropAccepted })
     }
 
     if (dragStateRef.current) {
@@ -1641,12 +1693,6 @@ export function useTimelineDrag(
         window.removeEventListener('mousemove', coalescedMouseMove.queue)
         window.removeEventListener('mouseup', handleCoalescedMouseUp)
         coalescedMouseMove.cancel()
-        magneticSnapTargetsRef.current = []
-        dragVisualTopByTrackIdRef.current.clear()
-        clearLargeAltDragCanvas()
-        clearLinkedMovePreview()
-        clearGlobalDragCursor()
-        document.body.style.userSelect = ''
       }
     }
   }, [
@@ -1659,6 +1705,7 @@ export function useTimelineDrag(
     calculateMagneticSnap,
     getMagneticSnapTargets,
     clearLinkedMovePreview,
+    finishDragInteraction,
     elementRef,
     getItems,
     setActiveLinkedDropTarget,
@@ -1666,6 +1713,15 @@ export function useTimelineDrag(
     setDragState,
     setLinkedMovePreview,
   ])
+
+  useEffect(
+    () => () => {
+      if (dragStateRef.current || selectionRollbackRef.current) {
+        finishDragInteraction({ rollbackSelection: true, updateReactState: false })
+      }
+    },
+    [finishDragInteraction],
+  )
 
   return {
     isDragging,

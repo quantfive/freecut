@@ -90,6 +90,17 @@ function beginDrag(
   startX: number,
   startY: number,
 ) {
+  startDragAttempt(result, startX, startY)
+  act(() => {
+    window.dispatchEvent(new MouseEvent('mousemove', { clientX: startX + 4, clientY: startY }))
+  })
+}
+
+function startDragAttempt(
+  result: { current: ReturnType<typeof useTimelineDrag> },
+  startX: number,
+  startY: number,
+) {
   const target = document.createElement('div')
   const event = {
     target,
@@ -102,9 +113,6 @@ function beginDrag(
 
   act(() => {
     result.current.handleDragStart(event)
-  })
-  act(() => {
-    window.dispatchEvent(new MouseEvent('mousemove', { clientX: startX + 4, clientY: startY }))
   })
 }
 
@@ -125,6 +133,39 @@ function getItem(id: string): TimelineItem {
   const item = useItemsStore.getState().itemById[id]
   expect(item).toBeDefined()
   return item as TimelineItem
+}
+
+function captureSelectionMetadata() {
+  const state = useSelectionStore.getState()
+  return {
+    selectedItemIds: [...state.selectedItemIds],
+    selectedItemIdSet: new Set(state.selectedItemIdSet),
+    selectedMarkerId: state.selectedMarkerId,
+    selectedTransitionId: state.selectedTransitionId,
+    selectedTrackId: state.selectedTrackId,
+    selectedTrackIds: [...state.selectedTrackIds],
+    activeTrackId: state.activeTrackId,
+    selectionType: state.selectionType,
+    activeTool: state.activeTool,
+    activeSnapTarget: state.activeSnapTarget,
+    activeLinkedDropTarget: state.activeLinkedDropTarget,
+    dragState: state.dragState,
+    editKeyframePanelOpen: state.editKeyframePanelOpen,
+    expandedKeyframeLanes: new Set(state.expandedKeyframeLanes),
+  }
+}
+
+function captureTimelineMutationState() {
+  const commandState = useTimelineCommandStore.getState()
+  return {
+    items: structuredClone(useItemsStore.getState().items),
+    tracks: structuredClone(useItemsStore.getState().tracks),
+    isDirty: useTimelineSettingsStore.getState().isDirty,
+    undoStack: structuredClone(commandState.undoStack),
+    redoStack: structuredClone(commandState.redoStack),
+    canUndo: commandState.canUndo,
+    canRedo: commandState.canRedo,
+  }
 }
 
 function makeThreeSectionTracks(): TimelineTrack[] {
@@ -415,23 +456,30 @@ describe('useTimelineDrag linked cohorts', () => {
     expect(useTimelineCommandStore.getState().undoStack).toHaveLength(0)
   })
 
-  it('rejects an explicit source member on a child lane of a locked group', () => {
+  it('rejects an explicit source below an unlocked inner group and locked outer group', () => {
     const tracks = [
       makeTimelineTrack({
-        id: 'locked-group',
-        name: 'Locked Group',
+        id: 'outer-locked-group',
+        name: 'Outer Locked Group',
         order: 0,
         isGroup: true,
         locked: true,
       }),
       makeTimelineTrack({
+        id: 'inner-unlocked-group',
+        name: 'Inner Unlocked Group',
+        order: 1,
+        isGroup: true,
+        parentTrackId: 'outer-locked-group',
+      }),
+      makeTimelineTrack({
         id: 'v1',
         name: 'V1',
         kind: 'video',
-        order: 1,
-        parentTrackId: 'locked-group',
+        order: 2,
+        parentTrackId: 'inner-unlocked-group',
       }),
-      makeTimelineTrack({ id: 'v2', name: 'V2', kind: 'video', order: 2 }),
+      makeTimelineTrack({ id: 'v2', name: 'V2', kind: 'video', order: 3 }),
     ]
     const video = makeTimelineVideoItem({ id: 'video-1', trackId: 'v1' })
     setupStores(tracks, [video])
@@ -451,25 +499,32 @@ describe('useTimelineDrag linked cohorts', () => {
     expect(useTimelineCommandStore.getState().undoStack).toHaveLength(0)
   })
 
-  it('rejects an implicit linked companion inherited-locked by its parent group atomically', () => {
+  it('rejects an implicit companion below an unlocked inner group and locked outer group', () => {
     const tracks = [
       makeTimelineTrack({ id: 'v2', name: 'V2', kind: 'video', order: 0 }),
       makeTimelineTrack({ id: 'v1', name: 'V1', kind: 'video', order: 1 }),
       makeTimelineTrack({
-        id: 'locked-group',
-        name: 'Locked Group',
+        id: 'outer-locked-group',
+        name: 'Outer Locked Group',
         order: 2,
         isGroup: true,
         locked: true,
       }),
       makeTimelineTrack({
+        id: 'inner-unlocked-group',
+        name: 'Inner Unlocked Group',
+        order: 3,
+        isGroup: true,
+        parentTrackId: 'outer-locked-group',
+      }),
+      makeTimelineTrack({
         id: 'a1',
         name: 'A1',
         kind: 'audio',
-        order: 3,
-        parentTrackId: 'locked-group',
+        order: 4,
+        parentTrackId: 'inner-unlocked-group',
       }),
-      makeTimelineTrack({ id: 'a2', name: 'A2', kind: 'audio', order: 4 }),
+      makeTimelineTrack({ id: 'a2', name: 'A2', kind: 'audio', order: 5 }),
     ]
     const video = makeTimelineVideoItem({
       id: 'video-1',
@@ -499,24 +554,31 @@ describe('useTimelineDrag linked cohorts', () => {
     expect(useTimelineCommandStore.getState().undoStack).toHaveLength(0)
   })
 
-  it('rejects the whole cohort when an implicit destination lane inherits a group lock', () => {
+  it('rejects a destination below an unlocked inner group and locked outer group', () => {
     const tracks = [
       makeTimelineTrack({ id: 'v2', name: 'V2', kind: 'video', order: 0 }),
       makeTimelineTrack({ id: 'v1', name: 'V1', kind: 'video', order: 1 }),
       makeTimelineTrack({ id: 'a1', name: 'A1', kind: 'audio', order: 2 }),
       makeTimelineTrack({
-        id: 'locked-group',
-        name: 'Locked Group',
+        id: 'outer-locked-group',
+        name: 'Outer Locked Group',
         order: 3,
         isGroup: true,
         locked: true,
       }),
       makeTimelineTrack({
+        id: 'inner-unlocked-group',
+        name: 'Inner Unlocked Group',
+        order: 4,
+        isGroup: true,
+        parentTrackId: 'outer-locked-group',
+      }),
+      makeTimelineTrack({
         id: 'a2',
         name: 'A2',
         kind: 'audio',
-        order: 4,
-        parentTrackId: 'locked-group',
+        order: 5,
+        parentTrackId: 'inner-unlocked-group',
       }),
     ]
     const video = makeTimelineVideoItem({
@@ -545,6 +607,271 @@ describe('useTimelineDrag linked cohorts', () => {
     expect(useSelectionStore.getState().selectedItemIds).toEqual(['video-1', 'audio-1'])
     expect(useTimelineCommandStore.getState().undoStack).toHaveLength(0)
   })
+
+  it('restores exact prior selection metadata when an unselected cohort targets a locked lane', () => {
+    const tracks = [
+      makeTimelineTrack({ id: 'v2', name: 'V2', kind: 'video', order: 0, locked: true }),
+      makeTimelineTrack({ id: 'v1', name: 'V1', kind: 'video', order: 1 }),
+      makeTimelineTrack({ id: 'a1', name: 'A1', kind: 'audio', order: 2 }),
+      makeTimelineTrack({ id: 'a2', name: 'A2', kind: 'audio', order: 3 }),
+    ]
+    const video = makeTimelineVideoItem({
+      id: 'video-1',
+      trackId: 'v1',
+      linkedGroupId: 'pair-1',
+    })
+    const audio = makeTimelineAudioItem({
+      id: 'audio-1',
+      trackId: 'a1',
+      linkedGroupId: 'pair-1',
+    })
+    const priorSelection = makeTimelineVideoItem({
+      id: 'prior-selection',
+      trackId: 'v1',
+      from: 100,
+      mediaId: 'prior-media',
+    })
+    setupStores(tracks, [video, audio, priorSelection])
+    useSelectionStore.getState().selectItems(['prior-selection'])
+    useSelectionStore.getState().setEditKeyframePanelOpen(true)
+    const beforeSelection = captureSelectionMetadata()
+    const beforeTimeline = captureTimelineMutationState()
+    const yByTrackId = mountTimelineTracks(tracks)
+    const { result } = renderHook(() => useTimelineDrag(video, TIMELINE_DURATION))
+
+    beginDrag(result, 0, yByTrackId.get('v1')!)
+    expect(new Set(useSelectionStore.getState().selectedItemIds)).toEqual(
+      new Set(['video-1', 'audio-1']),
+    )
+    moveDrag(20, yByTrackId.get('v2')!)
+    releaseDrag()
+
+    expect(captureSelectionMetadata()).toEqual(beforeSelection)
+    expect(captureTimelineMutationState()).toEqual(beforeTimeline)
+  })
+
+  it('rolls back selection and leaves timeline state untouched when released before threshold', () => {
+    const tracks = [
+      makeTimelineTrack({ id: 'v1', name: 'V1', kind: 'video', order: 0 }),
+      makeTimelineTrack({ id: 'a1', name: 'A1', kind: 'audio', order: 1 }),
+    ]
+    const video = makeTimelineVideoItem({
+      id: 'video-1',
+      trackId: 'v1',
+      linkedGroupId: 'pair-1',
+    })
+    const audio = makeTimelineAudioItem({
+      id: 'audio-1',
+      trackId: 'a1',
+      linkedGroupId: 'pair-1',
+    })
+    const priorSelection = makeTimelineVideoItem({
+      id: 'prior-selection',
+      trackId: 'v1',
+      from: 100,
+      mediaId: 'prior-media',
+    })
+    setupStores(tracks, [video, audio, priorSelection])
+    useSelectionStore.getState().selectItems(['prior-selection'])
+    useSelectionStore.getState().setEditKeyframePanelOpen(true)
+    const beforeSelection = captureSelectionMetadata()
+    const beforeTimeline = captureTimelineMutationState()
+    const yByTrackId = mountTimelineTracks(tracks)
+    const { result } = renderHook(() => useTimelineDrag(video, TIMELINE_DURATION))
+
+    startDragAttempt(result, 0, yByTrackId.get('v1')!)
+    expect(new Set(useSelectionStore.getState().selectedItemIds)).toEqual(
+      new Set(['video-1', 'audio-1']),
+    )
+    releaseDrag()
+
+    expect(captureSelectionMetadata()).toEqual(beforeSelection)
+    expect(captureTimelineMutationState()).toEqual(beforeTimeline)
+  })
+
+  it('rejects atomically when a source becomes effectively locked before drop', () => {
+    const tracks = [
+      makeTimelineTrack({ id: 'v2', name: 'V2', kind: 'video', order: 0 }),
+      makeTimelineTrack({
+        id: 'outer-group',
+        name: 'Outer Group',
+        order: 1,
+        isGroup: true,
+      }),
+      makeTimelineTrack({
+        id: 'inner-group',
+        name: 'Inner Group',
+        order: 2,
+        isGroup: true,
+        parentTrackId: 'outer-group',
+      }),
+      makeTimelineTrack({
+        id: 'v1',
+        name: 'V1',
+        kind: 'video',
+        order: 3,
+        parentTrackId: 'inner-group',
+      }),
+      makeTimelineTrack({ id: 'a1', name: 'A1', kind: 'audio', order: 4 }),
+      makeTimelineTrack({ id: 'a2', name: 'A2', kind: 'audio', order: 5 }),
+    ]
+    const video = makeTimelineVideoItem({
+      id: 'video-1',
+      trackId: 'v1',
+      linkedGroupId: 'pair-1',
+    })
+    const audio = makeTimelineAudioItem({
+      id: 'audio-1',
+      trackId: 'a1',
+      linkedGroupId: 'pair-1',
+    })
+    setupStores(tracks, [video, audio])
+    const beforeSelection = captureSelectionMetadata()
+    const yByTrackId = mountTimelineTracks(tracks)
+    const { result } = renderHook(() => useTimelineDrag(video, TIMELINE_DURATION))
+
+    beginDrag(result, 0, yByTrackId.get('v1')!)
+    moveDrag(20, yByTrackId.get('v2')!)
+    act(() => {
+      useItemsStore
+        .getState()
+        .setTracks(
+          tracks.map((track) => (track.id === 'outer-group' ? { ...track, locked: true } : track)),
+        )
+    })
+    const beforeDrop = captureTimelineMutationState()
+    releaseDrag()
+
+    expect(captureSelectionMetadata()).toEqual(beforeSelection)
+    expect(captureTimelineMutationState()).toEqual(beforeDrop)
+  })
+
+  it('rejects atomically when a destination becomes effectively locked before drop', () => {
+    const tracks = [
+      makeTimelineTrack({
+        id: 'outer-group',
+        name: 'Outer Group',
+        order: 0,
+        isGroup: true,
+      }),
+      makeTimelineTrack({
+        id: 'inner-group',
+        name: 'Inner Group',
+        order: 1,
+        isGroup: true,
+        parentTrackId: 'outer-group',
+      }),
+      makeTimelineTrack({
+        id: 'v2',
+        name: 'V2',
+        kind: 'video',
+        order: 2,
+        parentTrackId: 'inner-group',
+      }),
+      makeTimelineTrack({ id: 'v1', name: 'V1', kind: 'video', order: 3 }),
+      makeTimelineTrack({ id: 'a1', name: 'A1', kind: 'audio', order: 4 }),
+      makeTimelineTrack({ id: 'a2', name: 'A2', kind: 'audio', order: 5 }),
+    ]
+    const video = makeTimelineVideoItem({
+      id: 'video-1',
+      trackId: 'v1',
+      linkedGroupId: 'pair-1',
+    })
+    const audio = makeTimelineAudioItem({
+      id: 'audio-1',
+      trackId: 'a1',
+      linkedGroupId: 'pair-1',
+    })
+    setupStores(tracks, [video, audio])
+    const beforeSelection = captureSelectionMetadata()
+    const yByTrackId = mountTimelineTracks(tracks)
+    const { result } = renderHook(() => useTimelineDrag(video, TIMELINE_DURATION))
+
+    beginDrag(result, 0, yByTrackId.get('v1')!)
+    moveDrag(20, yByTrackId.get('v2')!)
+    act(() => {
+      useItemsStore
+        .getState()
+        .setTracks(
+          tracks.map((track) => (track.id === 'outer-group' ? { ...track, locked: true } : track)),
+        )
+    })
+    const beforeDrop = captureTimelineMutationState()
+    releaseDrag()
+
+    expect(captureSelectionMetadata()).toEqual(beforeSelection)
+    expect(captureTimelineMutationState()).toEqual(beforeDrop)
+  })
+
+  it.each(['appears', 'moves'] as const)(
+    'uses live blocker state when a blocker %s between drag start and drop',
+    (blockerChange) => {
+      const tracks = makeThreeSectionTracks()
+      const video = makeTimelineVideoItem({
+        id: 'video-1',
+        trackId: 'v1',
+        from: 0,
+        durationInFrames: 10,
+        linkedGroupId: 'pair-1',
+      })
+      const audio = makeTimelineAudioItem({
+        id: 'audio-1',
+        trackId: 'a1',
+        from: 0,
+        durationInFrames: 10,
+        linkedGroupId: 'pair-1',
+      })
+      const blocker = makeTimelineVideoItem({
+        id: 'live-blocker',
+        trackId: 'v1',
+        from: blockerChange === 'moves' ? 100 : 8,
+        durationInFrames: 10,
+        mediaId: 'blocker-media',
+      })
+      setupStores(tracks, blockerChange === 'moves' ? [video, audio, blocker] : [video, audio])
+      const yByTrackId = mountTimelineTracks(tracks)
+      const { result } = renderHook(() => useTimelineDrag(video, TIMELINE_DURATION))
+
+      beginDrag(result, 0, yByTrackId.get('v1')!)
+      moveDrag(10, yByTrackId.get('v1')!)
+      act(() => {
+        if (blockerChange === 'appears') {
+          useItemsStore.getState().setItems([...useItemsStore.getState().items, blocker])
+        } else {
+          useItemsStore
+            .getState()
+            .setItems(
+              useItemsStore
+                .getState()
+                .items.map((currentItem) =>
+                  currentItem.id === blocker.id ? { ...currentItem, from: 8 } : currentItem,
+                ),
+            )
+        }
+      })
+      releaseDrag()
+
+      expect(getItem('video-1')).toMatchObject({ trackId: 'v1', from: 18 })
+      expect(getItem('audio-1')).toMatchObject({ trackId: 'a1', from: 18 })
+      expect(getItem('live-blocker')).toMatchObject({ trackId: 'v1', from: 8 })
+      expect(new Set(useSelectionStore.getState().selectedItemIds)).toEqual(
+        new Set(['video-1', 'audio-1']),
+      )
+      expect(useTimelineCommandStore.getState().undoStack).toHaveLength(1)
+
+      act(() => {
+        useTimelineCommandStore.getState().undo()
+      })
+
+      expect(getItem('video-1')).toMatchObject({ trackId: 'v1', from: 0 })
+      expect(getItem('audio-1')).toMatchObject({ trackId: 'a1', from: 0 })
+      expect(getItem('live-blocker')).toMatchObject({ trackId: 'v1', from: 8 })
+      expect(new Set(useSelectionStore.getState().selectedItemIds)).toEqual(
+        new Set(['video-1', 'audio-1']),
+      )
+      expect(useTimelineCommandStore.getState().undoStack).toHaveLength(0)
+    },
+  )
 
   it('keeps unlinked multi-select lock filtering behavior unchanged', () => {
     const tracks = [

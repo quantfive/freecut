@@ -61,6 +61,92 @@ describe('group-utils', () => {
     })
   })
 
+  it('propagates every effective property through arbitrarily deep group ancestry', () => {
+    const [effectiveChild] = resolveEffectiveTrackStates([
+      makeTrack({
+        id: 'outer-group',
+        isGroup: true,
+        locked: true,
+      }),
+      makeTrack({
+        id: 'middle-group',
+        isGroup: true,
+        parentTrackId: 'outer-group',
+        muted: true,
+      }),
+      makeTrack({
+        id: 'inner-group',
+        isGroup: true,
+        parentTrackId: 'middle-group',
+        visible: false,
+        solo: true,
+      }),
+      makeTrack({
+        id: 'deep-child',
+        parentTrackId: 'inner-group',
+      }),
+    ])
+
+    expect(effectiveChild).toMatchObject({
+      id: 'deep-child',
+      locked: true,
+      muted: true,
+      visible: false,
+      solo: true,
+    })
+  })
+
+  it('fails closed for a missing declared parent without changing other effective properties', () => {
+    const [effectiveChild] = resolveEffectiveTrackStates([
+      makeTrack({
+        id: 'orphaned-child',
+        parentTrackId: 'missing-group',
+        muted: true,
+        visible: true,
+        solo: false,
+      }),
+    ])
+
+    expect(effectiveChild).toMatchObject({
+      id: 'orphaned-child',
+      locked: true,
+      muted: true,
+      visible: true,
+      solo: false,
+    })
+  })
+
+  it('terminates parent cycles deterministically and fails the cycle closed for locking', () => {
+    const cycleTracks = [
+      makeTrack({
+        id: 'group-a',
+        isGroup: true,
+        parentTrackId: 'group-b',
+        muted: true,
+      }),
+      makeTrack({
+        id: 'group-b',
+        isGroup: true,
+        parentTrackId: 'group-a',
+        visible: false,
+        solo: true,
+      }),
+      makeTrack({ id: 'cycle-child', parentTrackId: 'group-a' }),
+    ]
+
+    const [forwardResult] = resolveEffectiveTrackStates(cycleTracks)
+    const [reverseResult] = resolveEffectiveTrackStates(cycleTracks.toReversed())
+
+    expect(forwardResult).toMatchObject({
+      id: 'cycle-child',
+      locked: true,
+      muted: true,
+      visible: false,
+      solo: true,
+    })
+    expect(reverseResult).toEqual(forwardResult)
+  })
+
   it('uses propagated visibility when collecting visible track ids', () => {
     const visibleTrackIds = getVisibleTrackIds([
       makeTrack({ id: 'group-1', isGroup: true, visible: false }),
