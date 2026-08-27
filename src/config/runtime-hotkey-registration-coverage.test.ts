@@ -47,6 +47,12 @@ const ROLLDOWN_PARITY_CASES = [
     resolves: true,
   },
   {
+    name: 'same-value nested shadow alias',
+    source:
+      "export function load() { const pkg = 'react-hotkeys-hook'; const alias = pkg; { const pkg = 'react-hotkeys-hook'; return import(alias) } }",
+    resolves: true,
+  },
+  {
     name: 'shadowed alias initializer reference',
     source:
       "declare function moduleName(): string; export function load() { const pkg = 'react-hotkeys-hook'; const alias = pkg; { const pkg = moduleName(); return import(alias) } }",
@@ -72,6 +78,148 @@ const ROLLDOWN_PARITY_CASES = [
     name: 'loop-header const',
     source:
       "export function load() { for (const pkg = 'react-hotkeys-hook'; ;) return import(pkg) }",
+    resolves: false,
+  },
+  {
+    name: 'enclosing catch const',
+    source:
+      "export function load() { const pkg = 'react-hotkeys-hook'; try { throw 1 } catch { return import(pkg) } }",
+    resolves: false,
+  },
+  {
+    name: 'catch-local const',
+    source:
+      "export function load() { try { throw 1 } catch { const pkg = 'react-hotkeys-hook'; return import(pkg) } }",
+    resolves: true,
+  },
+  {
+    name: 'catch-local alias chain',
+    source:
+      "export function load() { try { throw 1 } catch { const pkg = 'react-hotkeys-hook'; const alias = pkg; return import(alias) } }",
+    resolves: true,
+  },
+  {
+    name: 'catch-local alias cycle',
+    source:
+      'export function load() { try { throw 1 } catch { const pkg = pkg; return import(pkg) } }',
+    resolves: false,
+  },
+  {
+    name: 'classic for initializer outer const',
+    source:
+      "export function load() { const pkg = 'react-hotkeys-hook'; for (import(pkg); ;) break }",
+    resolves: true,
+  },
+  {
+    name: 'classic for condition outer const',
+    source:
+      "export function load() { const pkg = 'react-hotkeys-hook'; for (; import(pkg); ) break }",
+    resolves: false,
+  },
+  {
+    name: 'classic for update outer const',
+    source:
+      "export function load() { const pkg = 'react-hotkeys-hook'; for (; ; import(pkg)) break }",
+    resolves: false,
+  },
+  {
+    name: 'classic for body outer const',
+    source:
+      "export function load() { const pkg = 'react-hotkeys-hook'; for (;;) { import(pkg); break } }",
+    resolves: false,
+  },
+  {
+    name: 'classic for body local const',
+    source:
+      "export function load() { for (;;) { const pkg = 'react-hotkeys-hook'; import(pkg); break } }",
+    resolves: true,
+  },
+  {
+    name: 'classic for body local alias cycle',
+    source: 'export function load() { for (;;) { const pkg = pkg; import(pkg); break } }',
+    resolves: false,
+  },
+  {
+    name: 'for-in expression outer const',
+    source:
+      "export function load() { const pkg = 'react-hotkeys-hook'; for (const key in import(pkg)) void key }",
+    resolves: true,
+  },
+  {
+    name: 'for-in body outer const',
+    source:
+      "export function load(values: object) { const pkg = 'react-hotkeys-hook'; for (const key in values) import(pkg) }",
+    resolves: false,
+  },
+  {
+    name: 'for-in body local const',
+    source:
+      "export function load(values: object) { for (const key in values) { const pkg = 'react-hotkeys-hook'; import(pkg) } }",
+    resolves: true,
+  },
+  {
+    name: 'for-of expression outer const',
+    source:
+      "export function load() { const pkg = 'react-hotkeys-hook'; for (const value of import(pkg)) void value }",
+    resolves: true,
+  },
+  {
+    name: 'for-of body outer const',
+    source:
+      "export function load(values: unknown[]) { const pkg = 'react-hotkeys-hook'; for (const value of values) import(pkg) }",
+    resolves: false,
+  },
+  {
+    name: 'for-of body local const',
+    source:
+      "export function load(values: unknown[]) { for (const value of values) { const pkg = 'react-hotkeys-hook'; import(pkg) } }",
+    resolves: true,
+  },
+  {
+    name: 'while condition outer const',
+    source:
+      "export function load() { const pkg = 'react-hotkeys-hook'; while (import(pkg)) break }",
+    resolves: false,
+  },
+  {
+    name: 'while body outer const',
+    source:
+      "export function load(active: boolean) { const pkg = 'react-hotkeys-hook'; while (active) { import(pkg); break } }",
+    resolves: false,
+  },
+  {
+    name: 'while body local const',
+    source:
+      "export function load(active: boolean) { while (active) { const pkg = 'react-hotkeys-hook'; import(pkg); break } }",
+    resolves: true,
+  },
+  {
+    name: 'do-while condition outer const',
+    source:
+      "export function load() { const pkg = 'react-hotkeys-hook'; do {} while (import(pkg)) }",
+    resolves: false,
+  },
+  {
+    name: 'do-while body outer const',
+    source:
+      "export function load() { const pkg = 'react-hotkeys-hook'; do { import(pkg) } while (false) }",
+    resolves: false,
+  },
+  {
+    name: 'do-while body local const',
+    source:
+      "export function load() { do { const pkg = 'react-hotkeys-hook'; import(pkg) } while (false) }",
+    resolves: true,
+  },
+  {
+    name: 'direct const temporal dead zone',
+    source: "export function load() { import(pkg); const pkg = 'react-hotkeys-hook' }",
+    resolves: false,
+  },
+  {
+    name: 'alias initializer temporal dead zone',
+    source:
+      "export function load() { const alias = pkg; const pkg = 'react-hotkeys-hook'; import(alias) }",
     resolves: false,
   },
   {
@@ -217,6 +365,7 @@ describe('runtime hotkey registration coverage', () => {
     expect(parity.version).toBe('1.1.5')
     expect(parity.resolutions).toHaveLength(ROLLDOWN_PARITY_CASES.length)
 
+    const mismatches: string[] = []
     for (const [index, fixture] of ROLLDOWN_PARITY_CASES.entries()) {
       const checkerResolves =
         findReactHotkeysHookImportViolations([
@@ -227,8 +376,11 @@ describe('runtime hotkey registration coverage', () => {
       expect(rolldownResolves, `${fixture.name}: Rolldown fixture expectation`).toBe(
         fixture.resolves,
       )
-      expect(checkerResolves, `${fixture.name}: checker/Rolldown parity`).toBe(rolldownResolves)
+      if (checkerResolves !== rolldownResolves) {
+        mismatches.push(`${fixture.name}: checker=${checkerResolves}, Rolldown=${rolldownResolves}`)
+      }
     }
+    expect(mismatches).toEqual([])
   })
 
   it('predeclares every lexical shadow barrier before resolving identifier imports', () => {
