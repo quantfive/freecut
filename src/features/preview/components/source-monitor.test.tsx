@@ -236,15 +236,32 @@ describe('SourceMonitor current media ownership', () => {
       ...resolvedHotkeysState.hotkeys,
       MARK_IN: 'shift+f',
     }
-    rendered.rerender(<SourceMonitor mediaId="media-1" />)
+    rendered.rerender(<SourceMonitor key="remapped" mediaId="media-1" />)
     expect(rendered.getByLabelText('Mark In (Shift + F)')).toBeInTheDocument()
 
     resolvedHotkeysState.hotkeys = {
       ...resolvedHotkeysState.hotkeys,
       MARK_IN: 'i',
     }
-    rendered.rerender(<SourceMonitor mediaId="media-1" />)
+    rendered.rerender(<SourceMonitor key="reset" mediaId="media-1" />)
     expect(rendered.getByLabelText('Mark In (I)')).toBeInTheDocument()
+  })
+
+  it('uses the same reactive binding for local source-monitor actions', async () => {
+    resolvedHotkeysState.hotkeys = {
+      ...resolvedHotkeysState.hotkeys,
+      MARK_IN: 'shift+f',
+    }
+    sourcePlayerStoreState.currentSourceFrame = 42
+    const rendered = render(<SourceMonitor mediaId="media-1" />)
+    await waitFor(() => expect(rendered.getByLabelText('Mark In (Shift + F)')).toBeInTheDocument())
+    const monitor = rendered.container.firstElementChild!
+
+    fireEvent.keyDown(monitor, { key: 'i', code: 'KeyI' })
+    expect(sourcePlayerStoreState.setInPoint).not.toHaveBeenCalled()
+
+    fireEvent.keyDown(monitor, { key: 'F', code: 'KeyF', shiftKey: true })
+    expect(sourcePlayerStoreState.setInPoint).toHaveBeenCalledWith(42)
   })
 
   it('uses macOS modifier names in visible shortcut labels', async () => {
