@@ -40,6 +40,7 @@ interface HarnessOptions {
   renderImpl?: (frame: number) => void | Promise<void>
   encodeImpl?: (sample: FakeSample, keyFrame: boolean) => Promise<void>
   closeImpl?: (sample: FakeSample) => void
+  onAbortImpl?: () => void | Promise<void>
 }
 
 function createHarness(totalFrames: number, opts: HarnessOptions = {}) {
@@ -77,6 +78,7 @@ function createHarness(totalFrames: number, opts: HarnessOptions = {}) {
       },
       onAbort: async () => {
         events.push('abort-cancel')
+        await opts.onAbortImpl?.()
       },
       onFrameProgress: (frame) => {
         events.push(`progress-${frame}`)
@@ -253,6 +255,63 @@ describe('runPipelinedFrameLoop', () => {
       expect(await outcome).toBe(audioError)
       expect(samples[0]?.closed).toBe(true)
     } finally {
+      nextRender.resolve()
+      encode.resolve()
+      await outcome
+      process.off('unhandledRejection', onUnhandledRejection)
+    }
+  })
+
+  it('preserves earlier audio over abort and a rejecting render before encode drains', async () => {
+    const controller = new AbortController()
+    const audioError = new Error('audio task failed first')
+    const renderError = new Error('render failed later')
+    const cleanupError = new Error('sample cleanup failed last')
+    const encode = deferred()
+    const nextRender = deferred()
+    const unhandledRejections: unknown[] = []
+    const onUnhandledRejection = (reason: unknown) => unhandledRejections.push(reason)
+    process.on('unhandledRejection', onUnhandledRejection)
+    let pendingError: unknown
+    let outcome: Promise<unknown> | undefined
+
+    try {
+      const { events, samples, run } = createHarness(2, {
+        signal: controller.signal,
+        getPendingError: () => pendingError,
+        renderImpl: (frame) => (frame === 1 ? nextRender.promise : undefined),
+        encodeImpl: () => encode.promise,
+        closeImpl: () => {
+          throw cleanupError
+        },
+      })
+
+      let settled = false
+      outcome = run().then(
+        () => null,
+        (error: unknown) => error,
+      )
+      void outcome.finally(() => {
+        settled = true
+      })
+      await tick()
+      expect(events).toContain('render-1')
+
+      pendingError = audioError
+      controller.abort()
+      nextRender.reject(renderError)
+      await tick()
+      expect(settled).toBe(false)
+      expect(unhandledRejections).toEqual([])
+
+      encode.resolve()
+      expect(await outcome).toBe(audioError)
+      expect(events).toContain('abort-cancel')
+      expect(samples[0]?.closed).toBe(true)
+      await tick()
+      expect(unhandledRejections).toEqual([])
+    } finally {
+      controller.abort()
       nextRender.resolve()
       encode.resolve()
       await outcome
@@ -471,6 +530,65 @@ describe('runPipelinedFrameLoop', () => {
       controller.abort()
       encode.resolve()
       nextRender.resolve()
+      await outcome
+      process.off('unhandledRejection', onUnhandledRejection)
+    }
+  })
+
+  it('preserves earlier abort over audio and a rejecting render before encode drains', async () => {
+    const controller = new AbortController()
+    const audioError = new Error('audio task failed later')
+    const renderError = new Error('render failed later')
+    const abortCleanupError = new Error('abort cleanup failed last')
+    const encode = deferred()
+    const nextRender = deferred()
+    const unhandledRejections: unknown[] = []
+    const onUnhandledRejection = (reason: unknown) => unhandledRejections.push(reason)
+    process.on('unhandledRejection', onUnhandledRejection)
+    let pendingError: unknown
+    let outcome: Promise<unknown> | undefined
+
+    try {
+      const { events, samples, run } = createHarness(2, {
+        signal: controller.signal,
+        getPendingError: () => pendingError,
+        renderImpl: (frame) => (frame === 1 ? nextRender.promise : undefined),
+        encodeImpl: () => encode.promise,
+        onAbortImpl: () => {
+          throw abortCleanupError
+        },
+      })
+
+      let settled = false
+      outcome = run().then(
+        () => null,
+        (error: unknown) => error,
+      )
+      void outcome.finally(() => {
+        settled = true
+      })
+      await tick()
+      expect(events).toContain('render-1')
+
+      controller.abort()
+      pendingError = audioError
+      nextRender.reject(renderError)
+      await tick()
+      expect(settled).toBe(false)
+      expect(unhandledRejections).toEqual([])
+
+      encode.resolve()
+      const error = await outcome
+      expect(error).toBeInstanceOf(DOMException)
+      expect((error as DOMException).name).toBe('AbortError')
+      expect(events).toContain('abort-cancel')
+      expect(samples[0]?.closed).toBe(true)
+      await tick()
+      expect(unhandledRejections).toEqual([])
+    } finally {
+      controller.abort()
+      nextRender.resolve()
+      encode.resolve()
       await outcome
       process.off('unhandledRejection', onUnhandledRejection)
     }

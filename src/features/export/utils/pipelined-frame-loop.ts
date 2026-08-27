@@ -62,15 +62,14 @@ async function encodeAndCloseSample<S extends CloseableSample>(
   sample: S,
   keyFrame: boolean,
   encodeSample: (sample: S, keyFrame: boolean) => Promise<void>,
-  recordEncodeFailure: (error: unknown) => void,
-  recordFailure: (error: unknown) => void,
+  recordSettledFailure: (error: unknown) => void,
 ): Promise<EncodeSettlement> {
   let failure: RecordedFailure | null = null
   try {
     await encodeSample(sample, keyFrame)
   } catch (error) {
     failure = { error }
-    recordEncodeFailure(error)
+    recordSettledFailure(error)
   }
 
   try {
@@ -83,7 +82,7 @@ async function encodeAndCloseSample<S extends CloseableSample>(
     // failure represented by this settlement.
     if (!failure) {
       failure = { error }
-      recordFailure(error)
+      recordSettledFailure(error)
     }
   }
 
@@ -121,26 +120,41 @@ export async function runPipelinedFrameLoop<S extends CloseableSample>(
     return abortError
   }
 
-  const recordEncodeFailure = (error: unknown) => {
-    // A pending audio error or abort may have happened while renderFrame was
-    // still pending, before this encode rejected. Observe those primary exit
-    // conditions before recording the later encoder failure.
+  const recordPendingFailure = (): RecordedFailure | null => {
     try {
       const pendingError = getPendingError?.()
-      if (pendingError) recordFailure(pendingError)
+      if (!pendingError) return null
+      const failure = { error: pendingError }
+      recordFailure(pendingError)
+      return failure
     } catch (pendingError) {
       recordFailure(pendingError)
+      return { error: pendingError }
     }
+  }
 
+  const recordObservableFailures = () => {
+    // Sampling pending audio before recording an already-fired abort preserves
+    // their event order: the abort listener observes audio that failed first,
+    // while an abort already recorded by the listener remains primary over an
+    // audio failure that appears later.
+    recordPendingFailure()
     if (signal?.aborted) recordFailure(getAbortError())
+  }
+
+  const recordSettledFailure = (error: unknown) => {
+    // Audio or abort may have happened while renderFrame or this encode was
+    // pending. Observe those primary exit conditions before the later encode
+    // or sample-cleanup failure.
+    recordObservableFailures()
     recordFailure(error)
   }
 
-  const drainPendingEncode = async () => {
-    if (!pendingEncode) return
+  const drainPendingEncode = async (): Promise<EncodeSettlement | null> => {
+    if (!pendingEncode) return null
     const encode = pendingEncode
     try {
-      await encode
+      return await encode
     } finally {
       pendingEncode = null
     }
@@ -163,13 +177,12 @@ export async function runPipelinedFrameLoop<S extends CloseableSample>(
     throw failure.error
   }
 
+  signal?.addEventListener('abort', recordObservableFailures, { once: true })
+
   try {
     for (let frame = 0; frame < totalFrames; frame++) {
-      const pendingError = getPendingError?.()
-      if (pendingError) {
-        recordFailure(pendingError)
-        throw pendingError
-      }
+      const pendingFailure = recordPendingFailure()
+      if (pendingFailure) throw pendingFailure.error
 
       // Check for abort — drain any in-flight encode first so the encoder is
       // idle before we cancel the output. The first recorded failure wins, so
@@ -188,8 +201,8 @@ export async function runPipelinedFrameLoop<S extends CloseableSample>(
       // Now wait for the previous encode to finish before capturing a new
       // sample. This ensures at most one encode is in flight and that frames
       // are fed to the encoder in order.
-      await drainPendingEncode()
-      await throwRecordedFailureAfterDrain()
+      const previousEncode = await drainPendingEncode()
+      if (previousEncode?.status === 'rejected') await throwRecordedFailureAfterDrain()
 
       // Snapshot pixels into a sample. The capture copies pixel data
       // immediately — the surface is free for the next render.
@@ -198,24 +211,25 @@ export async function runPipelinedFrameLoop<S extends CloseableSample>(
       // Kick off encoding in the background. NOT awaited here — it runs
       // concurrently with the next iteration's renderFrame().
       const isKeyFrame = frame === 0
-      pendingEncode = encodeAndCloseSample(
-        sample,
-        isKeyFrame,
-        encodeSample,
-        recordEncodeFailure,
-        recordFailure,
-      )
+      pendingEncode = encodeAndCloseSample(sample, isKeyFrame, encodeSample, recordSettledFailure)
 
       onFrameProgress(frame)
     }
 
     // Drain the final in-flight encode before finalizing
     await drainPendingEncode()
+    if (totalFrames > 0) recordObservableFailures()
     await throwRecordedFailureAfterDrain()
   } catch (primaryError) {
+    // A render/capture/progress rejection reaches this catch on a later promise
+    // turn. Sample failures already exposed by the concurrent channels before
+    // assigning that newly caught error.
+    recordObservableFailures()
     recordFailure(primaryError)
     await drainPendingEncode()
     await throwRecordedFailureAfterDrain()
     throw primaryError
+  } finally {
+    signal?.removeEventListener('abort', recordObservableFailures)
   }
 }
