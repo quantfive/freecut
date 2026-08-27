@@ -1310,8 +1310,9 @@ export const TimelineContent = memo(function TimelineContent({
 
   // Click empty space to deselect items and markers (but preserve track selection)
   const handleContainerClick = (e: React.MouseEvent) => {
-    // Don't deselect if marquee selection, drag, or scrubbing just finished
-    if (marqueeWasActiveRef.current || dragWasActiveRef.current || scrubWasActiveRef.current) {
+    // Item drags own their exact browser-generated click at document capture.
+    // Keep the local delayed guards only for marquee and scrub interactions.
+    if (marqueeWasActiveRef.current || scrubWasActiveRef.current) {
       return
     }
 

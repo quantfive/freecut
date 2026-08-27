@@ -1,23 +1,51 @@
-// @vitest-environment node
+import { afterEach, describe, expect, it, vi } from 'vite-plus/test'
+import {
+  resetPostTimelineGestureClickForTest,
+  suppressPostTimelineGestureClick,
+} from './post-drag-click-guard'
 
-import { describe, expect, it } from 'vite-plus/test'
-import { shouldSuppressTimelineItemClickAfterDrag } from './post-drag-click-guard'
+function dispatchMouseEvent(target: EventTarget, type: 'mousedown' | 'click', detail = 1) {
+  target.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, detail }))
+}
 
-describe('shouldSuppressTimelineItemClickAfterDrag', () => {
-  it('suppresses post-drag clicks for selection tools', () => {
-    expect(shouldSuppressTimelineItemClickAfterDrag('select', true)).toBe(true)
-    expect(shouldSuppressTimelineItemClickAfterDrag('trim-edit', true)).toBe(true)
+describe('post timeline gesture click ownership', () => {
+  afterEach(() => resetPostTimelineGestureClickForTest())
+
+  it('suppresses exactly one browser-generated click', () => {
+    const element = document.createElement('button')
+    const onClick = vi.fn()
+    element.addEventListener('click', onClick)
+    document.body.appendChild(element)
+
+    suppressPostTimelineGestureClick()
+    dispatchMouseEvent(element, 'click')
+    dispatchMouseEvent(element, 'click')
+
+    expect(onClick).toHaveBeenCalledTimes(1)
   })
 
-  it('allows post-drag clicks for non-selection tools so razor and edit tools still work', () => {
-    expect(shouldSuppressTimelineItemClickAfterDrag('razor', true)).toBe(false)
-    expect(shouldSuppressTimelineItemClickAfterDrag('rate-stretch', true)).toBe(false)
-    expect(shouldSuppressTimelineItemClickAfterDrag('slip', true)).toBe(false)
-    expect(shouldSuppressTimelineItemClickAfterDrag('slide', true)).toBe(false)
+  it('releases ownership when a later independent mouse gesture starts', () => {
+    const element = document.createElement('button')
+    const onClick = vi.fn()
+    element.addEventListener('click', onClick)
+    document.body.appendChild(element)
+
+    suppressPostTimelineGestureClick()
+    dispatchMouseEvent(element, 'mousedown')
+    dispatchMouseEvent(element, 'click')
+
+    expect(onClick).toHaveBeenCalledTimes(1)
   })
 
-  it('never suppresses when no drag just finished', () => {
-    expect(shouldSuppressTimelineItemClickAfterDrag('select', false)).toBe(false)
-    expect(shouldSuppressTimelineItemClickAfterDrag('razor', false)).toBe(false)
+  it('does not suppress keyboard or programmatic activation', () => {
+    const element = document.createElement('button')
+    const onClick = vi.fn()
+    element.addEventListener('click', onClick)
+    document.body.appendChild(element)
+
+    suppressPostTimelineGestureClick()
+    dispatchMouseEvent(element, 'click', 0)
+
+    expect(onClick).toHaveBeenCalledTimes(1)
   })
 })

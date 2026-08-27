@@ -33,6 +33,7 @@ import { DRAG_THRESHOLD_PIXELS } from '../constants'
 import { createLogger } from '@/shared/logging/logger'
 import { createRafCoalescedCallback } from '../utils/raf-coalesced-callback'
 import { resolveEffectiveTrackStates } from '../utils/group-utils'
+import { suppressPostTimelineGestureClick } from '../components/timeline-item/post-drag-click-guard'
 
 const logger = createLogger('TimelineDrag')
 
@@ -465,7 +466,11 @@ type DragSelectionSnapshot = Pick<
   | 'selectedItemIdSet'
   | 'selectedMarkerId'
   | 'selectedTransitionId'
+  | 'selectedTrackId'
+  | 'selectedTrackIds'
+  | 'activeTrackId'
   | 'selectionType'
+  | 'editKeyframePanelOpen'
   | 'expandedKeyframeLanes'
 >
 
@@ -475,7 +480,11 @@ function captureDragSelectionSnapshot(state: SelectionState): DragSelectionSnaps
     selectedItemIdSet: new Set(state.selectedItemIdSet),
     selectedMarkerId: state.selectedMarkerId,
     selectedTransitionId: state.selectedTransitionId,
+    selectedTrackId: state.selectedTrackId,
+    selectedTrackIds: [...state.selectedTrackIds],
+    activeTrackId: state.activeTrackId,
     selectionType: state.selectionType,
+    editKeyframePanelOpen: state.editKeyframePanelOpen,
     expandedKeyframeLanes: new Set(state.expandedKeyframeLanes),
   }
 }
@@ -590,6 +599,7 @@ export function useTimelineDrag(
   const dragVisualTopByTrackIdRef = useRef<Map<string, number>>(new Map())
   const linkedMovePreviewSignatureRef = useRef('')
   const selectionRollbackRef = useRef<DragSelectionSnapshot | null>(null)
+  const gestureMovementRef = useRef(0)
   const removeDragThresholdListenersRef = useRef<(() => void) | null>(null)
 
   // Track Alt key state for duplication mode (dynamic toggle during drag)
@@ -652,9 +662,11 @@ export function useTimelineDrag(
   const finishDragInteraction = useCallback(
     ({
       rollbackSelection,
+      suppressPostGestureClick = false,
       updateReactState = true,
     }: {
       rollbackSelection: boolean
+      suppressPostGestureClick?: boolean
       updateReactState?: boolean
     }) => {
       const removeDragThresholdListeners = removeDragThresholdListenersRef.current
@@ -674,6 +686,7 @@ export function useTimelineDrag(
       dragStateRef.current = null
       isLinkedCohortDragRef.current = false
       isAltDragRef.current = false
+      gestureMovementRef.current = 0
       clearGlobalDragCursor()
       document.body.style.userSelect = ''
 
@@ -686,12 +699,56 @@ export function useTimelineDrag(
         activeLinkedDropTarget: null,
       })
 
+      if (suppressPostGestureClick) {
+        suppressPostTimelineGestureClick()
+      }
+
       if (updateReactState) {
         setIsDragging(false)
         setDragOffset({ x: 0, y: 0 })
       }
     },
     [clearLinkedMovePreview, elementRef],
+  )
+
+  const trackRejectedDragAttempt = useCallback(
+    (startMouseX: number, startMouseY: number) => {
+      const handleMouseMove = (event: MouseEvent) => {
+        gestureMovementRef.current = Math.max(
+          gestureMovementRef.current,
+          Math.abs(event.clientX - startMouseX),
+          Math.abs(event.clientY - startMouseY),
+        )
+      }
+      const handleMouseUp = () => {
+        finishDragInteraction({
+          rollbackSelection: true,
+          suppressPostGestureClick: gestureMovementRef.current > 0,
+        })
+      }
+      const handleCancellation = () => {
+        finishDragInteraction({ rollbackSelection: true, suppressPostGestureClick: true })
+      }
+      const handleKeyDown = (event: KeyboardEvent) => {
+        if (event.key === 'Escape') handleCancellation()
+      }
+      const removeListeners = () => {
+        window.removeEventListener('mousemove', handleMouseMove)
+        window.removeEventListener('mouseup', handleMouseUp)
+        window.removeEventListener('pointercancel', handleCancellation)
+        window.removeEventListener('keydown', handleKeyDown)
+        if (removeDragThresholdListenersRef.current === removeListeners) {
+          removeDragThresholdListenersRef.current = null
+        }
+      }
+
+      removeDragThresholdListenersRef.current = removeListeners
+      window.addEventListener('mousemove', handleMouseMove)
+      window.addEventListener('mouseup', handleMouseUp)
+      window.addEventListener('pointercancel', handleCancellation)
+      window.addEventListener('keydown', handleKeyDown)
+    },
+    [finishDragInteraction],
   )
 
   // Get zoom utilities
@@ -930,15 +987,7 @@ export function useTimelineDrag(
    */
   const handleDragStart = useCallback(
     (e: React.MouseEvent) => {
-      if (dragStateRef.current) return
-
-      const allItems = getItems()
-      const currentTracks = useTimelineStore.getState().tracks
-      const anchorTrack = getEffectiveTrackStateById(currentTracks).get(item.trackId)
-
-      // The caller supplies the rendered lock state, but re-read canonical
-      // effective state so a child lane cannot bypass a locked Layer Group.
-      if (trackLocked || !anchorTrack || anchorTrack.locked) return
+      if (dragStateRef.current || selectionRollbackRef.current) return
 
       // Prevent if clicking on resize handles
       const target = e.target as HTMLElement
@@ -946,10 +995,24 @@ export function useTimelineDrag(
         return
       }
 
+      const currentSelectionState = useSelectionStore.getState()
+      selectionRollbackRef.current = captureDragSelectionSnapshot(currentSelectionState)
+      gestureMovementRef.current = 0
+
+      const allItems = getItems()
+      const currentTracks = useTimelineStore.getState().tracks
+      const anchorTrack = getEffectiveTrackStateById(currentTracks).get(item.trackId)
+
+      // The caller supplies the rendered lock state, but re-read canonical
+      // effective state so a child lane cannot bypass a locked Layer Group.
+      if (trackLocked || !anchorTrack || anchorTrack.locked) {
+        trackRejectedDragAttempt(e.clientX, e.clientY)
+        return
+      }
+
       e.stopPropagation()
 
       // Check if this item is in current selection
-      const currentSelectionState = useSelectionStore.getState()
       const currentSelectedIds = currentSelectionState.selectedItemIds
       const isInSelection = currentSelectedIds.includes(item.id)
 
@@ -969,6 +1032,7 @@ export function useTimelineDrag(
         )
       if (isBlockedByLockedLinkedItem || draggedItems.length === 0) {
         isLinkedCohortDragRef.current = false
+        trackRejectedDragAttempt(e.clientX, e.clientY)
         return
       }
 
@@ -976,7 +1040,6 @@ export function useTimelineDrag(
       // validation. A rejected linked gesture is otherwise not atomic.
       const isMultiSelectClick = e.ctrlKey || e.metaKey
       if (!isInSelection && !isMultiSelectClick) {
-        selectionRollbackRef.current = captureDragSelectionSnapshot(currentSelectionState)
         selectItems(linkedIds)
       }
 
@@ -988,7 +1051,6 @@ export function useTimelineDrag(
         baseItemsToDrag.length === selectedIdSet.size &&
         baseItemsToDrag.every((id) => selectedIdSet.has(id))
       if (isInSelection && !cohortMatchesSelection) {
-        selectionRollbackRef.current = captureDragSelectionSnapshot(currentSelectionState)
         selectItems(baseItemsToDrag)
       }
 
@@ -1018,6 +1080,11 @@ export function useTimelineDrag(
 
         const deltaX = e.clientX - dragStateRef.current.startMouseX
         const deltaY = e.clientY - dragStateRef.current.startMouseY
+        gestureMovementRef.current = Math.max(
+          gestureMovementRef.current,
+          Math.abs(deltaX),
+          Math.abs(deltaY),
+        )
 
         // Check if we've moved enough to start dragging
         if (Math.abs(deltaX) > DRAG_THRESHOLD_PIXELS || Math.abs(deltaY) > DRAG_THRESHOLD_PIXELS) {
@@ -1050,12 +1117,25 @@ export function useTimelineDrag(
 
       const cancelDrag = () => {
         // A click released before the threshold is a cancelled drag attempt.
-        finishDragInteraction({ rollbackSelection: true })
+        finishDragInteraction({
+          rollbackSelection: true,
+          suppressPostGestureClick: gestureMovementRef.current > 0,
+        })
+      }
+
+      const cancelDragExplicitly = () => {
+        finishDragInteraction({ rollbackSelection: true, suppressPostGestureClick: true })
+      }
+
+      const handleKeyDown = (event: KeyboardEvent) => {
+        if (event.key === 'Escape') cancelDragExplicitly()
       }
 
       function removeDragThresholdListeners() {
         window.removeEventListener('mousemove', checkDragThreshold)
         window.removeEventListener('mouseup', cancelDrag)
+        window.removeEventListener('pointercancel', cancelDragExplicitly)
+        window.removeEventListener('keydown', handleKeyDown)
         if (removeDragThresholdListenersRef.current === removeDragThresholdListeners) {
           removeDragThresholdListenersRef.current = null
         }
@@ -1064,6 +1144,8 @@ export function useTimelineDrag(
       removeDragThresholdListenersRef.current = removeDragThresholdListeners
       window.addEventListener('mousemove', checkDragThreshold)
       window.addEventListener('mouseup', cancelDrag)
+      window.addEventListener('pointercancel', cancelDragExplicitly)
+      window.addEventListener('keydown', handleKeyDown)
     },
     [
       clearLinkedMovePreview,
@@ -1078,6 +1160,7 @@ export function useTimelineDrag(
       setDragState,
       getItems,
       getMagneticSnapTargets,
+      trackRejectedDragAttempt,
     ],
   )
 
@@ -1676,7 +1759,17 @@ export function useTimelineDrag(
         }
       }
 
-      finishDragInteraction({ rollbackSelection: !dropAccepted })
+      finishDragInteraction({
+        rollbackSelection: !dropAccepted,
+        suppressPostGestureClick: true,
+      })
+    }
+
+    const handleCancellation = () => {
+      finishDragInteraction({ rollbackSelection: true, suppressPostGestureClick: true })
+    }
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') handleCancellation()
     }
 
     if (dragStateRef.current) {
@@ -1688,10 +1781,14 @@ export function useTimelineDrag(
 
       window.addEventListener('mousemove', coalescedMouseMove.queue)
       window.addEventListener('mouseup', handleCoalescedMouseUp)
+      window.addEventListener('pointercancel', handleCancellation)
+      window.addEventListener('keydown', handleKeyDown)
 
       return () => {
         window.removeEventListener('mousemove', coalescedMouseMove.queue)
         window.removeEventListener('mouseup', handleCoalescedMouseUp)
+        window.removeEventListener('pointercancel', handleCancellation)
+        window.removeEventListener('keydown', handleKeyDown)
         coalescedMouseMove.cancel()
       }
     }
@@ -1717,7 +1814,11 @@ export function useTimelineDrag(
   useEffect(
     () => () => {
       if (dragStateRef.current || selectionRollbackRef.current) {
-        finishDragInteraction({ rollbackSelection: true, updateReactState: false })
+        finishDragInteraction({
+          rollbackSelection: true,
+          suppressPostGestureClick: true,
+          updateReactState: false,
+        })
       }
     },
     [finishDragInteraction],
