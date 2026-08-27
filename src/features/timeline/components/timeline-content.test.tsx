@@ -1011,6 +1011,43 @@ describe('TimelineContent playback selection behavior', () => {
     expect(usePlaybackStore.getState().isPlaying).toBe(false)
   })
 
+  it('does not restore the marquee release preview after a timeline body click', () => {
+    const { container } = render(<TimelineContent duration={10} tracks={[VIDEO_TRACK]} />)
+    const frameCallbacks: FrameRequestCallback[] = []
+    const animationFrameSpy = vi
+      .spyOn(window, 'requestAnimationFrame')
+      .mockImplementation((callback) => {
+        frameCallbacks.push(callback)
+        return frameCallbacks.length
+      })
+
+    act(() => {
+      usePlaybackStore.getState().setCurrentFrame(90)
+      usePlaybackStore.getState().setPreviewFrame(24)
+    })
+
+    const track = container.querySelector(`[data-track-id="${VIDEO_TRACK.id}"]`)
+    expect(track).toBeTruthy()
+
+    fireEvent.mouseDown(track!, { button: 0, clientX: 80, clientY: 100 })
+    act(() => {
+      marqueeMocks.onGestureEnd?.(
+        new MouseEvent('mouseup', { button: 0, clientX: 80, clientY: 100 }),
+        false,
+      )
+    })
+    expect(frameCallbacks).toHaveLength(1)
+
+    fireEvent.click(track!, { button: 0, clientX: 80, clientY: 100 })
+    act(() => {
+      frameCallbacks.splice(0).forEach((callback) => callback(performance.now()))
+    })
+
+    expect(usePlaybackStore.getState().currentFrame).toBe(24)
+    expect(usePlaybackStore.getState().previewFrame).toBeNull()
+    animationFrameSpy.mockRestore()
+  })
+
   it('locks the skim preview from track mousedown until the marquee gesture ends', () => {
     const { container } = render(<TimelineContent duration={10} tracks={[VIDEO_TRACK]} />)
 

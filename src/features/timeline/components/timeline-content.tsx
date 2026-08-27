@@ -885,6 +885,10 @@ export const TimelineContent = memo(function TimelineContent({
       cancelAnimationFrame(previewRafRef.current)
       previewRafRef.current = null
     }
+    if (marqueeReleaseRafRef.current !== null) {
+      cancelAnimationFrame(marqueeReleaseRafRef.current)
+      marqueeReleaseRafRef.current = null
+    }
   }, [])
   useTimelineAudioSkimPreview()
 
@@ -1371,6 +1375,11 @@ export const TimelineContent = memo(function TimelineContent({
       return
     }
 
+    // A normal background click arrives after the marquee mouseup callback.
+    // Cancel its queued preview restore before committing the click so the
+    // program monitor follows currentFrame instead of resurrecting the hover
+    // frame on the next animation frame.
+    cancelPendingHoverPreview()
     const clickedOnItem = target.closest('[data-item-id]')
     seekTimelineTrackAtPointer({
       target,
