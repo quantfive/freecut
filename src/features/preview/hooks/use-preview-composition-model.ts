@@ -593,7 +593,7 @@ export function buildPreviewCompositionData({
     (max, item) => Math.max(max, item.from + item.durationInFrames),
     0,
   )
-  const totalFrames = furthestItemEndFrame === 0 ? 900 : furthestItemEndFrame + fps * 5
+  const totalFrames = furthestItemEndFrame === 0 ? 900 : furthestItemEndFrame
   const inputProps: CompositionInputProps = {
     fps,
     width: project.width,

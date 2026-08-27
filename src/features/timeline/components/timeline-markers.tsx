@@ -18,6 +18,7 @@ import {
   beginTimelineSkimmerScrub,
   endTimelineSkimmerScrub,
   mainTimelineScrubActiveRef,
+  timelineSkimmerScrubSignal,
 } from '@/shared/timeline/main-timeline-scrub'
 import {
   getTimelineScrubViewportProgress,
@@ -912,6 +913,19 @@ export const TimelineMarkers = memo(function TimelineMarkers({
     [],
   )
 
+  useEffect(
+    () =>
+      timelineSkimmerScrubSignal.subscribe(() => {
+        if (!timelineSkimmerScrubSignal.current) return
+        if (hoverPreviewRafRef.current !== null) {
+          cancelAnimationFrame(hoverPreviewRafRef.current)
+          hoverPreviewRafRef.current = null
+        }
+        pendingHoverPreviewFrameRef.current = null
+      }),
+    [],
+  )
+
   const handleRangeMouseDown = useCallback(
     (e: React.PointerEvent) => {
       const startIn = inPointRef.current
@@ -996,6 +1010,16 @@ export const TimelineMarkers = memo(function TimelineMarkers({
       // Seeking is disabled during a voiceover take — moving the playhead
       // without moving the mic audio would desync the recording irreparably.
       if (isMicRecordingActive(useMicRecordingStore.getState().status)) return
+
+      // A pointer move immediately before mousedown may still have a hover
+      // publication queued for the next animation frame. The click scrub now
+      // owns this pointer sample, so cancel that older preview before it can
+      // resurrect transient state after mouseup clears the scrub preview.
+      if (hoverPreviewRafRef.current !== null) {
+        cancelAnimationFrame(hoverPreviewRafRef.current)
+        hoverPreviewRafRef.current = null
+      }
+      pendingHoverPreviewFrameRef.current = null
 
       // Clear marker selection when clicking on ruler (only if a marker is selected)
       const { selectedMarkerId } = useSelectionStore.getState()

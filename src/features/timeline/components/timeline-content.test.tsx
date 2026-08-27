@@ -59,7 +59,7 @@ vi.mock('./timeline-markers', () => ({
 }))
 
 vi.mock('./timeline-playhead', () => ({
-  TimelinePlayhead: () => <div data-testid="unified-timeline-playhead" />,
+  TimelinePlayhead: () => <div data-playhead-handle data-testid="unified-timeline-playhead" />,
 }))
 
 vi.mock('./timeline-preview-scrubber', () => ({
@@ -647,6 +647,66 @@ describe('TimelineContent playback selection behavior', () => {
     })
     expect(usePlaybackStore.getState().previewFrame).toBeNull()
     expect(useZoomStore.getState().level).toBeGreaterThan(1)
+
+    unmount()
+    animationFrameSpy.mockRestore()
+    cancelAnimationFrameSpy.mockRestore()
+  })
+
+  it('cancels a queued hover preview when playhead scrubbing starts', () => {
+    let nextFrameId = 1
+    const scheduledFrames = new Map<number, FrameRequestCallback>()
+    const animationFrameSpy = vi
+      .spyOn(window, 'requestAnimationFrame')
+      .mockImplementation((callback) => {
+        const id = nextFrameId++
+        scheduledFrames.set(id, callback)
+        return id
+      })
+    const cancelAnimationFrameSpy = vi
+      .spyOn(window, 'cancelAnimationFrame')
+      .mockImplementation((id) => {
+        scheduledFrames.delete(id)
+      })
+
+    const { container, getByTestId, unmount } = render(
+      <TimelineContent duration={10} tracks={[VIDEO_TRACK]} />,
+    )
+    const scrollContainer = container.querySelector('[data-timeline-scroll-container]')
+    if (!(scrollContainer instanceof HTMLDivElement)) {
+      throw new Error('Expected timeline scroll container')
+    }
+
+    Object.defineProperty(scrollContainer, 'getBoundingClientRect', {
+      configurable: true,
+      value: () => ({
+        left: 0,
+        top: 0,
+        right: 400,
+        bottom: 200,
+        width: 400,
+        height: 200,
+        x: 0,
+        y: 0,
+        toJSON: () => ({}),
+      }),
+    })
+    scheduledFrames.clear()
+
+    fireEvent.mouseMove(scrollContainer, { clientX: 180, clientY: 48 })
+    const previewFrameId = [...scheduledFrames.keys()].at(-1)
+    expect(previewFrameId).toBeDefined()
+
+    fireEvent.mouseDown(getByTestId('unified-timeline-playhead'), { button: 0 })
+
+    expect(cancelAnimationFrameSpy).toHaveBeenCalledWith(previewFrameId)
+    act(() => {
+      for (const [id, callback] of [...scheduledFrames]) {
+        scheduledFrames.delete(id)
+        callback(performance.now())
+      }
+    })
+    expect(usePlaybackStore.getState().previewFrame).toBeNull()
 
     unmount()
     animationFrameSpy.mockRestore()
