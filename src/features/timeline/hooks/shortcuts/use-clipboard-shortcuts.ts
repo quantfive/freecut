@@ -21,7 +21,7 @@ import {
   wouldCreateCompositionCycle,
 } from '../../utils/composition-graph'
 import { handleTranscriptClipboardCopy } from '../../utils/transcript-copy-bridge'
-import { getTrackKind } from '../../utils/classic-tracks'
+import { createClassicTrack, getTrackKind } from '../../utils/classic-tracks'
 
 interface PastePlacementPlan {
   itemData: Omit<TimelineItem, 'id'>
@@ -82,12 +82,13 @@ function buildPasteTrackPlan(
   pasteItems: Array<Omit<TimelineItem, 'id'>>,
   tracks: TimelineTrack[],
   activeTrackId: string | null,
-): Map<number, string> {
+): { plan: Map<number, string>; tracks: TimelineTrack[] } {
+  let plannedTracks = tracks
   const sourceTrackIndexes = new Map<string, number>()
   const nextSourceIndex: Record<PasteTrackKind, number> = { video: 0, audio: 0 }
-  const destinationTrackIds: Record<PasteTrackKind, string[]> = {
-    video: getPasteDestinationTrackIds(tracks, 'video'),
-    audio: getPasteDestinationTrackIds(tracks, 'audio'),
+  const destinationTrackIds: Record<PasteTrackKind, string[]> = { video: [], audio: [] }
+  for (const kind of ['video', 'audio'] as const) {
+    destinationTrackIds[kind] = getPasteDestinationTrackIds(plannedTracks, kind)
   }
   const preserveSourceTracks = new Set(pasteItems.map((item) => item.trackId)).size > 1
   const plan = new Map<number, string>()
@@ -108,6 +109,17 @@ function buildPasteTrackPlan(
       (track) => track.id === activeTrackId && isCompatiblePasteTrack(track, kind),
     )
     const candidates = destinationTrackIds[kind]
+    while (preserveSourceTracks && sourceLane >= candidates.length) {
+      const minOrder = Math.min(...plannedTracks.map((track) => track.order), 0)
+      const maxOrder = Math.max(...plannedTracks.map((track) => track.order), 0)
+      const newTrack = createClassicTrack({
+        tracks: plannedTracks,
+        kind,
+        order: kind === 'video' ? minOrder - 1 : maxOrder + 1,
+      })
+      plannedTracks = [...plannedTracks, newTrack]
+      candidates.push(newTrack.id)
+    }
     const targetTrackId = preserveSourceTracks
       ? (exactTrack?.id ?? candidates[sourceLane] ?? candidates[0] ?? activeTrack?.id)
       : (activeTrack?.id ?? exactTrack?.id ?? candidates[sourceLane] ?? candidates[0])
@@ -117,7 +129,7 @@ function buildPasteTrackPlan(
     }
   }
 
-  return plan
+  return { plan, tracks: plannedTracks }
 }
 
 function findSharedPlacementShift(
@@ -202,6 +214,7 @@ export function useClipboardShortcuts() {
   const transitions = useTimelineStore((s) => s.transitions)
   const tracks = useTimelineStore((s) => s.tracks)
   const addItems = useTimelineStore((s) => s.addItems)
+  const addItemsOnNewTracks = useTimelineStore((s) => s.addItemsOnNewTracks)
   const removeItems = useTimelineStore((s) => s.removeItems)
   const updateTransition = useTimelineStore((s) => s.updateTransition)
   const copyTransition = useClipboardStore((s) => s.copyTransition)
@@ -331,7 +344,11 @@ export function useClipboardShortcuts() {
         // they survive in this sequence; otherwise the source lane ordinal is
         // mapped to the corresponding destination lane. This keeps linked A/V
         // members in separate sections even when both source IDs are absent.
-        const trackPlan = buildPasteTrackPlan(pasteItems, tracks, activeTrackId)
+        const { plan: trackPlan, tracks: plannedTracks } = buildPasteTrackPlan(
+          pasteItems,
+          tracks,
+          activeTrackId,
+        )
         const placementPlans = pasteItems.flatMap((itemData, sourceIndex) => {
           const targetTrackId = trackPlan.get(sourceIndex)
           return targetTrackId
@@ -359,7 +376,9 @@ export function useClipboardShortcuts() {
             group.push(plan)
             grouped.set(key, group)
           }
-          placementGroups = [...grouped.values()]
+          placementGroups = [...grouped.values()].flatMap((group) =>
+            hasInternalPlacementOverlap(group) ? group.map((plan) => [plan]) : [group],
+          )
         }
 
         const occupiedItems = [...storeItems]
@@ -392,7 +411,11 @@ export function useClipboardShortcuts() {
         // Add every pasted item in a single ADD_ITEMS command so one Ctrl+Z
         // undoes the whole paste (including a linked A/V pair), not item-by-item.
         if (newItems.length > 0) {
-          addItems(newItems)
+          if (plannedTracks.length > tracks.length) {
+            addItemsOnNewTracks(newItems, plannedTracks)
+          } else {
+            addItems(newItems)
+          }
         }
 
         if (newItemIds.length > 0) {
@@ -431,6 +454,7 @@ export function useClipboardShortcuts() {
       itemsClipboard,
       tracks,
       addItems,
+      addItemsOnNewTracks,
       selectItems,
       activeTrackId,
       selectedKeyframes.length,
