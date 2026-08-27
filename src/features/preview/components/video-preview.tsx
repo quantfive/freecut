@@ -708,6 +708,10 @@ const VideoPreviewBase = memo(function VideoPreviewBase({
   // in the layout phase. This covers same-ID source swaps and topology changes
   // before a stale scrub frame can remain visible for one paint.
   useLayoutEffect(() => {
+    // Advance the render generation before replacement work can start. The
+    // controller's async pump checks this generation and cannot publish the
+    // disposed renderer's result afterward.
+    disposeFastScrubRenderer()
     const canvas = scrubCanvasRef.current
     if (canvas) {
       const context = canvas.getContext('2d')
@@ -723,10 +727,10 @@ const VideoPreviewBase = memo(function VideoPreviewBase({
     if (hadFastScrubOverlay) showFastScrubOverlayForFrame()
     else if (hadTransitionOverlay) showPlaybackTransitionOverlayForFrame()
   }, [
+    disposeFastScrubRenderer,
     fastScrubRendererStructureKey,
     hideFastScrubOverlay,
     hidePlaybackTransitionOverlay,
-    mediaDependencyVersion,
     scrubCanvasRef,
     showFastScrubOverlayForFrame,
     showFastScrubOverlayRef,

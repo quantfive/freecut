@@ -414,6 +414,15 @@ function VideoSource({
         canvas.height = targetHeight
       }
 
+      // Keep deferred extractor work away from the visible presentation. A
+      // decoder can paint before its promise settles, so only commit staged
+      // pixels after validating the source generation.
+      const stagingCanvas = document.createElement('canvas')
+      stagingCanvas.width = targetWidth
+      stagingCanvas.height = targetHeight
+      const stagingContext = stagingCanvas.getContext('2d')
+      if (!stagingContext) return false
+
       const cacheKey = quantizeSourceMonitorTime(targetTime)
       const markDecodedFrame = () => {
         if (!isCurrent()) return false
@@ -466,12 +475,12 @@ function VideoSource({
       if (!isCurrent()) return false
 
       const didDraw = await extractor.drawFrame(
-        ctx,
+        stagingContext,
         Math.max(0, targetTime),
         0,
         0,
-        canvas.width,
-        canvas.height,
+        stagingCanvas.width,
+        stagingCanvas.height,
       )
       if (!isCurrent()) {
         ctx.clearRect(0, 0, canvas.width, canvas.height)
@@ -479,8 +488,11 @@ function VideoSource({
       }
       if (!didDraw) return false
 
+      ctx.clearRect(0, 0, canvas.width, canvas.height)
+      ctx.drawImage(stagingCanvas, 0, 0, canvas.width, canvas.height)
+
       try {
-        const bitmap = await createImageBitmap(canvas)
+        const bitmap = await createImageBitmap(stagingCanvas)
         if (!isCurrent()) {
           bitmap.close()
           return false
