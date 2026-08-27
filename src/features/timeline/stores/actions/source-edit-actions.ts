@@ -19,6 +19,7 @@ import { resolveSourceEditTrackTargets } from '../../utils/source-edit-targeting
 import { buildMediaTimelineItems } from '../../utils/media-timeline-item-builder'
 import { DEFAULT_TRACK_HEIGHT } from '../../constants'
 import { DEFAULT_PROJECT_HEIGHT, DEFAULT_PROJECT_WIDTH } from '@/shared/projects/defaults'
+import { isTimelineTrackLocked, preflightTimelineMutation } from '../../utils/track-lock-invariants'
 
 interface SourceEditContext {
   sourceMediaId: string
@@ -138,7 +139,9 @@ async function resolveSourceEditContext(): Promise<SourceEditContext | null> {
     (trackId): trackId is string => !!trackId,
   )
   const lockedTarget = resolvedTargets.tracks.find(
-    (timelineTrack) => targetTrackIds.includes(timelineTrack.id) && timelineTrack.locked,
+    (timelineTrack) =>
+      targetTrackIds.includes(timelineTrack.id) &&
+      isTimelineTrackLocked(resolvedTargets.tracks, timelineTrack.id),
   )
   if (lockedTarget) {
     toast.warning(`Target track ${lockedTarget.name} is locked`)
@@ -230,6 +233,40 @@ function createTimelineItems(ctx: SourceEditContext) {
   })
 }
 
+function getSourceEditPreflightTracks(resolvedTracks: TimelineTrack[]): TimelineTrack[] {
+  const currentTracks = useItemsStore.getState().tracks
+  const currentTrackIds = new Set(currentTracks.map((track) => track.id))
+  return [...currentTracks, ...resolvedTracks.filter((track) => !currentTrackIds.has(track.id))]
+}
+
+function canCommitSourceEdit(params: {
+  mode: 'insert' | 'overwrite'
+  targetTrackIds: string[]
+  resolvedTracks: TimelineTrack[]
+  start: number
+  end: number
+}): boolean {
+  const { items } = useItemsStore.getState()
+  const targetTrackIdSet = new Set(params.targetTrackIds)
+  const mutationIds = items
+    .filter((item) => {
+      if (!targetTrackIdSet.has(item.trackId)) return false
+      const itemEnd = item.from + item.durationInFrames
+      return params.mode === 'insert'
+        ? (item.from < params.start && itemEnd > params.start) || item.from >= params.start
+        : item.from < params.end && itemEnd > params.start
+    })
+    .map((item) => item.id)
+  const tracks = getSourceEditPreflightTracks(params.resolvedTracks)
+
+  return preflightTimelineMutation({
+    items,
+    tracks,
+    itemIds: mutationIds,
+    destinationTrackIds: params.targetTrackIds,
+  }).allowed
+}
+
 export async function performInsertEdit(): Promise<void> {
   const ctx = await resolveSourceEditContext()
   if (!ctx) return
@@ -239,6 +276,17 @@ export async function performInsertEdit(): Promise<void> {
   const targetTrackIds = Array.from(new Set(newItems.map((item) => item.trackId)))
   if (newItems.length === 0 || targetTrackIds.length === 0) {
     toast.warning('Unable to resolve source patch targets')
+    return
+  }
+  if (
+    !canCommitSourceEdit({
+      mode: 'insert',
+      targetTrackIds,
+      resolvedTracks: ctx.resolvedTracks,
+      start: insertFrame,
+      end: insertFrame,
+    })
+  ) {
     return
   }
 
@@ -304,6 +352,17 @@ export async function performOverwriteEdit(): Promise<void> {
   const targetTrackIds = Array.from(new Set(newItems.map((item) => item.trackId)))
   if (newItems.length === 0 || targetTrackIds.length === 0) {
     toast.warning('Unable to resolve source patch targets')
+    return
+  }
+  if (
+    !canCommitSourceEdit({
+      mode: 'overwrite',
+      targetTrackIds,
+      resolvedTracks: ctx.resolvedTracks,
+      start: overwriteStart,
+      end: overwriteEnd,
+    })
+  ) {
     return
   }
 

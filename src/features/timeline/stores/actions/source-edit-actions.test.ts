@@ -5,6 +5,7 @@ import type { TimelineItem } from '@/types/timeline'
 
 const mocks = vi.hoisted(() => ({
   mediaById: {} as Record<string, unknown>,
+  resolveMediaUrl: async (): Promise<string | null> => 'blob:source-media',
 }))
 
 vi.mock('@/features/timeline/deps/media-library-store', () => ({
@@ -38,7 +39,7 @@ vi.mock('@/features/timeline/deps/media-library-resolver', () => ({
         : mimeType.startsWith('image')
           ? 'image'
           : 'unknown',
-  resolveMediaUrl: async () => 'blob:source-media',
+  resolveMediaUrl: () => mocks.resolveMediaUrl(),
 }))
 
 import { makeTimelineTrack, makeTimelineVideoItem } from '../../test-helpers'
@@ -98,6 +99,7 @@ describe('source edit actions', () => {
     })
     useSourcePlayerStore.setState({ inPoint: 30, outPoint: 90 })
     resetPlaybackPreviewState(0)
+    mocks.resolveMediaUrl = async () => 'blob:source-media'
     setSourceMedia()
   })
 
@@ -198,6 +200,68 @@ describe('source edit actions', () => {
       expect(audioItems[0]?.linkedGroupId).toBe(videoItems[0]?.linkedGroupId)
       expect(audioItems[0]).toMatchObject({ from: 0, durationInFrames: 60 })
     })
+
+    it('treats an inherited group lock as a locked target lane', async () => {
+      useItemsStore.getState().setTracks([
+        makeTimelineTrack({
+          id: 'group',
+          name: 'Locked Group',
+          order: 0,
+          isGroup: true,
+          locked: true,
+        }),
+        makeTimelineTrack({
+          id: 'track-v1',
+          name: 'V1',
+          kind: 'video',
+          order: 1,
+          parentTrackId: 'group',
+        }),
+      ])
+      usePlaybackStore.setState({ currentFrame: 0 })
+
+      await performInsertEdit()
+
+      expect(trackItems('track-v1')).toHaveLength(0)
+      const inserted = useItemsStore.getState().items
+      expect(inserted).toHaveLength(1)
+      expect(inserted[0]?.trackId).not.toBe('track-v1')
+    })
+
+    it('revalidates target locks immediately before the async commit', async () => {
+      let releaseUrl!: (url: string) => void
+      let reportStarted!: () => void
+      const started = new Promise<void>((resolve) => {
+        reportStarted = resolve
+      })
+      mocks.resolveMediaUrl = () =>
+        new Promise<string>((resolve) => {
+          releaseUrl = resolve
+          reportStarted()
+        })
+      usePlaybackStore.setState({ currentFrame: 0 })
+
+      const pendingEdit = performInsertEdit()
+      await started
+      useItemsStore.getState().setTracks([
+        makeTimelineTrack({
+          id: 'track-v1',
+          name: 'V1',
+          kind: 'video',
+          order: 0,
+          locked: true,
+        }),
+        makeTimelineTrack({ id: 'track-a1', name: 'A1', kind: 'audio', order: 1 }),
+      ])
+      releaseUrl('blob:source-media')
+      await pendingEdit
+
+      expect(useItemsStore.getState().items).toHaveLength(0)
+      expect(useItemsStore.getState().tracks[0]?.locked).toBe(true)
+      expect(usePlaybackStore.getState().currentFrame).toBe(0)
+      expect(useTimelineSettingsStore.getState().isDirty).toBe(false)
+      expect(useTimelineCommandStore.getState().undoStack).toHaveLength(0)
+    })
   })
 
   describe('performOverwriteEdit', () => {
@@ -256,4 +320,57 @@ describe('source edit actions', () => {
       expect(items[1]).toMatchObject({ from: 40, durationInFrames: 60, mediaId: 'media-1' })
     })
   })
+
+  it.each([
+    ['insert', performInsertEdit],
+    ['overwrite', performOverwriteEdit],
+  ])(
+    'rejects %s atomically when an overlapping target clip has a locked linked companion',
+    async (_name, action) => {
+      for (const linkedSelectionEnabled of [true, false]) {
+        useTimelineCommandStore.getState().clearHistory()
+        useTimelineSettingsStore.setState({ isDirty: false })
+        useEditorStore.setState({ linkedSelectionEnabled })
+        useItemsStore.getState().setTracks([
+          makeTimelineTrack({ id: 'track-v1', name: 'V1', kind: 'video', order: 0 }),
+          makeTimelineTrack({
+            id: 'track-a1',
+            name: 'A1',
+            kind: 'audio',
+            order: 1,
+            locked: true,
+          }),
+        ])
+        const linkedVideo = makeTimelineVideoItem({
+          id: 'existing-video',
+          trackId: 'track-v1',
+          from: 0,
+          durationInFrames: 120,
+          sourceEnd: 120,
+          sourceDuration: 120,
+          linkedGroupId: 'linked-av',
+        })
+        const linkedAudio: TimelineItem = {
+          ...linkedVideo,
+          id: 'existing-audio',
+          type: 'audio',
+          trackId: 'track-a1',
+          src: 'blob:audio',
+        }
+        useItemsStore.getState().setItems([linkedVideo, linkedAudio])
+        usePlaybackStore.setState({ currentFrame: 30 })
+        const itemsBefore = structuredClone(useItemsStore.getState().items)
+        const transitionsBefore = structuredClone(useTransitionsStore.getState().transitions)
+        const playheadBefore = usePlaybackStore.getState().currentFrame
+
+        await action()
+
+        expect(useItemsStore.getState().items).toEqual(itemsBefore)
+        expect(useTransitionsStore.getState().transitions).toEqual(transitionsBefore)
+        expect(usePlaybackStore.getState().currentFrame).toBe(playheadBefore)
+        expect(useTimelineSettingsStore.getState().isDirty).toBe(false)
+        expect(useTimelineCommandStore.getState().undoStack).toHaveLength(0)
+      }
+    },
+  )
 })

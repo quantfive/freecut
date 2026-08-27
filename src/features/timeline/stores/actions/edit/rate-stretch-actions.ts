@@ -2,11 +2,199 @@ import { useItemsStore } from '../../items-store'
 import { useTransitionsStore } from '../../transitions-store'
 import { useKeyframesStore } from '../../keyframes-store'
 import { useTimelineSettingsStore } from '../../timeline-settings-store'
+import type { TimelineItem } from '@/types/timeline'
 import { execute, applyTransitionRepairs } from '../shared'
 import { getSynchronizedLinkedItemsForEdit } from '../linked-edit'
 import { timelineToSourceFrames, sourceToTimelineFrames } from '../../../utils/source-calculations'
 import { expandItemIdsWithAttachedCaptions, getLinkedItemIds } from '../../../utils/linked-items'
-import { isLinkedSelectionEnabled, requestPostEditWarmForItems } from './shared'
+import {
+  canMutateTimelineItems,
+  isLinkedSelectionEnabled,
+  requestPostEditWarmForItems,
+} from './shared'
+import { roundDuration, roundFrame } from '../../items-store-normalize'
+
+function addLinkedRippleCohort(
+  items: TimelineItem[],
+  itemId: string,
+  mutationIds: Set<string>,
+): void {
+  for (const relatedId of expandItemIdsWithAttachedCaptions(
+    items,
+    getLinkedItemIds(items, itemId),
+  )) {
+    mutationIds.add(relatedId)
+  }
+}
+
+function collectRateStretchEndMutationIds(params: {
+  items: TimelineItem[]
+  synchronizedItems: TimelineItem[]
+  synchronizedIds: Set<string>
+  touchedTrackIds: Set<string>
+  oldEnd: number
+  mutationIds: Set<string>
+}): void {
+  for (const candidate of params.items) {
+    if (
+      params.synchronizedIds.has(candidate.id) ||
+      !params.touchedTrackIds.has(candidate.trackId) ||
+      candidate.from < params.oldEnd
+    ) {
+      continue
+    }
+    addLinkedRippleCohort(params.items, candidate.id, params.mutationIds)
+  }
+
+  const transitions = useTransitionsStore.getState().transitions
+  for (const synchronizedItem of params.synchronizedItems) {
+    for (const transition of transitions) {
+      if (transition.leftClipId !== synchronizedItem.id) continue
+      addLinkedRippleCohort(params.items, transition.rightClipId, params.mutationIds)
+    }
+  }
+}
+
+function collectRateStretchStartMutationIds(params: {
+  items: TimelineItem[]
+  synchronizedItems: TimelineItem[]
+  synchronizedIds: Set<string>
+  touchedTrackIds: Set<string>
+  oldFrom: number
+  mutationIds: Set<string>
+}): void {
+  for (const candidate of params.items) {
+    if (
+      params.synchronizedIds.has(candidate.id) ||
+      !params.touchedTrackIds.has(candidate.trackId) ||
+      candidate.from + candidate.durationInFrames > params.oldFrom
+    ) {
+      continue
+    }
+    addLinkedRippleCohort(params.items, candidate.id, params.mutationIds)
+  }
+
+  const transitions = useTransitionsStore.getState().transitions
+  for (const synchronizedItem of params.synchronizedItems) {
+    for (const transition of transitions) {
+      if (transition.rightClipId !== synchronizedItem.id) continue
+      addLinkedRippleCohort(params.items, transition.leftClipId, params.mutationIds)
+    }
+  }
+}
+
+function getRateStretchMutationIds(id: string, newFrom: number, newDuration: number): string[] {
+  const items = useItemsStore.getState().items
+  const synchronizedItems = getSynchronizedLinkedItemsForEdit(items, id, isLinkedSelectionEnabled())
+  const anchor = synchronizedItems.find((item) => item.id === id)
+  if (!anchor) return []
+
+  const synchronizedIds = new Set(synchronizedItems.map((item) => item.id))
+  const mutationIds = new Set(synchronizedIds)
+  const oldEnd = anchor.from + anchor.durationInFrames
+  const fromDelta = roundFrame(newFrom) - anchor.from
+  const endDelta = roundFrame(newFrom) + roundDuration(newDuration) - oldEnd
+  const touchedTrackIds = new Set(synchronizedItems.map((item) => item.trackId))
+
+  if (endDelta !== 0) {
+    collectRateStretchEndMutationIds({
+      items,
+      synchronizedItems,
+      synchronizedIds,
+      touchedTrackIds,
+      oldEnd,
+      mutationIds,
+    })
+  }
+
+  if (fromDelta !== 0) {
+    collectRateStretchStartMutationIds({
+      items,
+      synchronizedItems,
+      synchronizedIds,
+      touchedTrackIds,
+      oldFrom: anchor.from,
+      mutationIds,
+    })
+  }
+
+  return Array.from(mutationIds)
+}
+
+interface ResetSpeedMutationPlan {
+  synchronizedItems: TimelineItem[]
+  oldEnd: number
+  growth: number
+}
+
+function calculateResetSpeedDuration(item: TimelineItem, fps: number): number {
+  const currentSpeed = item.speed || 1
+  const sourceFps = item.sourceFps ?? fps
+  const effectiveSourceFrames =
+    item.sourceEnd !== undefined && item.sourceStart !== undefined
+      ? item.sourceEnd - item.sourceStart
+      : timelineToSourceFrames(item.durationInFrames, currentSpeed, fps, sourceFps)
+  return Math.max(1, sourceToTimelineFrames(effectiveSourceFrames, 1, sourceFps, fps))
+}
+
+function getResetSpeedMutationPlan(
+  items: TimelineItem[],
+  id: string,
+  fps: number,
+): ResetSpeedMutationPlan | null {
+  const item = items.find((candidate) => candidate.id === id)
+  if (!item || (item.type !== 'video' && item.type !== 'audio')) return null
+  const currentSpeed = item.speed || 1
+  if (Math.abs(currentSpeed - 1) <= 0.01) return null
+
+  const synchronizedItems = getSynchronizedLinkedItemsForEdit(items, id, isLinkedSelectionEnabled())
+  const newDuration = calculateResetSpeedDuration(item, fps)
+  return {
+    synchronizedItems,
+    oldEnd: item.from + item.durationInFrames,
+    growth: roundDuration(newDuration) - item.durationInFrames,
+  }
+}
+
+function addResetSpeedDownstreamMutationIds(params: {
+  items: TimelineItem[]
+  plan: ResetSpeedMutationPlan
+  processedIds: Set<string>
+  mutationIds: Set<string>
+}): void {
+  if (params.plan.growth <= 0) return
+  const touchedTrackIds = new Set(params.plan.synchronizedItems.map((item) => item.trackId))
+  for (const candidate of params.items) {
+    if (
+      params.processedIds.has(candidate.id) ||
+      !touchedTrackIds.has(candidate.trackId) ||
+      candidate.from < params.plan.oldEnd
+    ) {
+      continue
+    }
+    addLinkedRippleCohort(params.items, candidate.id, params.mutationIds)
+  }
+}
+
+function getResetSpeedMutationIds(itemIds: string[]): string[] {
+  const items = useItemsStore.getState().items
+  const fps = useTimelineSettingsStore.getState().fps
+  const mutationIds = new Set<string>()
+  const processedIds = new Set<string>()
+
+  for (const id of itemIds) {
+    if (processedIds.has(id)) continue
+    const plan = getResetSpeedMutationPlan(items, id, fps)
+    if (!plan) continue
+    for (const synchronizedItem of plan.synchronizedItems) {
+      processedIds.add(synchronizedItem.id)
+      mutationIds.add(synchronizedItem.id)
+    }
+    addResetSpeedDownstreamMutationIds({ items, plan, processedIds, mutationIds })
+  }
+
+  return Array.from(mutationIds)
+}
 
 export function rateStretchItemWithoutHistory(
   id: string,
@@ -14,6 +202,9 @@ export function rateStretchItemWithoutHistory(
   newDuration: number,
   newSpeed: number,
 ): void {
+  const mutationIds = getRateStretchMutationIds(id, newFrom, newDuration)
+  if (mutationIds.length === 0 || !canMutateTimelineItems(mutationIds)) return
+
   const itemsStore = useItemsStore.getState()
   const itemsBefore = itemsStore.items
   const synchronizedItems = getSynchronizedLinkedItemsForEdit(
@@ -219,6 +410,9 @@ export function rateStretchItem(
   newDuration: number,
   newSpeed: number,
 ): void {
+  const mutationIds = getRateStretchMutationIds(id, newFrom, newDuration)
+  if (mutationIds.length === 0 || !canMutateTimelineItems(mutationIds)) return
+
   execute(
     'RATE_STRETCH_ITEM',
     () => {
@@ -239,6 +433,9 @@ export function rateStretchItem(
  */
 export function resetSpeedWithRipple(itemIds: string[]): void {
   const TOLERANCE = 0.01
+  const mutationIds = getResetSpeedMutationIds(itemIds)
+  if (mutationIds.length === 0 || !canMutateTimelineItems(mutationIds)) return
+
   execute(
     'RESET_SPEED_WITH_RIPPLE',
     () => {
@@ -270,16 +467,7 @@ export function resetSpeedWithRipple(itemIds: string[]): void {
         )
         for (const si of synchronizedItems) processedIds.add(si.id)
 
-        const sourceFps = item.sourceFps ?? fps
-        const effectiveSourceFrames =
-          item.sourceEnd !== undefined && item.sourceStart !== undefined
-            ? item.sourceEnd - item.sourceStart
-            : timelineToSourceFrames(item.durationInFrames, currentSpeed, fps, sourceFps)
-
-        const newDuration = Math.max(
-          1,
-          sourceToTimelineFrames(effectiveSourceFrames, 1, sourceFps, fps),
-        )
+        const newDuration = calculateResetSpeedDuration(item, fps)
         const oldEnd = item.from + item.durationInFrames
 
         stretchOps.push({
