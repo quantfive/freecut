@@ -1,64 +1,55 @@
-import { parse } from '@babel/parser'
+import { API } from 'typescript/unstable/sync'
+import { createVirtualFileSystem } from 'typescript/unstable/fs'
+import {
+  SyntaxKind,
+  isCallExpression,
+  isExportDeclaration,
+  isExternalModuleReference,
+  isIdentifier,
+  isImportDeclaration,
+  isImportEqualsDeclaration,
+  isStringLiteral,
+} from 'typescript/unstable/ast'
 
 const REACT_HOTKEYS_HOOK_MODULE = 'react-hotkeys-hook'
 export const RUNTIME_HOTKEY_ADAPTER_PATH = 'src/hooks/use-hotkey-registration.ts'
 
 function isReactHotkeysSource(source) {
-  return source?.type === 'StringLiteral' && source.value === REACT_HOTKEYS_HOOK_MODULE
+  return isStringLiteral(source) && source.text === REACT_HOTKEYS_HOOK_MODULE
 }
 
 function isStaticReactHotkeysImport(node) {
-  const hasStaticSource =
-    node.type === 'ImportDeclaration' ||
-    node.type === 'ExportNamedDeclaration' ||
-    node.type === 'ExportAllDeclaration'
-  return hasStaticSource && isReactHotkeysSource(node.source)
+  return (
+    (isImportDeclaration(node) || isExportDeclaration(node)) &&
+    isReactHotkeysSource(node.moduleSpecifier)
+  )
 }
 
 function isTypeScriptReactHotkeysImport(node) {
-  if (node.type !== 'TSImportEqualsDeclaration') return false
+  if (!isImportEqualsDeclaration(node)) return false
   const reference = node.moduleReference
-  return (
-    reference.type === 'TSExternalModuleReference' && isReactHotkeysSource(reference.expression)
-  )
+  return isExternalModuleReference(reference) && isReactHotkeysSource(reference.expression)
 }
 
 function isReactHotkeysCallImport(node) {
-  if (node.type !== 'CallExpression') return false
-  const { callee, arguments: args } = node
-  const isRequire = callee.type === 'Identifier' && callee.name === 'require'
+  if (!isCallExpression(node)) return false
+  const { expression, arguments: args } = node
+  const isRequire = isIdentifier(expression) && expression.text === 'require'
+  const isDynamicImport = expression.kind === SyntaxKind.ImportKeyword
   return (
-    (isRequire || callee.type === 'Import') && args.length === 1 && isReactHotkeysSource(args[0])
+    (isRequire || isDynamicImport) && args.length === 1 && isReactHotkeysSource(args[0])
   )
-}
-
-function isReactHotkeysImportExpression(node) {
-  return node.type === 'ImportExpression' && isReactHotkeysSource(node.source)
 }
 
 const IMPORT_NODE_CHECKS = [
   isStaticReactHotkeysImport,
   isTypeScriptReactHotkeysImport,
   isReactHotkeysCallImport,
-  isReactHotkeysImportExpression,
 ]
-const AST_METADATA_KEYS = new Set(['loc', 'start', 'end'])
 
-function walkAst(root, onNode) {
-  const pending = [root]
-  while (pending.length > 0) {
-    const node = pending.pop()
-    if (!node || typeof node !== 'object') continue
-    if (Array.isArray(node)) {
-      pending.push(...node)
-      continue
-    }
-
-    onNode(node)
-    for (const [key, child] of Object.entries(node)) {
-      if (!AST_METADATA_KEYS.has(key)) pending.push(child)
-    }
-  }
+function walkAst(node, onNode) {
+  onNode(node)
+  node.forEachChild((child) => walkAst(child, onNode))
 }
 
 export function findReactHotkeysHookImportViolations(
@@ -66,26 +57,58 @@ export function findReactHotkeysHookImportViolations(
   allowedPath = RUNTIME_HOTKEY_ADAPTER_PATH,
 ) {
   const violations = []
+  // Every import form we reject must contain the literal module specifier. This
+  // prefilter keeps the compiler AST focused on the one or two relevant files.
+  const candidates = sources.filter(({ source }) => source.includes(REACT_HOTKEYS_HOOK_MODULE))
+  if (candidates.length === 0) return violations
 
-  for (const { path, source } of sources) {
-    const ast = parse(source, {
-      sourceType: 'unambiguous',
-      plugins: ['typescript', 'jsx', 'dynamicImport'],
-    })
+  const virtualRoot = '/runtime-hotkey-import-boundary'
+  const virtualSources = new Map()
+  const virtualFiles = Object.fromEntries(
+    candidates.map((candidate, index) => {
+      const extension = candidate.path.endsWith('.tsx') ? 'tsx' : 'ts'
+      const virtualPath = `${virtualRoot}/source-${index}.${extension}`
+      virtualSources.set(virtualPath, candidate)
+      return [virtualPath, candidate.source]
+    }),
+  )
+  virtualFiles[`${virtualRoot}/tsconfig.json`] = JSON.stringify({
+    compilerOptions: { jsx: 'preserve', noLib: true },
+    files: [...virtualSources.keys()],
+  })
 
-    function record(node) {
-      if (path !== allowedPath) {
+  const compiler = new API({ cwd: virtualRoot, fs: createVirtualFileSystem(virtualFiles) })
+  let snapshot
+
+  try {
+    snapshot = compiler.updateSnapshot({ openProjects: [`${virtualRoot}/tsconfig.json`] })
+    const project = snapshot.getProjects()[0]
+
+    for (const [virtualPath, { path }] of virtualSources) {
+      const sourceFile = project?.program.getSourceFile(virtualPath)
+      if (!sourceFile) throw new Error(`TypeScript could not parse in-memory source: ${path}`)
+
+      function record(node) {
+        if (path === allowedPath) return
+        const location = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile))
+        const line = location.line + 1
+        const column = location.character + 1
         violations.push({
           path,
-          line: node.loc?.start.line ?? 1,
-          column: (node.loc?.start.column ?? 0) + 1,
+          line,
+          column,
+          allowedPath,
+          message: `${path}:${line}:${column} imports ${REACT_HOTKEYS_HOOK_MODULE}; use ${allowedPath}`,
         })
       }
-    }
 
-    walkAst(ast, (node) => {
-      if (IMPORT_NODE_CHECKS.some((check) => check(node))) record(node)
-    })
+      walkAst(sourceFile, (node) => {
+        if (IMPORT_NODE_CHECKS.some((check) => check(node))) record(node)
+      })
+    }
+  } finally {
+    snapshot?.dispose()
+    compiler.close()
   }
 
   return violations.sort(
