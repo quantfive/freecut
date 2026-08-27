@@ -327,8 +327,8 @@ export function useClientRender(): UseClientRenderReturn {
           signal,
           onProgress: handleProgress,
         })
-        ensureActive()
         temporaryResult = renderResult
+        ensureActive()
         if (fallbackReason) event.set('workerFallbackReason', fallbackReason)
 
         // Sidecar mode: the video is muxed clean; build the .srt from the same
@@ -457,7 +457,7 @@ export function useClientRender(): UseClientRenderReturn {
     setError(null)
     const previousResult = resultRef.current
     resultRef.current = null
-    void releaseTemporaryExportOutput(previousResult)
+    if (previousResult) void releaseTemporaryExportOutput(previousResult)
     setResult(null)
   }, [])
 
@@ -468,7 +468,7 @@ export function useClientRender(): UseClientRenderReturn {
       abortControllerRef.current = null
       const ownedResult = resultRef.current
       resultRef.current = null
-      void releaseTemporaryExportOutput(ownedResult)
+      if (ownedResult) void releaseTemporaryExportOutput(ownedResult)
     },
     [],
   )
