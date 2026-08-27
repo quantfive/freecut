@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { createElement } from 'react'
-import { beforeEach, describe, expect, it, vi } from 'vite-plus/test'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vite-plus/test'
 import { fireEvent, render, waitFor } from '@testing-library/react'
 import { useHotkeys } from 'react-hotkeys-hook'
 import { HOTKEY_OPTIONS } from '@/config/hotkeys'
@@ -10,7 +10,7 @@ import { useSettingsStore } from '@/features/editor/deps/settings'
 import { useHostTimelineShortcuts } from '@/features/editor/deps/timeline-hooks'
 import { usePlaybackStore } from '@/shared/state/playback'
 import { createHostShortcutSettings, type EditorHost, type HostShortcutSettings } from './contract'
-import { mountHostShortcutSettings } from './shortcut-settings'
+import { HOST_SHORTCUT_RETRY_DELAYS_MS, mountHostShortcutSettings } from './shortcut-settings'
 
 function HostShortcutHarness() {
   useHostTimelineShortcuts()
@@ -69,6 +69,33 @@ function createDeferred<T>() {
   return { promise, resolve, reject }
 }
 
+function createRetryScheduler() {
+  let nextTimerId = 0
+  const timers = new Map<number, { callback: () => void; delayMs: number }>()
+  return {
+    scheduler: {
+      setTimeout: (callback: () => void, delayMs: number) => {
+        const timerId = ++nextTimerId
+        timers.set(timerId, { callback, delayMs })
+        return timerId
+      },
+      clearTimeout: (timer: unknown) => timers.delete(timer as number),
+    },
+    pendingCount: () => timers.size,
+    pendingDelays: () => [...timers.values()].map((timer) => timer.delayMs),
+    runNext: async () => {
+      const entry = timers.entries().next().value as
+        | [number, { callback: () => void; delayMs: number }]
+        | undefined
+      if (!entry) throw new Error('No retry timer is pending')
+      timers.delete(entry[0])
+      entry[1].callback()
+      await Promise.resolve()
+      await Promise.resolve()
+    },
+  }
+}
+
 describe('host shortcut settings round trip', () => {
   beforeEach(() => {
     useSettingsStore.getState().resetHotkeys()
@@ -77,6 +104,10 @@ describe('host shortcut settings round trip', () => {
       playbackRate: 1,
       transportMode: 'normal',
     })
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
   })
 
   it('hydrates host bindings, persists UI changes, and accepts agent updates', async () => {
@@ -275,6 +306,120 @@ describe('host shortcut settings round trip', () => {
     unmount()
   })
 
+  it('retries the newest desired settings after their host write rejects', async () => {
+    vi.useFakeTimers()
+    const host = createShortcutHost(createHostShortcutSettings({ SHUTTLE_PAUSE: 'p' }))
+    host.setSettings.mockRejectedValueOnce(new Error('transient failure'))
+    const unmount = await mountHostShortcutSettings(host.host)
+
+    useSettingsStore.getState().setHotkeyBinding('SHUTTLE_PAUSE', 'x')
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(host.setSettings).toHaveBeenCalledTimes(1)
+
+    await vi.advanceTimersByTimeAsync(HOST_SHORTCUT_RETRY_DELAYS_MS[0])
+
+    expect(host.setSettings).toHaveBeenCalledTimes(2)
+    expect(host.setSettings).toHaveBeenLastCalledWith(
+      createHostShortcutSettings({ SHUTTLE_PAUSE: 'x' }),
+    )
+    unmount()
+  })
+
+  it('backs repeated failures with one capped timer and no tight loop', async () => {
+    const retry = createRetryScheduler()
+    const host = createShortcutHost(createHostShortcutSettings({ SHUTTLE_PAUSE: 'p' }))
+    host.setSettings.mockRejectedValue(new Error('persistent failure'))
+    const unmount = await mountHostShortcutSettings(host.host, undefined, retry.scheduler)
+
+    useSettingsStore.getState().setHotkeyBinding('SHUTTLE_PAUSE', 'x')
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(host.setSettings).toHaveBeenCalledTimes(1)
+    expect(retry.pendingCount()).toBe(1)
+    expect(retry.pendingDelays()).toEqual([HOST_SHORTCUT_RETRY_DELAYS_MS[0]])
+
+    await retry.runNext()
+    expect(host.setSettings).toHaveBeenCalledTimes(2)
+    expect(retry.pendingCount()).toBe(1)
+    expect(retry.pendingDelays()).toEqual([HOST_SHORTCUT_RETRY_DELAYS_MS[1]])
+
+    for (let retryIndex = 2; retryIndex < HOST_SHORTCUT_RETRY_DELAYS_MS.length; retryIndex += 1) {
+      await retry.runNext()
+      expect(retry.pendingCount()).toBe(1)
+      expect(retry.pendingDelays()).toEqual([HOST_SHORTCUT_RETRY_DELAYS_MS[retryIndex]])
+    }
+    await retry.runNext()
+    expect(retry.pendingCount()).toBe(1)
+    expect(retry.pendingDelays()).toEqual([HOST_SHORTCUT_RETRY_DELAYS_MS.at(-1)!])
+    expect(host.setSettings).toHaveBeenCalledTimes(HOST_SHORTCUT_RETRY_DELAYS_MS.length + 1)
+    unmount()
+    expect(retry.pendingCount()).toBe(0)
+  })
+
+  it('persists only the newest desired settings after a change during backoff', async () => {
+    const retry = createRetryScheduler()
+    const host = createShortcutHost(createHostShortcutSettings({ SHUTTLE_PAUSE: 'p' }))
+    host.setSettings.mockRejectedValueOnce(new Error('transient failure'))
+    const unmount = await mountHostShortcutSettings(host.host, undefined, retry.scheduler)
+
+    useSettingsStore.getState().setHotkeyBinding('SHUTTLE_PAUSE', 'x')
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(retry.pendingCount()).toBe(1)
+
+    useSettingsStore.getState().setHotkeyBinding('SHUTTLE_PAUSE', 'f10')
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(host.setSettings).toHaveBeenCalledTimes(2)
+    expect(host.setSettings).toHaveBeenLastCalledWith(
+      createHostShortcutSettings({ SHUTTLE_PAUSE: 'f10' }),
+    )
+    expect(retry.pendingCount()).toBe(0)
+    unmount()
+  })
+
+  it('cancels a pending retry when equal inbound settings acknowledge the desired value', async () => {
+    const retry = createRetryScheduler()
+    const host = createShortcutHost(createHostShortcutSettings({ SHUTTLE_PAUSE: 'p' }))
+    host.setSettings.mockRejectedValueOnce(new Error('transient failure'))
+    const unmount = await mountHostShortcutSettings(host.host, undefined, retry.scheduler)
+
+    useSettingsStore.getState().setHotkeyBinding('SHUTTLE_PAUSE', 'x')
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(retry.pendingCount()).toBe(1)
+
+    host.emit(createHostShortcutSettings({ SHUTTLE_PAUSE: 'x' }))
+    expect(retry.pendingCount()).toBe(0)
+    expect(host.setSettings).toHaveBeenCalledTimes(1)
+    unmount()
+  })
+
+  it('cancels a disposed host retry and fences it from the replacement host', async () => {
+    const retry = createRetryScheduler()
+    const hostA = createShortcutHost(createHostShortcutSettings({ SHUTTLE_PAUSE: 'a' }))
+    hostA.setSettings.mockRejectedValueOnce(new Error('transient failure'))
+    const unmountA = await mountHostShortcutSettings(hostA.host, undefined, retry.scheduler)
+    useSettingsStore.getState().setHotkeyBinding('SHUTTLE_PAUSE', 'x')
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(retry.pendingCount()).toBe(1)
+
+    const hostB = createShortcutHost(createHostShortcutSettings({ SHUTTLE_PAUSE: 'b' }))
+    const unmountB = await mountHostShortcutSettings(hostB.host, undefined, retry.scheduler)
+    expect(retry.pendingCount()).toBe(0)
+    expect(hostA.setSettings).toHaveBeenCalledTimes(1)
+    expect(hostB.setSettings).not.toHaveBeenCalled()
+
+    useSettingsStore.getState().setHotkeyBinding('SHUTTLE_PAUSE', 'f10')
+    await Promise.resolve()
+    expect(hostB.setSettings).toHaveBeenCalledTimes(1)
+    unmountA()
+    unmountB()
+  })
+
   it('fences in-flight host A work when host B replaces it', async () => {
     const hostA = createShortcutHost(createHostShortcutSettings({ SHUTTLE_PAUSE: 'a' }))
     const firstWrite = createDeferred<void>()
@@ -295,7 +440,7 @@ describe('host shortcut settings round trip', () => {
 
     expect(hostA.setSettings).toHaveBeenCalledTimes(1)
     expect(useSettingsStore.getState().hotkeyOverrides).toEqual({ SHUTTLE_PAUSE: 'b' })
-    useSettingsStore.getState().setHotkeyBinding('SHUTTLE_PAUSE', 'y')
+    useSettingsStore.getState().setHotkeyBinding('SHUTTLE_PAUSE', 'f10')
     await waitFor(() => expect(hostB.setSettings).toHaveBeenCalledTimes(1))
 
     unmountA()
@@ -369,6 +514,26 @@ describe('host shortcut settings round trip', () => {
     expect(harness.notify).toHaveBeenCalledWith({
       kind: 'conflict',
       message: expect.stringMatching(/shift\+j.*MARK_IN.*JOIN_ITEMS.*last valid/i),
+    })
+    expect(harness.setSettings).not.toHaveBeenCalled()
+    unmount()
+  })
+
+  it('retains the last valid settings and reports meta versus mod host conflicts', async () => {
+    useSettingsStore.getState().replaceHotkeyOverrides({ PLAY_PAUSE: 'shift+space' })
+    const harness = createShortcutHost(
+      createHostShortcutSettings({
+        MARK_IN: 'meta+j',
+        JOIN_ITEMS: 'mod+shift+j',
+      }),
+    )
+
+    const unmount = await mountHostShortcutSettings(harness.host)
+
+    expect(useSettingsStore.getState().hotkeyOverrides).toEqual({ PLAY_PAUSE: 'shift+space' })
+    expect(harness.notify).toHaveBeenCalledWith({
+      kind: 'conflict',
+      message: expect.stringMatching(/MARK_IN.*JOIN_ITEMS.*last valid/i),
     })
     expect(harness.setSettings).not.toHaveBeenCalled()
     unmount()

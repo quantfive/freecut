@@ -231,6 +231,9 @@ export const useSettingsStore = create<SettingsStore>()(
             ...state.hotkeyOverrides,
             [key]: normalizedBinding,
           })
+          if (resolution.warnings.length > 0) {
+            return state
+          }
           const nextOverrides = resolution.overrides
 
           if (areHotkeyOverridesEqual(state.hotkeyOverrides, nextOverrides)) {

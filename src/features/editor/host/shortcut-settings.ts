@@ -12,6 +12,18 @@ import {
   type HostShortcutSettings,
 } from './contract'
 
+export const HOST_SHORTCUT_RETRY_DELAYS_MS = [100, 250, 500, 1_000, 2_000] as const
+
+export interface HostShortcutRetryScheduler {
+  setTimeout(callback: () => void, delayMs: number): unknown
+  clearTimeout(timer: unknown): void
+}
+
+const DEFAULT_HOST_SHORTCUT_RETRY_SCHEDULER: HostShortcutRetryScheduler = {
+  setTimeout: (callback, delayMs) => setTimeout(callback, delayMs),
+  clearTimeout: (timer) => clearTimeout(timer as ReturnType<typeof setTimeout>),
+}
+
 function normalizeHostShortcutSettings(settings: HostShortcutSettings): {
   settings: HostShortcutSettings
   warnings: HotkeyConflictWarning[]
@@ -47,6 +59,7 @@ let currentOwnership: ShortcutOwnership | null = null
 export async function mountHostShortcutSettings(
   host: EditorHost,
   signal?: AbortSignal,
+  retryScheduler: HostShortcutRetryScheduler = DEFAULT_HOST_SHORTCUT_RETRY_SCHEDULER,
 ): Promise<() => void> {
   const previousOwnership = currentOwnership
   const standaloneOverrides = copyOverrides(
@@ -62,12 +75,15 @@ export async function mountHostShortcutSettings(
   let disposed = false
   let unsubscribeHost: (() => void) | undefined
   let unsubscribeStore: (() => void) | undefined
+  let retryTimer: unknown
 
   const isCurrent = () => !disposed && currentOwnership?.epoch === ownership.epoch
 
   const dispose = () => {
     if (disposed) return
     disposed = true
+    if (retryTimer !== undefined) retryScheduler.clearTimeout(retryTimer)
+    retryTimer = undefined
     unsubscribeStore?.()
     unsubscribeHost?.()
     signal?.removeEventListener('abort', dispose)
@@ -115,6 +131,13 @@ export async function mountHostShortcutSettings(
   let inFlightSettings: HostShortcutSettings | null = null
   let reconcileAfterFlight = false
   let reconcileScheduled = false
+  let retryAttempt = 0
+
+  const cancelRetry = (resetAttempt = false) => {
+    if (retryTimer !== undefined) retryScheduler.clearTimeout(retryTimer)
+    retryTimer = undefined
+    if (resetAttempt) retryAttempt = 0
+  }
 
   const canStartReconcile = () => {
     if (!isCurrent()) return false
@@ -123,13 +146,28 @@ export async function mountHostShortcutSettings(
     return !settingsEqual(desiredSettings, settledSettings)
   }
 
+  const desiredDiffersFrom = (settings: HostShortcutSettings) =>
+    desiredSettings !== null && !settingsEqual(desiredSettings, settings)
+
+  const hasUnsettledDesiredSettings = () =>
+    desiredSettings !== null &&
+    (settledSettings === null || !settingsEqual(desiredSettings, settledSettings))
+
   const finishReconcile = (settingsToWrite: HostShortcutSettings, succeeded: boolean) => {
     if (!isCurrent()) return
-    if (succeeded) settledSettings = settingsToWrite
-    const desiredChanged =
-      desiredSettings !== null && !settingsEqual(desiredSettings, settingsToWrite)
+    if (succeeded) {
+      settledSettings = settingsToWrite
+      retryAttempt = 0
+    }
+    const desiredChanged = desiredDiffersFrom(settingsToWrite)
     inFlightSettings = null
-    if (desiredChanged || reconcileAfterFlight) scheduleReconcile()
+    if (desiredChanged || reconcileAfterFlight) {
+      scheduleReconcile()
+      return
+    }
+    if (!succeeded && hasUnsettledDesiredSettings()) {
+      scheduleRetry()
+    }
   }
 
   const persistDesiredSettings = async () => {
@@ -155,6 +193,17 @@ export async function mountHostShortcutSettings(
     void Promise.resolve().then(persistDesiredSettings)
   }
 
+  function scheduleRetry() {
+    if (retryTimer !== undefined || inFlightSettings || !desiredSettings || !isCurrent()) return
+    const retryIndex = Math.min(retryAttempt, HOST_SHORTCUT_RETRY_DELAYS_MS.length - 1)
+    const delay = HOST_SHORTCUT_RETRY_DELAYS_MS[retryIndex]!
+    retryAttempt += 1
+    retryTimer = retryScheduler.setTimeout(() => {
+      retryTimer = undefined
+      scheduleReconcile()
+    }, delay)
+  }
+
   const applyHostSettings = (settings: HostShortcutSettings) => {
     if (!isCurrent()) return
     const normalized = normalizeHostShortcutSettings(settings)
@@ -174,12 +223,13 @@ export async function mountHostShortcutSettings(
       applyingHostSettings = false
     }
     desiredSettings = normalized.settings
+    // A subscription is persisted host authority. It acknowledges an equal
+    // dirty value and supersedes a differing value unless an older write can
+    // still finish afterward, in which case that authority is reconciled once.
+    settledSettings = normalized.settings
+    cancelRetry(true)
     if (inFlightSettings) {
       reconcileAfterFlight = !settingsEqual(inFlightSettings, normalized.settings)
-    } else {
-      // A subscription is the host's persisted authority unless an older write
-      // can still complete after it and overwrite that state.
-      settledSettings = normalized.settings
     }
   }
 
@@ -219,6 +269,7 @@ export async function mountHostShortcutSettings(
 
     const settings = createHostShortcutSettings(copyOverrides(state.hotkeyOverrides))
     desiredSettings = settings
+    cancelRetry(true)
     scheduleReconcile()
   })
 
