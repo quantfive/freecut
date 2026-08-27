@@ -62,6 +62,13 @@ function hasInternalPlacementOverlap(plans: PastePlacementPlan[]): boolean {
 
 type PasteTrackKind = 'video' | 'audio'
 
+interface PasteSourceLane {
+  key: string
+  kind: PasteTrackKind
+  sourceTrackId: string
+  ordinal: number
+}
+
 function getPasteTrackKind(item: Omit<TimelineItem, 'id'>): PasteTrackKind {
   return item.type === 'audio' ? 'audio' : 'video'
 }
@@ -78,55 +85,151 @@ function getPasteDestinationTrackIds(tracks: TimelineTrack[], kind: PasteTrackKi
     .map((track) => track.id)
 }
 
+function collectPasteSourceLanes(pasteItems: Array<Omit<TimelineItem, 'id'>>) {
+  const lanesByKind: Record<PasteTrackKind, PasteSourceLane[]> = { video: [], audio: [] }
+  const laneByKey = new Map<string, PasteSourceLane>()
+  const laneKeyByItemIndex = new Map<number, string>()
+
+  for (const [sourceIndex, itemData] of pasteItems.entries()) {
+    const kind = getPasteTrackKind(itemData)
+    const key = `${kind}:${itemData.trackId}`
+    let lane = laneByKey.get(key)
+    if (!lane) {
+      lane = {
+        key,
+        kind,
+        sourceTrackId: itemData.trackId,
+        ordinal: lanesByKind[kind].length,
+      }
+      laneByKey.set(key, lane)
+      lanesByKind[kind].push(lane)
+    }
+    laneKeyByItemIndex.set(sourceIndex, key)
+  }
+
+  return { lanesByKind, laneKeyByItemIndex }
+}
+
+function findExactPasteTrack(
+  lane: PasteSourceLane,
+  tracks: TimelineTrack[],
+): TimelineTrack | undefined {
+  return tracks.find(
+    (track) => track.id === lane.sourceTrackId && isCompatiblePasteTrack(track, lane.kind),
+  )
+}
+
+function appendPasteDestinationTrack(
+  tracks: TimelineTrack[],
+  kind: PasteTrackKind,
+): { trackId: string; tracks: TimelineTrack[] } {
+  const minOrder = Math.min(...tracks.map((track) => track.order), 0)
+  const maxOrder = Math.max(...tracks.map((track) => track.order), 0)
+  const newTrack = createClassicTrack({
+    tracks,
+    kind,
+    order: kind === 'video' ? minOrder - 1 : maxOrder + 1,
+  })
+  return { trackId: newTrack.id, tracks: [...tracks, newTrack] }
+}
+
+function planSingleSourceSection(params: {
+  activeTrackId: string | null
+  kind: PasteTrackKind
+  lanes: PasteSourceLane[]
+  tracks: TimelineTrack[]
+}): { assignments: Map<string, string>; tracks: TimelineTrack[] } {
+  const { activeTrackId, kind, lanes } = params
+  let plannedTracks = params.tracks
+  const assignments = new Map<string, string>()
+  const candidates = getPasteDestinationTrackIds(plannedTracks, kind)
+  const activeTrack = plannedTracks.find(
+    (track) => track.id === activeTrackId && isCompatiblePasteTrack(track, kind),
+  )
+
+  for (const lane of lanes) {
+    let targetTrackId =
+      activeTrack?.id ?? findExactPasteTrack(lane, plannedTracks)?.id ?? candidates[0]
+    if (!targetTrackId) {
+      const created = appendPasteDestinationTrack(plannedTracks, kind)
+      plannedTracks = created.tracks
+      targetTrackId = created.trackId
+      candidates.push(created.trackId)
+    }
+    assignments.set(lane.key, targetTrackId)
+  }
+
+  return { assignments, tracks: plannedTracks }
+}
+
+function planPreservedSourceSection(params: {
+  kind: PasteTrackKind
+  lanes: PasteSourceLane[]
+  tracks: TimelineTrack[]
+}): { assignments: Map<string, string>; tracks: TimelineTrack[] } {
+  const { kind, lanes } = params
+  let plannedTracks = params.tracks
+  const assignments = new Map<string, string>()
+  const candidates = getPasteDestinationTrackIds(plannedTracks, kind)
+  const usedTrackIds = new Set<string>()
+
+  for (const lane of lanes) {
+    const exactTrack = findExactPasteTrack(lane, plannedTracks)
+    if (!exactTrack) continue
+    assignments.set(lane.key, exactTrack.id)
+    usedTrackIds.add(exactTrack.id)
+  }
+
+  for (const lane of lanes) {
+    if (assignments.has(lane.key)) continue
+    const ordinalCandidate = candidates[lane.ordinal]
+    const availableCandidate =
+      ordinalCandidate && !usedTrackIds.has(ordinalCandidate)
+        ? ordinalCandidate
+        : candidates.find((candidate) => !usedTrackIds.has(candidate))
+    let targetTrackId = availableCandidate
+    if (!targetTrackId) {
+      const created = appendPasteDestinationTrack(plannedTracks, kind)
+      plannedTracks = created.tracks
+      targetTrackId = created.trackId
+      candidates.push(created.trackId)
+    }
+    assignments.set(lane.key, targetTrackId)
+    usedTrackIds.add(targetTrackId)
+  }
+
+  return { assignments, tracks: plannedTracks }
+}
+
 function buildPasteTrackPlan(
   pasteItems: Array<Omit<TimelineItem, 'id'>>,
   tracks: TimelineTrack[],
   activeTrackId: string | null,
 ): { plan: Map<number, string>; tracks: TimelineTrack[] } {
   let plannedTracks = tracks
-  const sourceTrackIndexes = new Map<string, number>()
-  const nextSourceIndex: Record<PasteTrackKind, number> = { video: 0, audio: 0 }
-  const destinationTrackIds: Record<PasteTrackKind, string[]> = { video: [], audio: [] }
-  for (const kind of ['video', 'audio'] as const) {
-    destinationTrackIds[kind] = getPasteDestinationTrackIds(plannedTracks, kind)
-  }
+  const { lanesByKind, laneKeyByItemIndex } = collectPasteSourceLanes(pasteItems)
   const preserveSourceTracks = new Set(pasteItems.map((item) => item.trackId)).size > 1
   const plan = new Map<number, string>()
+  const assignedTrackBySourceLane = new Map<string, string>()
 
-  for (const [sourceIndex, itemData] of pasteItems.entries()) {
-    const kind = getPasteTrackKind(itemData)
-    const sourceTrackId = itemData.trackId
-    let sourceLane = sourceTrackIndexes.get(sourceTrackId)
-    if (sourceLane === undefined) {
-      sourceLane = nextSourceIndex[kind]++
-      sourceTrackIndexes.set(sourceTrackId, sourceLane)
+  for (const kind of ['video', 'audio'] as const) {
+    const sectionPlan = preserveSourceTracks
+      ? planPreservedSourceSection({ kind, lanes: lanesByKind[kind], tracks: plannedTracks })
+      : planSingleSourceSection({
+          activeTrackId,
+          kind,
+          lanes: lanesByKind[kind],
+          tracks: plannedTracks,
+        })
+    plannedTracks = sectionPlan.tracks
+    for (const [laneKey, trackId] of sectionPlan.assignments) {
+      assignedTrackBySourceLane.set(laneKey, trackId)
     }
+  }
 
-    const exactTrack = tracks.find(
-      (track) => track.id === sourceTrackId && isCompatiblePasteTrack(track, kind),
-    )
-    const activeTrack = tracks.find(
-      (track) => track.id === activeTrackId && isCompatiblePasteTrack(track, kind),
-    )
-    const candidates = destinationTrackIds[kind]
-    while (preserveSourceTracks && sourceLane >= candidates.length) {
-      const minOrder = Math.min(...plannedTracks.map((track) => track.order), 0)
-      const maxOrder = Math.max(...plannedTracks.map((track) => track.order), 0)
-      const newTrack = createClassicTrack({
-        tracks: plannedTracks,
-        kind,
-        order: kind === 'video' ? minOrder - 1 : maxOrder + 1,
-      })
-      plannedTracks = [...plannedTracks, newTrack]
-      candidates.push(newTrack.id)
-    }
-    const targetTrackId = preserveSourceTracks
-      ? (exactTrack?.id ?? candidates[sourceLane] ?? candidates[0] ?? activeTrack?.id)
-      : (activeTrack?.id ?? exactTrack?.id ?? candidates[sourceLane] ?? candidates[0])
-
-    if (targetTrackId) {
-      plan.set(sourceIndex, targetTrackId)
-    }
+  for (const [sourceIndex, laneKey] of laneKeyByItemIndex) {
+    const targetTrackId = assignedTrackBySourceLane.get(laneKey)
+    if (targetTrackId) plan.set(sourceIndex, targetTrackId)
   }
 
   return { plan, tracks: plannedTracks }
@@ -352,12 +455,14 @@ export function useClipboardShortcuts() {
         const placementPlans = pasteItems.flatMap((itemData, sourceIndex) => {
           const targetTrackId = trackPlan.get(sourceIndex)
           return targetTrackId
-            ? [{
-                itemData,
-                targetTrackId,
-                desiredFrom: currentFrame + itemData.from,
-                sourceIndex,
-              }]
+            ? [
+                {
+                  itemData,
+                  targetTrackId,
+                  desiredFrom: currentFrame + itemData.from,
+                  sourceIndex,
+                },
+              ]
             : []
         })
 
