@@ -703,6 +703,41 @@ const VideoPreviewBase = memo(function VideoPreviewBase({
       setDisplayedFrame,
       ...previewRuntimeRefs.rendererControllerRefs,
     })
+
+  // The renderer replacement is asynchronous, so retire the old front buffer
+  // in the layout phase. This covers same-ID source swaps and topology changes
+  // before a stale scrub frame can remain visible for one paint.
+  useLayoutEffect(() => {
+    // Advance the render generation before replacement work can start. The
+    // controller's async pump checks this generation and cannot publish the
+    // disposed renderer's result afterward.
+    disposeFastScrubRenderer()
+    const canvas = scrubCanvasRef.current
+    if (canvas) {
+      const context = canvas.getContext('2d')
+      context?.clearRect(0, 0, canvas.width, canvas.height)
+    }
+    const hadFastScrubOverlay = showFastScrubOverlayRef.current
+    const hadTransitionOverlay = showPlaybackTransitionOverlayRef.current
+    hideFastScrubOverlay()
+    hidePlaybackTransitionOverlay()
+    // Keep the active routing owner alive so its replacement render can be
+    // scheduled in the same commit; the cleared canvas is the synchronous
+    // stale-pixel barrier.
+    if (hadFastScrubOverlay) showFastScrubOverlayForFrame()
+    else if (hadTransitionOverlay) showPlaybackTransitionOverlayForFrame()
+  }, [
+    disposeFastScrubRenderer,
+    fastScrubRendererStructureKey,
+    hideFastScrubOverlay,
+    hidePlaybackTransitionOverlay,
+    scrubCanvasRef,
+    showFastScrubOverlayForFrame,
+    showFastScrubOverlayRef,
+    showPlaybackTransitionOverlayForFrame,
+    showPlaybackTransitionOverlayRef,
+  ])
+
   useEffect(() => {
     if (!shouldWarmGpuEffectsRenderer || isResolving) return
 

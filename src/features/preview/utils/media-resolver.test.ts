@@ -479,3 +479,49 @@ describe('relinking regression', () => {
     expect(relinkedUrl).not.toBe(originalUrl)
   })
 })
+
+describe('abortable bulk resolution', () => {
+  it('rejects promptly when its signal aborts while media is pending', async () => {
+    let resolveFile!: (file: Blob) => void
+    ;(mediaLibraryService.getMedia as Mock).mockResolvedValue({
+      id: 'media-1',
+      fileName: 'video.mp4',
+    })
+    ;(mediaLibraryService.getMediaFile as Mock).mockReturnValue(
+      new Promise<Blob>((resolve) => {
+        resolveFile = resolve
+      }),
+    )
+
+    const controller = new AbortController()
+    const tracks = [
+      {
+        id: 'track-1',
+        name: 'Track 1',
+        height: 40,
+        locked: false,
+        visible: true,
+        muted: false,
+        solo: false,
+        order: 0,
+        items: [
+          {
+            id: 'item-1',
+            type: 'video' as const,
+            trackId: 'track-1',
+            from: 0,
+            durationInFrames: 30,
+            mediaId: 'media-1',
+            src: '',
+            label: 'clip',
+          },
+        ],
+      },
+    ]
+
+    const pending = resolveMediaUrls(tracks, { useProxy: false, signal: controller.signal })
+    controller.abort()
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' })
+    resolveFile(new Blob(['late']))
+  })
+})

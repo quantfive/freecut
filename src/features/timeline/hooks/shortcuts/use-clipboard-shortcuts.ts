@@ -14,13 +14,14 @@ import { useCompositionsStore } from '../../stores/compositions-store'
 import { useKeyframeSelectionStore } from '../../stores/keyframe-selection-store'
 import { HOTKEY_OPTIONS } from '@/config/hotkeys'
 import type { Transition } from '@/types/transition'
-import type { TimelineItem } from '@/types/timeline'
+import type { TimelineItem, TimelineTrack } from '@/types/timeline'
 import { useResolvedHotkeys } from '@/features/timeline/deps/settings'
 import {
   isCompositionWrapperItem,
   wouldCreateCompositionCycle,
 } from '../../utils/composition-graph'
 import { handleTranscriptClipboardCopy } from '../../utils/transcript-copy-bridge'
+import { createClassicTrack, getTrackKind } from '../../utils/classic-tracks'
 
 interface PastePlacementPlan {
   itemData: Omit<TimelineItem, 'id'>
@@ -57,6 +58,181 @@ function hasInternalPlacementOverlap(plans: PastePlacementPlan[]): boolean {
       ),
     ),
   )
+}
+
+type PasteTrackKind = 'video' | 'audio'
+
+interface PasteSourceLane {
+  key: string
+  kind: PasteTrackKind
+  sourceTrackId: string
+  ordinal: number
+}
+
+function getPasteTrackKind(item: Omit<TimelineItem, 'id'>): PasteTrackKind {
+  return item.type === 'audio' ? 'audio' : 'video'
+}
+
+function isCompatiblePasteTrack(track: TimelineTrack, kind: PasteTrackKind): boolean {
+  const trackKind = getTrackKind(track)
+  return kind === 'audio' ? trackKind === 'audio' : trackKind !== 'audio'
+}
+
+function getPasteDestinationTrackIds(tracks: TimelineTrack[], kind: PasteTrackKind): string[] {
+  return tracks
+    .filter((track) => !track.isGroup && isCompatiblePasteTrack(track, kind))
+    .sort((left, right) => left.order - right.order)
+    .map((track) => track.id)
+}
+
+function collectPasteSourceLanes(pasteItems: Array<Omit<TimelineItem, 'id'>>) {
+  const lanesByKind: Record<PasteTrackKind, PasteSourceLane[]> = { video: [], audio: [] }
+  const laneByKey = new Map<string, PasteSourceLane>()
+  const laneKeyByItemIndex = new Map<number, string>()
+
+  for (const [sourceIndex, itemData] of pasteItems.entries()) {
+    const kind = getPasteTrackKind(itemData)
+    const key = `${kind}:${itemData.trackId}`
+    let lane = laneByKey.get(key)
+    if (!lane) {
+      lane = {
+        key,
+        kind,
+        sourceTrackId: itemData.trackId,
+        ordinal: lanesByKind[kind].length,
+      }
+      laneByKey.set(key, lane)
+      lanesByKind[kind].push(lane)
+    }
+    laneKeyByItemIndex.set(sourceIndex, key)
+  }
+
+  return { lanesByKind, laneKeyByItemIndex }
+}
+
+function findExactPasteTrack(
+  lane: PasteSourceLane,
+  tracks: TimelineTrack[],
+): TimelineTrack | undefined {
+  return tracks.find(
+    (track) => track.id === lane.sourceTrackId && isCompatiblePasteTrack(track, lane.kind),
+  )
+}
+
+function appendPasteDestinationTrack(
+  tracks: TimelineTrack[],
+  kind: PasteTrackKind,
+): { trackId: string; tracks: TimelineTrack[] } {
+  const minOrder = Math.min(...tracks.map((track) => track.order), 0)
+  const maxOrder = Math.max(...tracks.map((track) => track.order), 0)
+  const newTrack = createClassicTrack({
+    tracks,
+    kind,
+    order: kind === 'video' ? minOrder - 1 : maxOrder + 1,
+  })
+  return { trackId: newTrack.id, tracks: [...tracks, newTrack] }
+}
+
+function planSingleSourceSection(params: {
+  activeTrackId: string | null
+  kind: PasteTrackKind
+  lanes: PasteSourceLane[]
+  tracks: TimelineTrack[]
+}): { assignments: Map<string, string>; tracks: TimelineTrack[] } {
+  const { activeTrackId, kind, lanes } = params
+  let plannedTracks = params.tracks
+  const assignments = new Map<string, string>()
+  const candidates = getPasteDestinationTrackIds(plannedTracks, kind)
+  const activeTrack = plannedTracks.find(
+    (track) => track.id === activeTrackId && isCompatiblePasteTrack(track, kind),
+  )
+
+  for (const lane of lanes) {
+    let targetTrackId =
+      activeTrack?.id ?? findExactPasteTrack(lane, plannedTracks)?.id ?? candidates[0]
+    if (!targetTrackId) {
+      const created = appendPasteDestinationTrack(plannedTracks, kind)
+      plannedTracks = created.tracks
+      targetTrackId = created.trackId
+      candidates.push(created.trackId)
+    }
+    assignments.set(lane.key, targetTrackId)
+  }
+
+  return { assignments, tracks: plannedTracks }
+}
+
+function planPreservedSourceSection(params: {
+  kind: PasteTrackKind
+  lanes: PasteSourceLane[]
+  tracks: TimelineTrack[]
+}): { assignments: Map<string, string>; tracks: TimelineTrack[] } {
+  const { kind, lanes } = params
+  let plannedTracks = params.tracks
+  const assignments = new Map<string, string>()
+  const candidates = getPasteDestinationTrackIds(plannedTracks, kind)
+  const usedTrackIds = new Set<string>()
+
+  for (const lane of lanes) {
+    const exactTrack = findExactPasteTrack(lane, plannedTracks)
+    if (!exactTrack) continue
+    assignments.set(lane.key, exactTrack.id)
+    usedTrackIds.add(exactTrack.id)
+  }
+
+  for (const lane of lanes) {
+    if (assignments.has(lane.key)) continue
+    const ordinalCandidate = candidates[lane.ordinal]
+    const availableCandidate =
+      ordinalCandidate && !usedTrackIds.has(ordinalCandidate)
+        ? ordinalCandidate
+        : candidates.find((candidate) => !usedTrackIds.has(candidate))
+    let targetTrackId = availableCandidate
+    if (!targetTrackId) {
+      const created = appendPasteDestinationTrack(plannedTracks, kind)
+      plannedTracks = created.tracks
+      targetTrackId = created.trackId
+      candidates.push(created.trackId)
+    }
+    assignments.set(lane.key, targetTrackId)
+    usedTrackIds.add(targetTrackId)
+  }
+
+  return { assignments, tracks: plannedTracks }
+}
+
+function buildPasteTrackPlan(
+  pasteItems: Array<Omit<TimelineItem, 'id'>>,
+  tracks: TimelineTrack[],
+  activeTrackId: string | null,
+): { plan: Map<number, string>; tracks: TimelineTrack[] } {
+  let plannedTracks = tracks
+  const { lanesByKind, laneKeyByItemIndex } = collectPasteSourceLanes(pasteItems)
+  const preserveSourceTracks = new Set(pasteItems.map((item) => item.trackId)).size > 1
+  const plan = new Map<number, string>()
+  const assignedTrackBySourceLane = new Map<string, string>()
+
+  for (const kind of ['video', 'audio'] as const) {
+    const sectionPlan = preserveSourceTracks
+      ? planPreservedSourceSection({ kind, lanes: lanesByKind[kind], tracks: plannedTracks })
+      : planSingleSourceSection({
+          activeTrackId,
+          kind,
+          lanes: lanesByKind[kind],
+          tracks: plannedTracks,
+        })
+    plannedTracks = sectionPlan.tracks
+    for (const [laneKey, trackId] of sectionPlan.assignments) {
+      assignedTrackBySourceLane.set(laneKey, trackId)
+    }
+  }
+
+  for (const [sourceIndex, laneKey] of laneKeyByItemIndex) {
+    const targetTrackId = assignedTrackBySourceLane.get(laneKey)
+    if (targetTrackId) plan.set(sourceIndex, targetTrackId)
+  }
+
+  return { plan, tracks: plannedTracks }
 }
 
 function findSharedPlacementShift(
@@ -141,6 +317,7 @@ export function useClipboardShortcuts() {
   const transitions = useTimelineStore((s) => s.transitions)
   const tracks = useTimelineStore((s) => s.tracks)
   const addItems = useTimelineStore((s) => s.addItems)
+  const addItemsOnNewTracks = useTimelineStore((s) => s.addItemsOnNewTracks)
   const removeItems = useTimelineStore((s) => s.removeItems)
   const updateTransition = useTimelineStore((s) => s.updateTransition)
   const copyTransition = useClipboardStore((s) => s.copyTransition)
@@ -266,27 +443,27 @@ export function useClipboardShortcuts() {
               )
         if (pasteItems.length === 0) return
 
-        // When the clipboard spans more than one source track (e.g. a linked
-        // video+audio pair copied from the transcript), preserve each item's own
-        // track so the pair lands on video/audio tracks separately. A
-        // single-track copy still pastes onto the active track as before.
-        const preserveSourceTracks = new Set(pasteItems.map((item) => item.trackId)).size > 1
-
-        const placementPlans = pasteItems.map((itemData, sourceIndex): PastePlacementPlan => {
-          let targetTrackId = preserveSourceTracks ? itemData.trackId : activeTrackId
-          if (!targetTrackId || !tracks.some((t) => t.id === targetTrackId)) {
-            targetTrackId = itemData.trackId
-          }
-          const trackExists = tracks.some((t) => t.id === targetTrackId)
-          if (!trackExists && tracks.length > 0) {
-            targetTrackId = tracks[0]!.id
-          }
-          return {
-            itemData,
-            targetTrackId,
-            desiredFrom: currentFrame + itemData.from,
-            sourceIndex,
-          }
+        // Resolve every source lane by media section/kind. Exact IDs win when
+        // they survive in this sequence; otherwise the source lane ordinal is
+        // mapped to the corresponding destination lane. This keeps linked A/V
+        // members in separate sections even when both source IDs are absent.
+        const { plan: trackPlan, tracks: plannedTracks } = buildPasteTrackPlan(
+          pasteItems,
+          tracks,
+          activeTrackId,
+        )
+        const placementPlans = pasteItems.flatMap((itemData, sourceIndex) => {
+          const targetTrackId = trackPlan.get(sourceIndex)
+          return targetTrackId
+            ? [
+                {
+                  itemData,
+                  targetTrackId,
+                  desiredFrom: currentFrame + itemData.from,
+                  sourceIndex,
+                },
+              ]
+            : []
         })
 
         // Keep an ordinary multi-item paste as one rigid block. If invalid or
@@ -304,7 +481,9 @@ export function useClipboardShortcuts() {
             group.push(plan)
             grouped.set(key, group)
           }
-          placementGroups = [...grouped.values()]
+          placementGroups = [...grouped.values()].flatMap((group) =>
+            hasInternalPlacementOverlap(group) ? group.map((plan) => [plan]) : [group],
+          )
         }
 
         const occupiedItems = [...storeItems]
@@ -337,7 +516,11 @@ export function useClipboardShortcuts() {
         // Add every pasted item in a single ADD_ITEMS command so one Ctrl+Z
         // undoes the whole paste (including a linked A/V pair), not item-by-item.
         if (newItems.length > 0) {
-          addItems(newItems)
+          if (plannedTracks.length > tracks.length) {
+            addItemsOnNewTracks(newItems, plannedTracks)
+          } else {
+            addItems(newItems)
+          }
         }
 
         if (newItemIds.length > 0) {
@@ -376,6 +559,7 @@ export function useClipboardShortcuts() {
       itemsClipboard,
       tracks,
       addItems,
+      addItemsOnNewTracks,
       selectItems,
       activeTrackId,
       selectedKeyframes.length,

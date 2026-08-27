@@ -110,7 +110,10 @@ async function renderQueuedJob(job: RenderJob): Promise<void> {
     )
 
     // Resolve mediaIds → blob URLs fresh at render time (export never proxies).
-    composition.tracks = await resolveMediaUrls(composition.tracks, { useProxy: false })
+    composition.tracks = await resolveMediaUrls(composition.tracks, {
+      useProxy: false,
+      signal: controller.signal,
+    })
 
     const { result, renderPath, fallbackReason } = await runRender({
       clientSettings: job.clientSettings,

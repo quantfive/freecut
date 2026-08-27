@@ -534,6 +534,24 @@ function getCanvasDrawImageCallCount() {
   )
 }
 
+function getCanvasClearRectCallCount(canvas: HTMLCanvasElement) {
+  const results = canvasGetContextSpy?.mock.results as
+    | Array<{ type: string; value: unknown }>
+    | undefined
+  return (
+    results?.reduce((total: number, result) => {
+      if (result.type !== 'return' || !result.value) return total
+      const context = result.value as {
+        canvas?: HTMLCanvasElement
+        clearRect?: unknown
+      }
+      if (context.canvas !== canvas || typeof context.clearRect !== 'function') return total
+      if (!('mock' in context.clearRect)) return total
+      return total + (context.clearRect as { mock: { calls: unknown[] } }).mock.calls.length
+    }, 0) ?? 0
+  )
+}
+
 function resetStores() {
   usePlaybackStore.setState({
     currentFrame: 0,
@@ -1462,6 +1480,94 @@ describe('VideoPreview sync behavior', () => {
       expect(scrubCanvas.style.visibility).toBe('visible')
       expect(getDisplayedFrame()).toBe(0)
     })
+  })
+
+  it('clears and invalidates an in-flight same-item source render before replacement starts', async () => {
+    canvasPixelReadbackEnabled = true
+    const makeItem = (src: string) => ({
+      id: 'same-source-item',
+      label: 'Same source item',
+      src,
+      effects: [
+        {
+          id: 'effect-source-generation',
+          enabled: true,
+          effect: { type: 'gpu-effect', gpuEffectType: 'gpu-sepia', params: { amount: 0.5 } },
+        },
+      ],
+    })
+    setSingleVideoItemAtFrame(makeItem('blob:old-source'))
+    const { renderer, scrubCanvas } = await renderReadySingleRendererPreview(24, {
+      expectedDisplayedFrame: 24,
+    })
+    setMockCanvasBlank(scrubCanvas, false)
+
+    let resolveOldRender: (() => void) | null = null
+    renderer.renderFrame.mockImplementation(async (frame: number) => {
+      if (frame !== 25) return
+      await new Promise<void>((resolve) => {
+        resolveOldRender = resolve
+      })
+    })
+    act(() => {
+      usePlaybackStore.getState().setPreviewFrame(25)
+    })
+    await waitFor(() => {
+      expect(renderer.renderFrame).toHaveBeenCalledWith(25)
+      expect(resolveOldRender).not.toBeNull()
+    })
+
+    const clearCountBeforeReplacement = getCanvasClearRectCallCount(scrubCanvas)
+    const rendererCalls = createCompositionRendererMock.mock.calls as unknown as Array<
+      [unknown, HTMLCanvasElement]
+    >
+    const oldOffscreen = rendererCalls[0]![1]
+    const replacementRenderer = createRendererDouble()
+    let resolveReplacementInit: (() => void) | null = null
+    let oldGenerationRetiredBeforeReplacement = false
+    createCompositionRendererMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          oldGenerationRetiredBeforeReplacement =
+            renderer.dispose.mock.calls.length > 0 &&
+            getCanvasClearRectCallCount(scrubCanvas) > clearCountBeforeReplacement &&
+            blankCanvasState.has(scrubCanvas)
+          resolveReplacementInit = () => {
+            rendererMockState.instances.push(replacementRenderer)
+            resolve(replacementRenderer)
+          }
+        }),
+    )
+
+    act(() => {
+      useItemsStore.getState().setItems([
+        {
+          type: 'video',
+          trackId: 'track-video',
+          from: 0,
+          durationInFrames: 120,
+          ...makeItem('blob:new-source'),
+        } as unknown as TimelineItem,
+      ])
+    })
+
+    await waitFor(() => expect(createCompositionRendererMock).toHaveBeenCalledTimes(2))
+    expect(oldGenerationRetiredBeforeReplacement).toBe(true)
+
+    setMockCanvasBlank(oldOffscreen, false)
+    await act(async () => {
+      resolveOldRender?.()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(blankCanvasState.has(scrubCanvas)).toBe(true)
+    expect(getDisplayedFrame()).not.toBe(25)
+
+    await act(async () => {
+      resolveReplacementInit?.()
+      await Promise.resolve()
+    })
+    await waitFor(() => expect(replacementRenderer.renderFrame).toHaveBeenCalledWith(25))
   })
 
   it('prepares the initial playback lookahead without replacing the visible paused frame', async () => {

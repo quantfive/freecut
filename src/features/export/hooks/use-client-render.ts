@@ -93,6 +93,7 @@ export function useClientRender(): UseClientRenderReturn {
 
   // AbortController for cancellation
   const abortControllerRef = useRef<AbortController | null>(null)
+  const renderGenerationRef = useRef(0)
 
   /**
    * Handle progress updates from the render engine
@@ -127,20 +128,34 @@ export function useClientRender(): UseClientRenderReturn {
     async (settings: ExportSettings | ExtendedExportSettings, sequence?: ExportableSequence) => {
       const opId = createOperationId()
       const event = log.startEvent('render', opId)
+      const previousController = abortControllerRef.current
+      previousController?.abort()
+      const generation = ++renderGenerationRef.current
+      const controller = new AbortController()
+      abortControllerRef.current = controller
+      let temporaryResult: ClientRenderResult | null = null
+
+      const releaseResult = (ownedResult: ClientRenderResult | null | undefined) => {
+        if (!ownedResult) return
+        if (resultRef.current === ownedResult) resultRef.current = null
+        void releaseTemporaryExportOutput(ownedResult)
+      }
+      const ensureActive = () => {
+        if (generation !== renderGenerationRef.current || controller.signal.aborted) {
+          throw new DOMException('Render cancelled', 'AbortError')
+        }
+      }
 
       try {
         const previousResult = resultRef.current
         resultRef.current = null
-        void releaseTemporaryExportOutput(previousResult)
+        releaseResult(previousResult)
         setIsExporting(true)
         setProgress(0)
         setProgressMessage(undefined)
         setError(null)
         setResult(null)
         setStatus('preparing')
-
-        // Create abort controller for cancellation
-        abortControllerRef.current = new AbortController()
 
         // Read current state from stores
         const state = useTimelineStore.getState()
@@ -166,7 +181,7 @@ export function useClientRender(): UseClientRenderReturn {
         const { exportMode, renderWholeProject } = requested
         const effectiveInPoint = renderWholeProject ? null : inPoint
         const effectiveOutPoint = renderWholeProject ? null : outPoint
-        const signal = abortControllerRef.current.signal
+        const signal = controller.signal
 
         const smartCopy = await trySmartCopyExport(
           {
@@ -186,10 +201,13 @@ export function useClientRender(): UseClientRenderReturn {
           signal,
           handleProgress,
         )
+        ensureActive()
 
         if (smartCopy.result) {
-          resultRef.current = smartCopy.result
-          setResult(smartCopy.result)
+          temporaryResult = smartCopy.result
+          resultRef.current = temporaryResult
+          setResult(temporaryResult)
+          temporaryResult = null
           setStatus('completed')
           setProgress(100)
           event.set('renderPath', 'smart-copy')
@@ -203,6 +221,7 @@ export function useClientRender(): UseClientRenderReturn {
 
         // Resolve settings + codec fallback only when an encoder is required.
         const { clientSettings, codecFallback } = await resolveClientSettings(settings, fps)
+        ensureActive()
         if (codecFallback) event.set('codecFallback', codecFallback)
 
         const extended = isExtendedSettings(settings)
@@ -257,7 +276,11 @@ export function useClientRender(): UseClientRenderReturn {
 
         // Resolve media URLs (convert mediaIds to blob URLs)
         // Export always uses full-res source, never proxies
-        const resolvedTracks = await resolveMediaUrls(composition.tracks, { useProxy: false })
+        const resolvedTracks = await resolveMediaUrls(composition.tracks, {
+          useProxy: false,
+          signal,
+        })
+        ensureActive()
         composition.tracks = resolvedTracks
 
         // Count resolved items for diagnostics
@@ -304,6 +327,8 @@ export function useClientRender(): UseClientRenderReturn {
           signal,
           onProgress: handleProgress,
         })
+        temporaryResult = renderResult
+        ensureActive()
         if (fallbackReason) event.set('workerFallbackReason', fallbackReason)
 
         // Sidecar mode: the video is muxed clean; build the .srt from the same
@@ -321,8 +346,10 @@ export function useClientRender(): UseClientRenderReturn {
           }
         }
 
+        if (finalResult !== renderResult) temporaryResult = finalResult
         resultRef.current = finalResult
         setResult(finalResult)
+        temporaryResult = null
         setStatus('completed')
         setProgress(100)
 
@@ -333,6 +360,9 @@ export function useClientRender(): UseClientRenderReturn {
           duration: renderResult.duration,
         })
       } catch (err) {
+        releaseResult(temporaryResult)
+        temporaryResult = null
+        if (generation !== renderGenerationRef.current) return
         if (err instanceof DOMException && err.name === 'AbortError') {
           event.set('outcome', 'cancelled')
           event.set('duration_ms', Date.now())
@@ -345,8 +375,10 @@ export function useClientRender(): UseClientRenderReturn {
           setStatus('failed')
         }
       } finally {
-        setIsExporting(false)
-        abortControllerRef.current = null
+        if (generation === renderGenerationRef.current) {
+          setIsExporting(false)
+          if (abortControllerRef.current === controller) abortControllerRef.current = null
+        }
       }
     },
     [handleProgress],
@@ -413,6 +445,7 @@ export function useClientRender(): UseClientRenderReturn {
    * Reset state
    */
   const resetState = useCallback(() => {
+    renderGenerationRef.current++
     abortControllerRef.current?.abort()
     abortControllerRef.current = null
     setIsExporting(false)
@@ -424,14 +457,18 @@ export function useClientRender(): UseClientRenderReturn {
     setError(null)
     const previousResult = resultRef.current
     resultRef.current = null
-    void releaseTemporaryExportOutput(previousResult)
+    if (previousResult) void releaseTemporaryExportOutput(previousResult)
     setResult(null)
   }, [])
 
   useEffect(
     () => () => {
-      void releaseTemporaryExportOutput(resultRef.current)
+      renderGenerationRef.current++
+      abortControllerRef.current?.abort()
+      abortControllerRef.current = null
+      const ownedResult = resultRef.current
       resultRef.current = null
+      if (ownedResult) void releaseTemporaryExportOutput(ownedResult)
     },
     [],
   )

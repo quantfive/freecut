@@ -1,4 +1,4 @@
-import { useRef, useEffect, useState, useMemo, useCallback } from 'react'
+import { useRef, useEffect, useLayoutEffect, useState, useMemo, useCallback } from 'react'
 import { AbsoluteFill } from '@/features/preview/deps/player-core'
 import {
   useClock,
@@ -175,8 +175,10 @@ function VideoSource({
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const contextRef = useRef<CanvasRenderingContext2D | null>(null)
   const mountedRef = useRef(true)
+  const sourceGenerationRef = useRef(0)
   const decoderReadyRef = useRef(false)
-  const renderInFlightRef = useRef(false)
+  const renderInFlightGenerationRef = useRef<number | null>(null)
+  const pumpLatestDecodedFrameRef = useRef<() => void>(() => {})
   const pendingTimeRef = useRef<number | null>(null)
   const latestTargetTimeRef = useRef(0)
   const consecutiveDecodeFailuresRef = useRef(0)
@@ -246,7 +248,23 @@ function VideoSource({
     }
   }, [])
 
-  useEffect(() => {
+  useLayoutEffect(() => {
+    const generation = ++sourceGenerationRef.current
+    mountedRef.current = true
+    decoderReadyRef.current = false
+    extractorRef.current = null
+    pendingTimeRef.current = null
+    contextRef.current = null
+    prewarmInFlightRef.current = false
+    queuedPrewarmTimesRef.current = []
+    prewarmAnchorFrameRef.current = null
+    for (const bitmap of frameCacheRef.current.values()) bitmap.close()
+    frameCacheRef.current.clear()
+    frameCacheOrderRef.current = []
+    const canvas = canvasRef.current
+    const context = canvas?.getContext('2d')
+    if (canvas && context) context.clearRect(0, 0, canvas.width, canvas.height)
+    const resetCanvas = canvas
     setUseLegacyPausedSeek(false)
     setHasDecodedFrame(false)
     setDecodedFrameKey(null)
@@ -254,6 +272,16 @@ function VideoSource({
     prewarmInFlightRef.current = false
     queuedPrewarmTimesRef.current = []
     prewarmAnchorFrameRef.current = null
+    return () => {
+      if (sourceGenerationRef.current === generation) {
+        sourceGenerationRef.current += 1
+        const currentCanvas = resetCanvas
+        const currentContext = currentCanvas?.getContext('2d')
+        if (currentCanvas && currentContext) {
+          currentContext.clearRect(0, 0, currentCanvas.width, currentCanvas.height)
+        }
+      }
+    }
   }, [activeSrc, mediaId])
 
   const pumpDirectionalPrewarm = useCallback(() => {
@@ -365,6 +393,11 @@ function VideoSource({
       const extractor = extractorRef.current
       const canvas = canvasRef.current
       if (!extractor || !canvas) return false
+      const generation = sourceGenerationRef.current
+      const isCurrent = () =>
+        mountedRef.current &&
+        sourceGenerationRef.current === generation &&
+        extractorRef.current === extractor
 
       let ctx = contextRef.current
       if (!ctx) {
@@ -382,10 +415,21 @@ function VideoSource({
         canvas.height = targetHeight
       }
 
+      // Keep deferred extractor work away from the visible presentation. A
+      // decoder can paint before its promise settles, so only commit staged
+      // pixels after validating the source generation.
+      const stagingCanvas = document.createElement('canvas')
+      stagingCanvas.width = targetWidth
+      stagingCanvas.height = targetHeight
+      const stagingContext = stagingCanvas.getContext('2d')
+      if (!stagingContext) return false
+
       const cacheKey = quantizeSourceMonitorTime(targetTime)
       const markDecodedFrame = () => {
+        if (!isCurrent()) return false
         setHasDecodedFrame(true)
         setDecodedFrameKey((prev) => (prev === cacheKey ? prev : cacheKey))
+        return true
       }
       const cache = frameCacheRef.current
       const cacheOrder = frameCacheOrderRef.current
@@ -398,8 +442,7 @@ function VideoSource({
           cacheOrder.splice(cacheIndex, 1)
           cacheOrder.push(cacheKey)
         }
-        markDecodedFrame()
-        return true
+        return markDecodedFrame()
       }
 
       const drawSharedBitmap = (bitmap: ImageBitmap): boolean => {
@@ -425,24 +468,36 @@ function VideoSource({
           SOURCE_MONITOR_CACHE_TIME_QUANTUM,
           SOURCE_MONITOR_SHARED_CACHE_WAIT_MS,
         ).catch(() => null)
-        if (inflightBitmap && drawSharedBitmap(inflightBitmap)) {
-          markDecodedFrame()
-          return true
+        if (inflightBitmap && isCurrent() && drawSharedBitmap(inflightBitmap)) {
+          return markDecodedFrame()
         }
       }
 
+      if (!isCurrent()) return false
+
       const didDraw = await extractor.drawFrame(
-        ctx,
+        stagingContext,
         Math.max(0, targetTime),
         0,
         0,
-        canvas.width,
-        canvas.height,
+        stagingCanvas.width,
+        stagingCanvas.height,
       )
+      if (!isCurrent()) {
+        ctx.clearRect(0, 0, canvas.width, canvas.height)
+        return false
+      }
       if (!didDraw) return false
 
+      ctx.clearRect(0, 0, canvas.width, canvas.height)
+      ctx.drawImage(stagingCanvas, 0, 0, canvas.width, canvas.height)
+
       try {
-        const bitmap = await createImageBitmap(canvas)
+        const bitmap = await createImageBitmap(stagingCanvas)
+        if (!isCurrent()) {
+          bitmap.close()
+          return false
+        }
         cache.set(cacheKey, bitmap)
         cacheOrder.push(cacheKey)
         while (cacheOrder.length > SOURCE_MONITOR_FRAME_CACHE_MAX) {
@@ -457,19 +512,20 @@ function VideoSource({
         // Cache population is best-effort only.
       }
 
-      markDecodedFrame()
-      return true
+      return markDecodedFrame()
     },
     [activeSrc],
   )
 
   const pumpLatestDecodedFrame = useCallback(() => {
-    if (renderInFlightRef.current) return
-    renderInFlightRef.current = true
+    if (renderInFlightGenerationRef.current !== null) return
+    const generation = sourceGenerationRef.current
+    renderInFlightGenerationRef.current = generation
 
     const run = async () => {
       try {
         while (
+          sourceGenerationRef.current === generation &&
           decoderReadyRef.current &&
           pendingTimeRef.current !== null &&
           mountedRef.current &&
@@ -499,8 +555,11 @@ function VideoSource({
           }
         }
       } finally {
-        renderInFlightRef.current = false
+        if (renderInFlightGenerationRef.current === generation) {
+          renderInFlightGenerationRef.current = null
+        }
         if (
+          renderInFlightGenerationRef.current === null &&
           decoderReadyRef.current &&
           pendingTimeRef.current !== null &&
           mountedRef.current &&
@@ -508,7 +567,7 @@ function VideoSource({
         ) {
           queueMicrotask(() => {
             if (!mountedRef.current) return
-            pumpLatestDecodedFrame()
+            pumpLatestDecodedFrameRef.current()
           })
         }
       }
@@ -516,6 +575,7 @@ function VideoSource({
 
     void run()
   }, [drawDecodedFrame, queueDirectionalPrewarm])
+  pumpLatestDecodedFrameRef.current = pumpLatestDecodedFrame
 
   // Acquire/release pooled element when source changes.
   useEffect(() => {
@@ -579,12 +639,19 @@ function VideoSource({
     const pool = decoderPoolRef.current
     const extractor = pool.getOrCreateItemExtractor(decoderItemId, activeSrc)
     extractorRef.current = extractor
+    const generation = sourceGenerationRef.current
 
     let cancelled = false
     void extractor
       .init()
       .then((ready) => {
-        if (cancelled || !mountedRef.current) return
+        if (
+          cancelled ||
+          !mountedRef.current ||
+          sourceGenerationRef.current !== generation ||
+          extractorRef.current !== extractor
+        )
+          return
         if (!ready) {
           setUseLegacyPausedSeek((prev) => (prev ? prev : true))
           return
@@ -597,7 +664,13 @@ function VideoSource({
         }
       })
       .catch(() => {
-        if (cancelled || !mountedRef.current) return
+        if (
+          cancelled ||
+          !mountedRef.current ||
+          sourceGenerationRef.current !== generation ||
+          extractorRef.current !== extractor
+        )
+          return
         setUseLegacyPausedSeek((prev) => (prev ? prev : true))
       })
 

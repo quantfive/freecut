@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vite-plus/test'
+import type { CompositionItem } from '@/types/timeline'
 import {
   makeTimelineTrack as makeTrack,
   makeTimelineVideoItem as makeVideoItem,
@@ -9,6 +10,7 @@ import { useItemsStore } from './items-store'
 import { useCompositionsStore } from './compositions-store'
 import { useSequencesStore } from './sequences-store'
 import { useCompositionNavigationStore } from './composition-navigation-store'
+import { usePlaybackStore } from '@/shared/state/playback'
 import {
   getActiveExportSequenceId,
   getExportableSequence,
@@ -29,6 +31,35 @@ function seedSequence(id: string, itemId: string, width = 1280, height = 720): v
     durationInFrames: 50,
   })
   useSequencesStore.getState().addTopLevelSequence(id)
+}
+
+function seedNestedSequence(): void {
+  seedSequence('seq-a', 'a-clip')
+  useCompositionsStore.getState().addComposition({
+    id: 'child',
+    name: 'child',
+    tracks: [makeTrack({ id: 'child-v1', name: 'V1', kind: 'video', order: 0 })],
+    items: [makeVideoItem({ id: 'child-clip', trackId: 'child-v1', durationInFrames: 30 })],
+    transitions: [],
+    keyframes: [],
+    fps: 24,
+    width: 640,
+    height: 360,
+    durationInFrames: 30,
+    busAudioEq: { enabled: true, lowGainDb: 2 },
+  })
+  useCompositionsStore.getState().updateComposition('seq-a', {
+    items: [
+      {
+        ...makeVideoItem({ id: 'child-entry', trackId: 'seq-a-v1', durationInFrames: 30 }),
+        type: 'composition',
+        compositionId: 'child',
+        compositionWidth: 640,
+        compositionHeight: 360,
+      } as unknown as CompositionItem,
+    ],
+    busAudioEq: { enabled: true, lowGainDb: 4 },
+  })
 }
 
 describe('export-snapshot sourcing', () => {
@@ -110,5 +141,31 @@ describe('export-snapshot sourcing', () => {
     // And the active sequence exports its own content.
     const seq = getExportableSequence('seq-a')
     expect(seq.items.map((i) => i.id)).toEqual(['a-clip'])
+  })
+
+  it('binds a drilled child export to the live child mixer without contaminating Main or its tab root', () => {
+    const mainEq = { enabled: true, lowGainDb: 1 }
+    const sequenceEq = { enabled: true, lowGainDb: 4 }
+    const childEq = { enabled: true, lowGainDb: 9 }
+    seedNestedSequence()
+    usePlaybackStore.getState().setBusAudioEq(mainEq)
+    useCompositionsStore.getState().updateComposition('seq-a', { busAudioEq: sequenceEq })
+    useCompositionNavigationStore.getState().switchToSequence('seq-a')
+    useCompositionNavigationStore.getState().enterComposition('child', 'child', 'child-entry')
+    usePlaybackStore.getState().setBusAudioEq(childEq)
+
+    const child = getExportableSequence('child')
+    const sequence = getExportableSequence('seq-a')
+    const main = getExportableSequence(null)
+
+    expect(child.busAudioEq).toEqual(childEq)
+    expect(sequence.busAudioEq).toEqual(sequenceEq)
+    expect(main.busAudioEq).toEqual(mainEq)
+
+    // Returned EQ data is a snapshot: later live edits do not rewrite prior exports.
+    usePlaybackStore.getState().setBusAudioEq({ enabled: true, lowGainDb: 12 })
+    expect(child.busAudioEq).toEqual(childEq)
+    expect(sequence.busAudioEq).toEqual(sequenceEq)
+    expect(main.busAudioEq).toEqual(mainEq)
   })
 })
