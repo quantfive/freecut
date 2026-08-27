@@ -42,11 +42,15 @@ export function FreeCutEditorSurface({ host }: { host: EditorHost }) {
     let cancelled = false
     let unsubscribe: (() => void) | undefined
     let unmountShortcutSettings: (() => void) | undefined
+    const shortcutSettingsAbortController = new AbortController()
     setState(null)
     setError(null)
 
     const initialize = async () => {
-      unmountShortcutSettings = await mountHostShortcutSettings(host)
+      unmountShortcutSettings = await mountHostShortcutSettings(
+        host,
+        shortcutSettingsAbortController.signal,
+      )
       if (cancelled) {
         unmountShortcutSettings()
         unmountShortcutSettings = undefined
@@ -70,6 +74,7 @@ export function FreeCutEditorSurface({ host }: { host: EditorHost }) {
       .catch((caught) => {
         unsubscribe?.()
         unsubscribe = undefined
+        shortcutSettingsAbortController.abort()
         unmountShortcutSettings?.()
         unmountShortcutSettings = undefined
         if (cancelled) return
@@ -80,6 +85,7 @@ export function FreeCutEditorSurface({ host }: { host: EditorHost }) {
       cancelled = true
       unsubscribe?.()
       unsubscribe = undefined
+      shortcutSettingsAbortController.abort()
       unmountShortcutSettings?.()
       unmountShortcutSettings = undefined
     }

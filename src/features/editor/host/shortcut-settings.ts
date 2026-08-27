@@ -43,12 +43,10 @@ let currentOwnership: ShortcutOwnership | null = null
  * Hydrates host-owned shortcuts before the editor mounts, then keeps UI and
  * host/agent changes synchronized for the lifetime of the embedded surface.
  */
-export async function mountHostShortcutSettings(host: EditorHost): Promise<() => void> {
-  const port = host.shortcuts
-  if (!port) {
-    return () => undefined
-  }
-
+export async function mountHostShortcutSettings(
+  host: EditorHost,
+  signal?: AbortSignal,
+): Promise<() => void> {
   const ownership: ShortcutOwnership = {
     epoch: ++nextOwnershipEpoch,
     standaloneOverrides: copyOverrides(
@@ -60,8 +58,38 @@ export async function mountHostShortcutSettings(host: EditorHost): Promise<() =>
   let disposed = false
   let inboundRevision = 0
   let writeQueue = Promise.resolve()
+  let unsubscribeHost: (() => void) | undefined
+  let unsubscribeStore: (() => void) | undefined
 
   const isCurrent = () => !disposed && currentOwnership?.epoch === ownership.epoch
+
+  const dispose = () => {
+    if (disposed) return
+    disposed = true
+    inboundRevision += 1
+    unsubscribeStore?.()
+    unsubscribeHost?.()
+    signal?.removeEventListener('abort', dispose)
+    if (currentOwnership?.epoch !== ownership.epoch) return
+    currentOwnership = null
+    useSettingsStore.getState().replaceHotkeyOverrides(ownership.standaloneOverrides)
+  }
+
+  if (signal?.aborted) {
+    dispose()
+    return dispose
+  }
+  signal?.addEventListener('abort', dispose, { once: true })
+
+  // Replacing a host invalidates the previous epoch immediately, including
+  // while either host is still resolving getSettings. Keep the standalone
+  // snapshot visible until this owner has authoritative settings to apply.
+  useSettingsStore.getState().replaceHotkeyOverrides(ownership.standaloneOverrides)
+
+  const port = host.shortcuts
+  if (!port) {
+    return dispose
+  }
 
   const reportFailure = (message: string) => {
     host.notify?.({ kind: 'error', message })
@@ -94,15 +122,15 @@ export async function mountHostShortcutSettings(host: EditorHost): Promise<() =>
   try {
     initialSettings = await Promise.resolve(port.getSettings())
   } catch (error) {
-    if (currentOwnership?.epoch === ownership.epoch) currentOwnership = null
+    dispose()
     throw error
   }
   if (!isCurrent()) {
-    return () => undefined
+    return dispose
   }
   applyHostSettings(initialSettings)
 
-  const unsubscribeHost = port.subscribe?.((settings) => {
+  unsubscribeHost = port.subscribe?.((settings) => {
     if (!isCurrent()) return
     try {
       applyHostSettings(settings)
@@ -111,7 +139,7 @@ export async function mountHostShortcutSettings(host: EditorHost): Promise<() =>
     }
   })
 
-  const unsubscribeStore = useSettingsStore.subscribe((state, previousState) => {
+  unsubscribeStore = useSettingsStore.subscribe((state, previousState) => {
     if (
       disposed ||
       applyingHostSettings ||
@@ -128,17 +156,9 @@ export async function mountHostShortcutSettings(host: EditorHost): Promise<() =>
         return Promise.resolve(port.setSettings(settings))
       })
       .catch(() => {
-        reportFailure('Could not save keyboard shortcuts to the host.')
+        if (isCurrent()) reportFailure('Could not save keyboard shortcuts to the host.')
       })
   })
 
-  return () => {
-    disposed = true
-    inboundRevision += 1
-    unsubscribeStore()
-    unsubscribeHost?.()
-    if (currentOwnership?.epoch !== ownership.epoch) return
-    currentOwnership = null
-    useSettingsStore.getState().replaceHotkeyOverrides(ownership.standaloneOverrides)
-  }
+  return dispose
 }
