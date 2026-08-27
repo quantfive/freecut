@@ -5,6 +5,7 @@ import {
   renameTrackForKind,
   type TrackKind,
 } from './classic-tracks'
+import { resolveEffectiveTrackStates } from './group-utils'
 
 export type LinkedDragDropZone = 'video' | 'audio'
 
@@ -41,6 +42,17 @@ export interface LinkedDragCohortItem {
 export interface LinkedDragCohortTrackTargetResult {
   tracks: TimelineTrack[]
   trackAssignments: Map<string, string>
+}
+
+function getEffectiveTrackById(
+  tracks: TimelineTrack[],
+  trackId: string,
+): TimelineTrack | undefined {
+  return resolveEffectiveTrackStates(tracks).find((track) => track.id === trackId)
+}
+
+function isTrackEffectivelyLocked(tracks: TimelineTrack[], trackId: string): boolean {
+  return getEffectiveTrackById(tracks, trackId)?.locked !== false
 }
 
 function getKindTracks(tracks: TimelineTrack[], kind: TrackKind): TimelineTrack[] {
@@ -181,7 +193,13 @@ function upgradeCohortSourceTracks(
   for (const draggedItem of draggedItems) {
     const kind = getDraggedItemTrackKind(draggedItem.type)
     const sourceTrack = workingTracks.find((track) => track.id === draggedItem.initialTrackId)
-    if (!sourceTrack || sourceTrack.isGroup || sourceTrack.locked) return null
+    if (
+      !sourceTrack ||
+      sourceTrack.isGroup ||
+      isTrackEffectivelyLocked(workingTracks, sourceTrack.id)
+    ) {
+      return null
+    }
 
     const sourceKind = getTrackKind(sourceTrack)
     if (sourceKind !== null && sourceKind !== kind) return null
@@ -259,11 +277,16 @@ function resolveExistingCohortDrop(params: {
 }): { tracks: TimelineTrack[]; sectionDelta: number } | null {
   let workingTracks = params.tracks
   let hoveredTrack = workingTracks.find((track) => track.id === params.hoveredTrackId)
-  if (!hoveredTrack || hoveredTrack.isGroup) return null
+  if (
+    !hoveredTrack ||
+    hoveredTrack.isGroup ||
+    isTrackEffectivelyLocked(workingTracks, hoveredTrack.id)
+  ) {
+    return null
+  }
 
   let hoveredKind = getTrackKind(hoveredTrack)
   if (hoveredKind === null) {
-    if (hoveredTrack.locked) return null
     const upgradedTrack = renameTrackForKind(hoveredTrack, workingTracks, params.zoneKind)
     workingTracks = workingTracks.map((track) =>
       track.id === hoveredTrack!.id ? upgradedTrack : track,
@@ -324,9 +347,8 @@ function assignCohortTrackTargets(params: {
     })
     workingTracks = ensuredTrack.tracks
 
-    const targetTrack = workingTracks.find((track) => track.id === ensuredTrack.trackId)
-    if (!targetTrack || targetTrack.locked) return null
-    targetTrackIdBySource.set(sourcePlan.key, targetTrack.id)
+    if (isTrackEffectivelyLocked(workingTracks, ensuredTrack.trackId)) return null
+    targetTrackIdBySource.set(sourcePlan.key, ensuredTrack.trackId)
   }
 
   const trackAssignments = new Map<string, string>()
@@ -431,6 +453,11 @@ export function resolveCreateNewDragTrackTargets(params: {
 }): CreateNewDragTrackTargetResult | null {
   const { tracks, draggedItems, zone, preferredTrackHeight } = params
   if (draggedItems.length === 0) {
+    return null
+  }
+  if (
+    draggedItems.some((draggedItem) => isTrackEffectivelyLocked(tracks, draggedItem.initialTrackId))
+  ) {
     return null
   }
 
@@ -592,7 +619,11 @@ export function resolveLinkedDragTrackTargets(params: {
 }): LinkedDragTrackTargetResult | null {
   const { tracks, hoveredTrackId, zone, createNew = false, preferredTrackHeight } = params
   const hoveredTrack = tracks.find((track) => track.id === hoveredTrackId)
-  if (!hoveredTrack) {
+  if (
+    !hoveredTrack ||
+    hoveredTrack.isGroup ||
+    (!createNew && isTrackEffectivelyLocked(tracks, hoveredTrackId))
+  ) {
     return null
   }
 
@@ -626,7 +657,7 @@ export function resolveLinkedDragTrackTargets(params: {
   let sectionIndex: number
   const hoveredTrackNumber = hoveredKind ? getClassicTrackNumber(hoveredTrack, hoveredKind) : null
 
-  if (!hoveredTrack.locked && (hoveredKind === zoneKind || hoveredKind === null)) {
+  if (hoveredKind === zoneKind || hoveredKind === null) {
     const upgradedTrack = renameTrackForKind(hoveredTrack, workingTracks, zoneKind)
     if (upgradedTrack !== hoveredTrack) {
       workingTracks = workingTracks.map((track) =>
@@ -680,6 +711,13 @@ export function resolveLinkedDragTrackTargets(params: {
           preferredTrackHeight,
         })
   workingTracks = ensuredCompanionTrack.tracks
+
+  if (
+    isTrackEffectivelyLocked(workingTracks, zoneTrackId) ||
+    isTrackEffectivelyLocked(workingTracks, ensuredCompanionTrack.trackId)
+  ) {
+    return null
+  }
 
   if (zone === 'video') {
     return {

@@ -10,7 +10,10 @@ import {
   frameToPixelsNow,
 } from '@/features/timeline/utils/zoom-conversions'
 import { useSnapCalculator } from './use-snap-calculator'
-import { findNearestAvailableSpace } from '../utils/collision-utils'
+import {
+  findNearestAvailableSharedOffset,
+  findNearestAvailableSpace,
+} from '../utils/collision-utils'
 import { getTrackKind } from '../utils/classic-tracks'
 import {
   expandItemIdsWithAttachedCaptions,
@@ -29,6 +32,7 @@ import { useLinkedEditPreviewStore } from '../stores/linked-edit-preview-store'
 import { DRAG_THRESHOLD_PIXELS } from '../constants'
 import { createLogger } from '@/shared/logging/logger'
 import { createRafCoalescedCallback } from '../utils/raf-coalesced-callback'
+import { resolveEffectiveTrackStates } from '../utils/group-utils'
 
 const logger = createLogger('TimelineDrag')
 
@@ -455,6 +459,33 @@ interface DraggedItemState {
   initialTrackId: string
 }
 
+function getEffectiveTrackStateById(tracks: TimelineTrack[]): ReadonlyMap<string, TimelineTrack> {
+  return new Map(resolveEffectiveTrackStates(tracks).map((track) => [track.id, track]))
+}
+
+function areItemSourceTracksUnlocked(
+  allItems: TimelineItem[],
+  tracks: TimelineTrack[],
+  itemIds: readonly string[],
+): boolean {
+  const itemById = new Map(allItems.map((currentItem) => [currentItem.id, currentItem]))
+  const effectiveTrackById = getEffectiveTrackStateById(tracks)
+
+  return itemIds.every((itemId) => {
+    const sourceItem = itemById.get(itemId)
+    const sourceTrack = sourceItem ? effectiveTrackById.get(sourceItem.trackId) : undefined
+    return sourceTrack?.locked === false
+  })
+}
+
+function areDestinationTracksUnlocked(
+  tracks: TimelineTrack[],
+  trackIds: readonly string[],
+): boolean {
+  const effectiveTrackById = getEffectiveTrackStateById(tracks)
+  return trackIds.every((trackId) => effectiveTrackById.get(trackId)?.locked === false)
+}
+
 /**
  * Resolve the full set of items a drag should move and their initial positions:
  * expand the base selection (linked items when enabled, else the raw selection
@@ -482,7 +513,11 @@ function resolveDraggedItemStates(
       : currentSelectedIds
     : linkedIds
   const itemsToDrag = expandItemIdsWithAttachedCaptions(allItems, baseItemsToDrag)
-  const unlockedItemIds = filterUnlockedItemIds(allItems, currentTracks, itemsToDrag)
+  const unlockedItemIds = filterUnlockedItemIds(
+    allItems,
+    resolveEffectiveTrackStates(currentTracks),
+    itemsToDrag,
+  )
   const isLinkedCohort = isLinkedDragCohort(allItems, itemsToDrag)
   const isBlockedByLockedLinkedItem =
     isLinkedCohort && unlockedItemIds.length !== itemsToDrag.length
@@ -753,7 +788,7 @@ export function useTimelineDrag(
     (mouseY: number, startTrackId: string, itemType: TimelineItem['type']): string | null => {
       const hoveredTrackId = getTrackIdFromMouseY(mouseY, startTrackId)
       const compatibleTrack = findCompatibleTrackForItemType({
-        tracks: tracksRef.current,
+        tracks: resolveEffectiveTrackStates(tracksRef.current),
         items: getItems(),
         itemType,
         preferredTrackId: hoveredTrackId,
@@ -827,10 +862,13 @@ export function useTimelineDrag(
    */
   const handleDragStart = useCallback(
     (e: React.MouseEvent) => {
-      // Don't allow dragging on locked tracks
-      if (trackLocked) {
-        return
-      }
+      const allItems = getItems()
+      const currentTracks = useTimelineStore.getState().tracks
+      const anchorTrack = getEffectiveTrackStateById(currentTracks).get(item.trackId)
+
+      // The caller supplies the rendered lock state, but re-read canonical
+      // effective state so a child lane cannot bypass a locked Layer Group.
+      if (trackLocked || !anchorTrack || anchorTrack.locked) return
 
       // Prevent if clicking on resize handles
       const target = e.target as HTMLElement
@@ -844,19 +882,9 @@ export function useTimelineDrag(
       const currentSelectedIds = useSelectionStore.getState().selectedItemIds
       const isInSelection = currentSelectedIds.includes(item.id)
 
-      const allItems = getItems()
-      const currentTracks = tracksRef.current
       const linkedSelectionEnabled = useEditorStore.getState().linkedSelectionEnabled
 
-      // If not in selection, select it (multi-select handled by TimelineItem's onClick).
-      // Skip when a multi-select modifier is held: replacing the selection here
-      // would wipe the existing multi-selection, and the click handler's additive
-      // toggle would then read this clip as "already selected" and remove it again.
-      const isMultiSelectClick = e.ctrlKey || e.metaKey
       const linkedIds = linkedSelectionEnabled ? getLinkedItemIds(allItems, item.id) : [item.id]
-      if (!isInSelection && !isMultiSelectClick) {
-        selectItems(linkedIds)
-      }
 
       // Determine which items to drag and snapshot their initial positions
       const { baseItemsToDrag, draggedItems, isLinkedCohort, isBlockedByLockedLinkedItem } =
@@ -868,6 +896,18 @@ export function useTimelineDrag(
           linkedIds,
           linkedSelectionEnabled,
         )
+      if (isBlockedByLockedLinkedItem || draggedItems.length === 0) {
+        isLinkedCohortDragRef.current = false
+        return
+      }
+
+      // Only mutate selection after the complete cohort passes source-lock
+      // validation. A rejected linked gesture is otherwise not atomic.
+      const isMultiSelectClick = e.ctrlKey || e.metaKey
+      if (!isInSelection && !isMultiSelectClick) {
+        selectItems(linkedIds)
+      }
+
       // Compare cohort *contents*, not just lengths: a same-size but
       // differently-composed drag cohort (e.g. linked items swapped in) must
       // still re-sync the selection.
@@ -877,11 +917,6 @@ export function useTimelineDrag(
         baseItemsToDrag.every((id) => selectedIdSet.has(id))
       if (isInSelection && !cohortMatchesSelection) {
         selectItems(baseItemsToDrag)
-      }
-
-      if (isBlockedByLockedLinkedItem || draggedItems.length === 0) {
-        isLinkedCohortDragRef.current = false
-        return
       }
 
       isLinkedCohortDragRef.current = isLinkedCohort
@@ -1168,31 +1203,24 @@ export function useTimelineDrag(
           durationInFrames: number
         }>
 
-        // Wall-clamp the group: find tightest constraint across all items,
-        // then shift the entire group by the same delta so they stay together.
+        // Resolve one offset against every destination lane. Per-item wall
+        // clamps can move a previously clear member into another blocker.
         if (!isAltDragRef.current) {
           const groupExcludeIds = new Set(previewMovedItems.map((m) => m.id))
-          let wallClampDelta = 0
-          for (const previewItem of previewMovedItems) {
-            const clamped = clampToTrackWalls(
-              previewItem.newFrom,
-              previewItem.durationInFrames,
-              previewItem.newTrackId,
-              groupExcludeIds,
-              currentItems,
-              currentItemsByTrackId,
-            )
-            const itemDelta = clamped - previewItem.newFrom
-            // Pick the tightest (smallest magnitude) clamp in each direction
-            if (itemDelta < 0 && (wallClampDelta >= 0 || itemDelta > wallClampDelta)) {
-              wallClampDelta = itemDelta
-            } else if (itemDelta > 0 && (wallClampDelta <= 0 || itemDelta < wallClampDelta)) {
-              wallClampDelta = itemDelta
-            }
-          }
-          if (wallClampDelta !== 0) {
+          const previewBlockers = currentItems.filter(
+            (currentItem) => !groupExcludeIds.has(currentItem.id),
+          )
+          const sharedPreviewOffset = findNearestAvailableSharedOffset(
+            previewMovedItems.map((previewItem) => ({
+              trackId: previewItem.newTrackId,
+              from: previewItem.newFrom,
+              durationInFrames: previewItem.durationInFrames,
+            })),
+            previewBlockers,
+          )
+          if (sharedPreviewOffset !== null && sharedPreviewOffset !== 0) {
             for (const previewItem of previewMovedItems) {
-              previewItem.newFrom += wallClampDelta
+              previewItem.newFrom += sharedPreviewOffset
             }
           }
         }
@@ -1312,19 +1340,27 @@ export function useTimelineDrag(
       const deltaFrames = pixelsToFramePreciseRef.current(deltaX)
 
       const currentItems = getItems()
+      const currentTracks = useTimelineStore.getState().tracks
+      const hasLockedSource = !areItemSourceTracksUnlocked(
+        currentItems,
+        currentTracks,
+        dragState.draggedItems.map((draggedItem) => draggedItem.id),
+      )
       const dropTarget = getTrackDropTarget(dragState.currentMouseY, dragState.startTrackId)
-      const resolvedTrackResolution = resolveDraggedTrackTargets({
-        items: currentItems,
-        draggedItems: dragState.draggedItems,
-        anchorItemId: dragState.itemId,
-        isLinkedCohort: isLinkedCohortDragRef.current,
-        tracks: tracksRef.current,
-        dropTarget,
-        preferredTrackHeight:
-          tracksRef.current.find((track) => track.id === dropTarget.trackId)?.height ??
-          tracksRef.current.find((track) => track.id === dragState.startTrackId)?.height ??
-          64,
-      })
+      const resolvedTrackResolution = hasLockedSource
+        ? { trackTargets: null, isLinkedCohort: isLinkedCohortDragRef.current }
+        : resolveDraggedTrackTargets({
+            items: currentItems,
+            draggedItems: dragState.draggedItems,
+            anchorItemId: dragState.itemId,
+            isLinkedCohort: isLinkedCohortDragRef.current,
+            tracks: currentTracks,
+            dropTarget,
+            preferredTrackHeight:
+              currentTracks.find((track) => track.id === dropTarget.trackId)?.height ??
+              currentTracks.find((track) => track.id === dragState.startTrackId)?.height ??
+              64,
+          })
       const resolvedTrackTargets = resolvedTrackResolution.trackTargets
       const hasIncompleteLinkedTrackTargets =
         resolvedTrackResolution.isLinkedCohort &&
@@ -1335,18 +1371,23 @@ export function useTimelineDrag(
           ))
 
       // Calculate new track for anchor item
-      const newTrackId = hasIncompleteLinkedTrackTargets
-        ? null
-        : (resolvedTrackTargets?.trackAssignments.get(dragState.itemId) ??
-          getCompatibleTrackIdFromMouseY(
-            dragState.currentMouseY,
-            dragState.startTrackId,
-            item.type,
-          ))
+      const newTrackId =
+        hasLockedSource || hasIncompleteLinkedTrackTargets
+          ? null
+          : (resolvedTrackTargets?.trackAssignments.get(dragState.itemId) ??
+            getCompatibleTrackIdFromMouseY(
+              dragState.currentMouseY,
+              dragState.startTrackId,
+              item.type,
+            ))
 
       // Multi-item drag or single?
       if (newTrackId === null) {
-        logger.warn('Cannot move items to an incompatible track')
+        logger.warn(
+          hasLockedSource
+            ? 'Cannot move items from a locked track'
+            : 'Cannot move items to an incompatible track',
+        )
       } else if (dragState.draggedItems.length > 1) {
         // Multi-item drag: calculate group bounding box for snapping
         // Snap should only happen at the edges of the entire selection, not individual items
@@ -1388,7 +1429,7 @@ export function useTimelineDrag(
         // Calculate group clamp offset - if any item would go below 0, shift the whole group
         const groupClampOffset = minProposedFrame < 0 ? -minProposedFrame : 0
         const resolvedTrackIndexById = new Map(
-          tracksRef.current.map((track, index) => [track.id, index]),
+          currentTracks.map((track, index) => [track.id, index]),
         )
 
         // Multi-item drag: calculate new positions for all items
@@ -1407,7 +1448,7 @@ export function useTimelineDrag(
               isLinkedCohort: resolvedTrackResolution.isLinkedCohort,
               dropZone: dropTarget.zone,
               trackIndexById: resolvedTrackIndexById,
-              tracks: tracksRef.current,
+              tracks: currentTracks,
               anchorTrackId: dragState.startTrackId,
               targetAnchorTrackId: newTrackId,
             })
@@ -1427,70 +1468,37 @@ export function useTimelineDrag(
           durationInFrames: number
         }>
 
-        // For multi-item drag: check if ANY item would collide, and if so, snap the whole group forward
-        // Find the earliest collision among all moved items
         const draggedItemIds = movedItems.map((m) => m.id)
         // For alt-drag (duplicate), include all items in collision check since originals stay in place
         const itemsExcludingDragged = isAltDrag
           ? currentItems
           : currentItems.filter((i) => !draggedItemIds.includes(i.id))
 
-        let maxSnapForward = 0 // largest positive shift needed
-        let maxSnapBackward = 0 // largest negative shift needed (stored as negative)
-
-        for (const movedItem of movedItems) {
-          const finalPosition = findNearestAvailableSpace(
-            movedItem.newFrom,
-            movedItem.durationInFrames,
-            movedItem.newTrackId,
-            itemsExcludingDragged,
-          )
-
-          if (finalPosition === null) {
-            logger.warn(
-              isAltDrag
-                ? 'Cannot duplicate items: no available space'
-                : 'Cannot move items: no available space',
+        const destinationTracks = resolvedTrackTargets?.tracks ?? currentTracks
+        const destinationsUnlocked = areDestinationTracksUnlocked(
+          destinationTracks,
+          movedItems.map((movedItem) => movedItem.newTrackId),
+        )
+        const groupSnapDelta = destinationsUnlocked
+          ? findNearestAvailableSharedOffset(
+              movedItems.map((movedItem) => ({
+                trackId: movedItem.newTrackId,
+                from: movedItem.newFrom,
+                durationInFrames: movedItem.durationInFrames,
+              })),
+              itemsExcludingDragged,
             )
-            // Clean up and cancel - defer drag state to avoid render cascade
-            if (elementRef?.current) {
-              elementRef.current.style.transform = ''
-            }
-            dragOffsetRef.current = { x: 0, y: 0 }
-            dragVisualTopByTrackIdRef.current.clear()
-            dragPreviewOffsetByItemRef.current = {}
-            clearLargeAltDragCanvas()
-            clearLinkedMovePreview()
-            prevSnapTargetRef.current = null
-            magneticSnapTargetsRef.current = []
-            dragStateRef.current = null
-            isAltDragRef.current = false
-            clearGlobalDragCursor()
-            document.body.style.userSelect = ''
-            setIsDragging(false)
-            setDragOffset({ x: 0, y: 0 })
-            queueMicrotask(() => {
-              setActiveSnapTarget(null)
-              setActiveLinkedDropTarget(null)
-              setDragState(null)
-            })
-            return
-          }
+          : null
 
-          const snapAmount = finalPosition - movedItem.newFrom
-          if (snapAmount > maxSnapForward) {
-            maxSnapForward = snapAmount
-          }
-          if (snapAmount < maxSnapBackward) {
-            maxSnapBackward = snapAmount
-          }
-        }
-
-        // Pick whichever direction has the larger correction needed
-        const groupSnapDelta =
-          Math.abs(maxSnapForward) >= Math.abs(maxSnapBackward) ? maxSnapForward : maxSnapBackward
-
-        if (isAltDrag) {
+        if (groupSnapDelta === null) {
+          logger.warn(
+            destinationsUnlocked
+              ? isAltDrag
+                ? 'Cannot duplicate items: no available space'
+                : 'Cannot move items: no available space'
+              : 'Cannot move items to a locked track',
+          )
+        } else if (isAltDrag) {
           // ALT-DRAG: Duplicate items at new positions
           const itemIds = movedItems.map((m) => m.id)
           const positions = movedItems.map((m) => ({
@@ -1538,12 +1546,16 @@ export function useTimelineDrag(
         const itemsExcludingDragged = isAltDrag
           ? currentItems
           : currentItems.filter((i) => i.id !== item.id)
-        const finalFrame = findNearestAvailableSpace(
-          proposedFrame,
-          item.durationInFrames,
-          newTrackId,
-          itemsExcludingDragged,
-        )
+        const destinationTracks = resolvedTrackTargets?.tracks ?? currentTracks
+        const destinationUnlocked = areDestinationTracksUnlocked(destinationTracks, [newTrackId])
+        const finalFrame = destinationUnlocked
+          ? findNearestAvailableSpace(
+              proposedFrame,
+              item.durationInFrames,
+              newTrackId,
+              itemsExcludingDragged,
+            )
+          : null
 
         if (finalFrame !== null) {
           const roundedFinalFrame = Math.round(finalFrame)
@@ -1575,9 +1587,11 @@ export function useTimelineDrag(
         } else {
           // No space available - cancel drag (keep at original position)
           logger.warn(
-            isAltDrag
-              ? 'Cannot duplicate item: no available space'
-              : 'Cannot move item: no available space',
+            destinationUnlocked
+              ? isAltDrag
+                ? 'Cannot duplicate item: no available space'
+                : 'Cannot move item: no available space'
+              : 'Cannot move item to a locked track',
           )
         }
       }

@@ -109,6 +109,33 @@ describe('resolveLinkedDragTrackTargets', () => {
       name: 'A2',
     })
   })
+
+  it('rejects a hovered child lane that inherits a lock from its parent group', () => {
+    const result = resolveLinkedDragTrackTargets({
+      tracks: [
+        makeTrack({
+          id: 'locked-group',
+          name: 'Locked Group',
+          order: 0,
+          isGroup: true,
+          locked: true,
+        }),
+        makeTrack({
+          id: 'v1',
+          name: 'V1',
+          kind: 'video',
+          order: 1,
+          parentTrackId: 'locked-group',
+        }),
+        makeTrack({ id: 'a1', name: 'A1', kind: 'audio', order: 2 }),
+      ],
+      hoveredTrackId: 'v1',
+      zone: 'video',
+      preferredTrackHeight: 80,
+    })
+
+    expect(result).toBeNull()
+  })
 })
 
 describe('resolveCreateNewDragTrackTargets', () => {
@@ -316,6 +343,62 @@ describe('resolveLinkedCohortDragTrackTargets', () => {
       tracks: sectionTracks.map((track) =>
         track.id === 'a1' ? { ...track, locked: true } : track,
       ),
+      draggedItems: [
+        { id: 'video-1', initialTrackId: 'v1', type: 'video' },
+        { id: 'audio-1', initialTrackId: 'a1', type: 'audio' },
+      ],
+      anchorItemId: 'video-1',
+      anchorRelatedItemIds: ['video-1', 'audio-1'],
+      hoveredTrackId: 'v2',
+      zone: 'video',
+      preferredTrackHeight: 80,
+    })
+
+    expect(result).toBeNull()
+  })
+
+  it('rejects a source lane that inherits a lock from its parent group', () => {
+    const result = resolveLinkedCohortDragTrackTargets({
+      tracks: [
+        ...sectionTracks.map((track) =>
+          track.id === 'a1' ? { ...track, parentTrackId: 'locked-group' } : track,
+        ),
+        makeTrack({
+          id: 'locked-group',
+          name: 'Locked Group',
+          order: 6,
+          isGroup: true,
+          locked: true,
+        }),
+      ],
+      draggedItems: [
+        { id: 'video-1', initialTrackId: 'v1', type: 'video' },
+        { id: 'audio-1', initialTrackId: 'a1', type: 'audio' },
+      ],
+      anchorItemId: 'video-1',
+      anchorRelatedItemIds: ['video-1', 'audio-1'],
+      hoveredTrackId: 'v2',
+      zone: 'video',
+      preferredTrackHeight: 80,
+    })
+
+    expect(result).toBeNull()
+  })
+
+  it('rejects an implicit destination lane that inherits a parent group lock', () => {
+    const result = resolveLinkedCohortDragTrackTargets({
+      tracks: [
+        ...sectionTracks.map((track) =>
+          track.id === 'a2' ? { ...track, parentTrackId: 'locked-group' } : track,
+        ),
+        makeTrack({
+          id: 'locked-group',
+          name: 'Locked Group',
+          order: 6,
+          isGroup: true,
+          locked: true,
+        }),
+      ],
       draggedItems: [
         { id: 'video-1', initialTrackId: 'v1', type: 'video' },
         { id: 'audio-1', initialTrackId: 'a1', type: 'audio' },
