@@ -239,6 +239,149 @@ describe('runPipelinedFrameLoop', () => {
     },
   )
 
+  it('preserves a render rejection boundary over queued encode-success cleanup', async () => {
+    const renderError = new Error('render source rejected first')
+    const closeError = new Error('sample close ran before the render observer')
+    let closeCount = 0
+    const sample: FakeSample = {
+      frame: 0,
+      closed: false,
+      close() {
+        closeCount++
+        this.closed = true
+        throw closeError
+      },
+    }
+
+    const outcome = runPipelinedFrameLoop({
+      totalFrames: 2,
+      renderFrame: (frame, reportFailure) => {
+        if (frame === 0) return Promise.resolve()
+
+        // The encode-success continuation is already queued, so it will run
+        // sample.close() before this rejection observer. The render rejection
+        // is nevertheless a primary source boundary and must own the result.
+        const rendering = Promise.reject(renderError)
+        void rendering.catch(reportFailure)
+        return rendering
+      },
+      captureSample: () => sample,
+      encodeSample: (_sample, _keyFrame, reportFailure) => {
+        const encoding = Promise.resolve()
+        void encoding.catch(reportFailure)
+        return encoding
+      },
+      onAbort: () => Promise.resolve(),
+      onFrameProgress: () => undefined,
+    }).then(
+      () => null,
+      (error: unknown) => error,
+    )
+
+    const error = await outcome
+    expect(error).toBe(renderError)
+    expect(closeCount).toBe(1)
+  })
+
+  it('preserves an abort boundary over a later synchronous render throw', async () => {
+    const controller = new AbortController()
+    const renderError = new Error('render threw after abort')
+    const onAbort = vi.fn(() => Promise.resolve())
+
+    const error = await runPipelinedFrameLoop({
+      totalFrames: 1,
+      signal: controller.signal,
+      renderFrame: () => {
+        controller.abort()
+        throw renderError
+      },
+      captureSample: () => {
+        throw new Error('capture must not run')
+      },
+      encodeSample: () => Promise.resolve(),
+      onAbort,
+      onFrameProgress: () => undefined,
+    }).then(
+      () => null,
+      (failure: unknown) => failure,
+    )
+
+    expect(error).toBeInstanceOf(DOMException)
+    expect((error as DOMException).name).toBe('AbortError')
+    expect(onAbort).toHaveBeenCalledOnce()
+  })
+
+  it('lets an already-queued render rejection observer beat a later abort publication', async () => {
+    const controller = new AbortController()
+    const renderError = new Error('render rejected before abort')
+
+    const error = await runPipelinedFrameLoop({
+      totalFrames: 1,
+      signal: controller.signal,
+      renderFrame: (_frame, reportFailure) => {
+        const rendering = Promise.reject(renderError)
+        void rendering.catch(reportFailure)
+        controller.abort()
+        return rendering
+      },
+      captureSample: () => {
+        throw new Error('capture must not run')
+      },
+      encodeSample: () => Promise.resolve(),
+      onAbort: () => Promise.resolve(),
+      onFrameProgress: () => undefined,
+    }).then(
+      () => null,
+      (failure: unknown) => failure,
+    )
+
+    expect(error).toBe(renderError)
+  })
+
+  it('preserves an established primary when listener removal throws', async () => {
+    const controller = new AbortController()
+    const renderError = new Error('primary render failure')
+    const listenerError = new Error('listener removal failed')
+    const removeListener = vi
+      .spyOn(controller.signal, 'removeEventListener')
+      .mockImplementation(() => {
+        throw listenerError
+      })
+
+    try {
+      const { run } = createHarness(1, {
+        signal: controller.signal,
+        renderImpl: () => {
+          throw renderError
+        },
+      })
+
+      await expect(run()).rejects.toBe(renderError)
+      expect(removeListener).toHaveBeenCalledOnce()
+    } finally {
+      removeListener.mockRestore()
+    }
+  })
+
+  it('surfaces listener-removal failure when there is no primary failure', async () => {
+    const controller = new AbortController()
+    const listenerError = new Error('listener removal failed')
+    const removeListener = vi
+      .spyOn(controller.signal, 'removeEventListener')
+      .mockImplementation(() => {
+        throw listenerError
+      })
+
+    try {
+      const { run } = createHarness(1, { signal: controller.signal })
+
+      await expect(run()).rejects.toBe(listenerError)
+      expect(removeListener).toHaveBeenCalledOnce()
+    } finally {
+      removeListener.mockRestore()
+    }
+  })
+
   it('encodes all frames in order and closes every sample', async () => {
     const { events, samples, run } = createHarness(5)
     await run()
