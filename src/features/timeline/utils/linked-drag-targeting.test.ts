@@ -357,18 +357,25 @@ describe('resolveLinkedCohortDragTrackTargets', () => {
     expect(result).toBeNull()
   })
 
-  it('rejects a source lane that inherits a lock from its parent group', () => {
+  it('rejects a source lane that inherits a lock through nested groups', () => {
     const result = resolveLinkedCohortDragTrackTargets({
       tracks: [
         ...sectionTracks.map((track) =>
-          track.id === 'a1' ? { ...track, parentTrackId: 'locked-group' } : track,
+          track.id === 'a1' ? { ...track, parentTrackId: 'inner-group' } : track,
         ),
         makeTrack({
-          id: 'locked-group',
-          name: 'Locked Group',
+          id: 'outer-group',
+          name: 'Outer Group',
           order: 6,
           isGroup: true,
           locked: true,
+        }),
+        makeTrack({
+          id: 'inner-group',
+          name: 'Inner Group',
+          order: 7,
+          isGroup: true,
+          parentTrackId: 'outer-group',
         }),
       ],
       draggedItems: [
@@ -385,18 +392,25 @@ describe('resolveLinkedCohortDragTrackTargets', () => {
     expect(result).toBeNull()
   })
 
-  it('rejects an implicit destination lane that inherits a parent group lock', () => {
+  it('rejects an implicit destination lane that inherits a lock through nested groups', () => {
     const result = resolveLinkedCohortDragTrackTargets({
       tracks: [
         ...sectionTracks.map((track) =>
-          track.id === 'a2' ? { ...track, parentTrackId: 'locked-group' } : track,
+          track.id === 'a2' ? { ...track, parentTrackId: 'inner-group' } : track,
         ),
         makeTrack({
-          id: 'locked-group',
-          name: 'Locked Group',
+          id: 'outer-group',
+          name: 'Outer Group',
           order: 6,
           isGroup: true,
           locked: true,
+        }),
+        makeTrack({
+          id: 'inner-group',
+          name: 'Inner Group',
+          order: 7,
+          isGroup: true,
+          parentTrackId: 'outer-group',
         }),
       ],
       draggedItems: [

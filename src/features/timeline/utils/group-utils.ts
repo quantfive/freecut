@@ -1,5 +1,88 @@
 import type { TimelineItem, TimelineTrack } from '@/types/timeline'
 
+type EffectiveTrackState = Pick<TimelineTrack, 'locked' | 'muted' | 'visible' | 'solo'>
+
+const ROOT_EFFECTIVE_TRACK_STATE: EffectiveTrackState = {
+  locked: false,
+  muted: false,
+  visible: true,
+  solo: false,
+}
+const INVALID_PARENT_EFFECTIVE_TRACK_STATE: EffectiveTrackState = {
+  ...ROOT_EFFECTIVE_TRACK_STATE,
+  // A malformed ancestry chain must not make an otherwise inherited lock
+  // disappear. Other properties retain their canonical neutral defaults.
+  locked: true,
+}
+
+function inheritTrackState(
+  track: TimelineTrack,
+  parentState: EffectiveTrackState,
+): EffectiveTrackState {
+  return {
+    locked: track.locked || parentState.locked,
+    muted: track.muted || parentState.muted,
+    visible: track.visible !== false && parentState.visible,
+    solo: track.solo || parentState.solo,
+  }
+}
+
+interface GroupAncestryTrace {
+  path: TimelineTrack[]
+  parentState: EffectiveTrackState
+  cycleStartIndex: number | null
+}
+
+function traceGroupAncestry(
+  groupId: string,
+  groupsById: ReadonlyMap<string, TimelineTrack>,
+  effectiveGroupStateById: ReadonlyMap<string, EffectiveTrackState>,
+): GroupAncestryTrace {
+  const path: TimelineTrack[] = []
+  const pathIndexById = new Map<string, number>()
+  let currentId = groupId
+
+  while (true) {
+    const knownState = effectiveGroupStateById.get(currentId)
+    if (knownState) return { path, parentState: knownState, cycleStartIndex: null }
+
+    const cycleStartIndex = pathIndexById.get(currentId)
+    if (cycleStartIndex !== undefined) {
+      return {
+        path,
+        parentState: INVALID_PARENT_EFFECTIVE_TRACK_STATE,
+        cycleStartIndex,
+      }
+    }
+
+    const currentGroup = groupsById.get(currentId)
+    if (!currentGroup) {
+      return {
+        path,
+        parentState: INVALID_PARENT_EFFECTIVE_TRACK_STATE,
+        cycleStartIndex: null,
+      }
+    }
+
+    pathIndexById.set(currentId, path.length)
+    path.push(currentGroup)
+    if (!currentGroup.parentTrackId) {
+      return { path, parentState: ROOT_EFFECTIVE_TRACK_STATE, cycleStartIndex: null }
+    }
+    currentId = currentGroup.parentTrackId
+  }
+}
+
+function foldTrackStates(
+  tracks: readonly TimelineTrack[],
+  parentState: EffectiveTrackState,
+): EffectiveTrackState {
+  return tracks.reduceRight(
+    (effectiveState, track) => inheritTrackState(track, effectiveState),
+    parentState,
+  )
+}
+
 /**
  * Build a set of track IDs whose items should contribute snap targets.
  */
