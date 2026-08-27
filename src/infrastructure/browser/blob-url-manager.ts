@@ -29,6 +29,8 @@ interface BlobUrlEntry {
 class BlobUrlManager {
   private entries = new Map<string, BlobUrlEntry>()
   private version = 0
+  private invalidationEpoch = 0
+  private mediaInvalidationEpochs = new Map<string, number>()
   private listeners = new Set<() => void>()
 
   /** Notify React subscribers that blob URLs have changed */
@@ -107,6 +109,19 @@ class BlobUrlManager {
   }
 
   /**
+   * Token identifying the currently valid source generation for one media id.
+   * Resolvers capture this before async storage reads and must discard a
+   * completion when invalidation advances either component.
+   */
+  getEpoch(mediaId: string): string {
+    return `${this.invalidationEpoch}:${this.mediaInvalidationEpochs.get(mediaId) ?? 0}`
+  }
+
+  private advanceMediaEpoch(mediaId: string): void {
+    this.mediaInvalidationEpochs.set(mediaId, (this.mediaInvalidationEpochs.get(mediaId) ?? 0) + 1)
+  }
+
+  /**
    * Reverse-lookup: find the mediaId that owns a given blob URL.
    * Returns null if the URL is not tracked.
    */
@@ -122,10 +137,12 @@ class BlobUrlManager {
    * Used when the underlying media file has changed (e.g., after relinking).
    */
   invalidate(mediaId: string): void {
+    this.advanceMediaEpoch(mediaId)
     const entry = this.entries.get(mediaId)
-    if (!entry) return
-    this.revokeEntry(entry)
-    this.entries.delete(mediaId)
+    if (entry) {
+      this.revokeEntry(entry)
+      this.entries.delete(mediaId)
+    }
     this.notify()
   }
 
@@ -159,6 +176,8 @@ class BlobUrlManager {
    * Consumers will re-acquire fresh URLs on next resolve.
    */
   invalidateAll(): void {
+    this.invalidationEpoch++
+    this.mediaInvalidationEpochs.clear()
     for (const entry of this.entries.values()) {
       this.revokeEntry(entry)
     }
@@ -170,6 +189,8 @@ class BlobUrlManager {
    * Release all blob URLs (e.g., on project cleanup).
    */
   releaseAll(): void {
+    this.invalidationEpoch++
+    this.mediaInvalidationEpochs.clear()
     for (const [mediaId, entry] of this.entries) {
       this.revokeEntry(entry)
       logger.debug(`Revoked blob URL for media ${mediaId}`)

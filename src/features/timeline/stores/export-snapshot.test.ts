@@ -10,6 +10,7 @@ import { useItemsStore } from './items-store'
 import { useCompositionsStore } from './compositions-store'
 import { useSequencesStore } from './sequences-store'
 import { useCompositionNavigationStore } from './composition-navigation-store'
+import { useMarkersStore } from './markers-store'
 import { usePlaybackStore } from '@/shared/state/playback'
 import {
   getActiveExportSequenceId,
@@ -60,6 +61,55 @@ function seedNestedSequence(): void {
     ],
     busAudioEq: { enabled: true, lowGainDb: 4 },
   })
+}
+
+function makeCompositionEntry(
+  id: string,
+  compositionId: string,
+  trackId: string,
+  durationInFrames: number,
+): CompositionItem {
+  return {
+    ...makeVideoItem({ id, trackId, durationInFrames }),
+    type: 'composition',
+    compositionId,
+    compositionWidth: 640,
+    compositionHeight: 360,
+  } as unknown as CompositionItem
+}
+
+function seedMainChildGrandchild(): void {
+  useCompositionsStore.getState().addComposition({
+    id: 'grandchild',
+    name: 'grandchild',
+    tracks: [makeTrack({ id: 'grandchild-v1', name: 'V1', kind: 'video', order: 0 })],
+    items: [
+      makeVideoItem({
+        id: 'grandchild-clip',
+        trackId: 'grandchild-v1',
+        durationInFrames: 20,
+      }),
+    ],
+    transitions: [],
+    keyframes: [],
+    fps: 24,
+    width: 640,
+    height: 360,
+    durationInFrames: 20,
+  })
+  useCompositionsStore.getState().addComposition({
+    id: 'child',
+    name: 'child',
+    tracks: [makeTrack({ id: 'child-v1', name: 'V1', kind: 'video', order: 0 })],
+    items: [makeCompositionEntry('grandchild-entry', 'grandchild', 'child-v1', 20)],
+    transitions: [],
+    keyframes: [],
+    fps: 24,
+    width: 640,
+    height: 360,
+    durationInFrames: 20,
+  })
+  useItemsStore.getState().setItems([makeCompositionEntry('child-entry', 'child', 'track-v1', 20)])
 }
 
 describe('export-snapshot sourcing', () => {
@@ -167,5 +217,37 @@ describe('export-snapshot sourcing', () => {
     expect(child.busAudioEq).toEqual(childEq)
     expect(sequence.busAudioEq).toEqual(sequenceEq)
     expect(main.busAudioEq).toEqual(mainEq)
+  })
+
+  it('keeps Main, child, and grandchild EQ and ranges owned by their actual composition', () => {
+    const mainEq = { enabled: true, lowGainDb: 1 }
+    const childEq = { enabled: true, lowGainDb: 5 }
+    const grandchildEq = { enabled: true, lowGainDb: 9 }
+    seedMainChildGrandchild()
+
+    usePlaybackStore.getState().setBusAudioEq(mainEq)
+    useMarkersStore.getState().setInOutPoints(2, 18)
+    useCompositionNavigationStore.getState().enterComposition('child', 'child', 'child-entry')
+
+    usePlaybackStore.getState().setBusAudioEq(childEq)
+    useMarkersStore.getState().setInOutPoints(3, 15)
+    useCompositionNavigationStore
+      .getState()
+      .enterComposition('grandchild', 'grandchild', 'grandchild-entry')
+
+    usePlaybackStore.getState().setBusAudioEq(grandchildEq)
+    useMarkersStore.getState().setInOutPoints(4, 12)
+
+    const main = getExportableSequence(null)
+    const child = getExportableSequence('child')
+    const grandchild = getExportableSequence('grandchild')
+
+    expect(main).toMatchObject({ busAudioEq: mainEq, inPoint: 2, outPoint: 18 })
+    expect(child).toMatchObject({ busAudioEq: childEq, inPoint: 3, outPoint: 15 })
+    expect(grandchild).toMatchObject({
+      busAudioEq: grandchildEq,
+      inPoint: 4,
+      outPoint: 12,
+    })
   })
 })

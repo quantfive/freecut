@@ -17,7 +17,7 @@ const proxyServiceMocks = vi.hoisted(() => ({
 }))
 
 const blobUrlManagerMocks = vi.hoisted(() => ({
-  release: vi.fn(),
+  invalidate: vi.fn(),
 }))
 
 vi.mock('../services/media-library-service', () => ({
@@ -139,7 +139,7 @@ describe('createDeleteActions', () => {
     )
     expect(currentState.mediaItems.map((item) => item.id)).toEqual(['media-2'])
     expect(currentState.selectedMediaIds).toEqual([])
-    expect(blobUrlManagerMocks.release).toHaveBeenCalledWith('media-1')
+    expect(blobUrlManagerMocks.invalidate).toHaveBeenCalledWith('media-1')
     expect(proxyServiceMocks.clearProxyKey).toHaveBeenCalledWith('media-1')
   })
 
@@ -161,7 +161,7 @@ describe('createDeleteActions', () => {
     expect(currentState.mediaItems.map((item) => item.id)).toEqual(['media-1', 'media-2'])
     expect(currentState.selectedMediaIds).toEqual(['media-1'])
     expect(currentState.error).toBe('Delete failed hard')
-    expect(blobUrlManagerMocks.release).not.toHaveBeenCalled()
+    expect(blobUrlManagerMocks.invalidate).not.toHaveBeenCalled()
   })
 
   it('uses the legacy batch delete path when no project is selected', async () => {
@@ -183,7 +183,7 @@ describe('createDeleteActions', () => {
     expect(mediaLibraryServiceMocks.deleteMediaBatch).toHaveBeenCalledWith(['media-1', 'media-2'])
     expect(currentState.mediaItems).toEqual([])
     expect(currentState.selectedMediaIds).toEqual([])
-    expect(blobUrlManagerMocks.release).toHaveBeenCalledTimes(2)
+    expect(blobUrlManagerMocks.invalidate).toHaveBeenCalledTimes(2)
     expect(proxyServiceMocks.clearProxyKey).toHaveBeenCalledTimes(2)
   })
 })

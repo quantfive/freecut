@@ -123,13 +123,18 @@ const VideoPreviewBase = memo(function VideoPreviewBase({
   const livePreviewEdits = useGizmoStore((s) => s.preview)
   const [playerDisplayedFrame, setPlayerDisplayedFrame] = useState<number | null>(null)
   const latestPlayerDisplayedFrameRef = useRef<number | null>(null)
-  const [splitAfterRenderedFrame, setSplitAfterRenderedFrame] = useState<number | null>(null)
+  const [splitAfterPresentation, setSplitAfterPresentation] = useState<{
+    frame: number
+    structureKey: string
+  } | null>(null)
   const splitAfterRendererRef = useRef<CompositionRendererInstance | null>(null)
   const splitAfterInitPromiseRef = useRef<Promise<CompositionRendererInstance | null> | null>(null)
   const splitAfterInitGenerationRef = useRef(0)
   const splitAfterCanvasRef = useRef<OffscreenCanvas | null>(null)
   const splitAfterRendererStructureKeyRef = useRef<string | null>(null)
-  const splitAfterRenderInFlightRef = useRef(false)
+  const splitAfterRenderGenerationRef = useRef(0)
+  const splitAfterRenderOwnerRef = useRef<number | null>(null)
+  const splitAfterRenderPumpRef = useRef<() => void>(() => {})
   const splitAfterPendingFrameRef = useRef<number | null>(null)
   const {
     playerRef,
@@ -404,12 +409,12 @@ const VideoPreviewBase = memo(function VideoPreviewBase({
 
   const disposeSplitAfterRenderer = useCallback(() => {
     splitAfterInitGenerationRef.current += 1
+    splitAfterRenderGenerationRef.current += 1
     splitAfterInitPromiseRef.current = null
     splitAfterRendererStructureKeyRef.current = null
     splitAfterCanvasRef.current = null
     splitAfterPendingFrameRef.current = null
-    splitAfterRenderInFlightRef.current = false
-    setSplitAfterRenderedFrame(null)
+    setSplitAfterPresentation(null)
 
     const renderer = splitAfterRendererRef.current
     splitAfterRendererRef.current = null
@@ -428,6 +433,20 @@ const VideoPreviewBase = memo(function VideoPreviewBase({
     if (canvas.width !== backingSize.width) canvas.width = backingSize.width
     if (canvas.height !== backingSize.height) canvas.height = backingSize.height
   }, [gpuEffectsCanvasRef, playerSize, renderSize])
+
+  // A structure/source replacement can retain the same target frame, so frame
+  // readiness alone is insufficient. Retire the old split surface during the
+  // layout cleanup, before the replacement commit can paint, and use the same
+  // barrier on unmount.
+  useLayoutEffect(() => {
+    const canvas = gpuEffectsCanvasRef.current
+    return () => {
+      disposeSplitAfterRenderer()
+      if (!canvas) return
+      canvas.getContext('2d')?.clearRect(0, 0, canvas.width, canvas.height)
+      canvas.style.visibility = 'hidden'
+    }
+  }, [disposeSplitAfterRenderer, fastScrubRendererStructureKey, gpuEffectsCanvasRef])
 
   const ensureSplitAfterRenderer =
     useCallback(async (): Promise<CompositionRendererInstance | null> => {
@@ -452,6 +471,7 @@ const VideoPreviewBase = memo(function VideoPreviewBase({
           if (!ctx) return null
 
           const { createCompositionRenderer } = await importCompositionRenderer()
+          if (splitAfterInitGenerationRef.current !== initGeneration) return null
           const renderer = await createCompositionRenderer(fastScrubInputProps, canvas, ctx, {
             mode: 'preview',
             useProxyMedia: useProxy,
@@ -507,10 +527,6 @@ const VideoPreviewBase = memo(function VideoPreviewBase({
       renderSize.width,
       useProxy,
     ])
-
-  useEffect(() => {
-    disposeSplitAfterRenderer()
-  }, [disposeSplitAfterRenderer, fastScrubRendererStructureKey])
 
   // Enter the composited path in the same render that activates the editor.
   // Waiting for the timeline-wide effect scan adds a reactive round trip that
@@ -905,34 +921,38 @@ const VideoPreviewBase = memo(function VideoPreviewBase({
   useEffect(() => {
     if (stageColorGradeComparisonMode === 'split') return
     splitAfterPendingFrameRef.current = null
-    setSplitAfterRenderedFrame((frame) => (frame === null ? frame : null))
+    setSplitAfterPresentation((presentation) => (presentation === null ? presentation : null))
   }, [stageColorGradeComparisonMode])
 
   useEffect(() => {
     if (stageColorGradeComparisonMode !== 'split') return
 
     let cancelled = false
+    const renderGeneration = ++splitAfterRenderGenerationRef.current
     splitAfterPendingFrameRef.current = comparisonTargetFrame
-    // Intentionally NOT resetting `splitAfterRenderedFrame` here: the readiness
-    // check (`splitAfterRenderedFrame === comparisonTargetFrame`) already gates
-    // the overlay, so a stale frame stays hidden until the async render catches
-    // up. The previous synchronous reset fed a render cascade
-    // (displayedFrame → comparisonTargetFrame → setState → displayedFrame …)
-    // that tripped React's "maximum update depth".
+    const isCurrent = () => !cancelled && splitAfterRenderGenerationRef.current === renderGeneration
 
     const renderPendingSplitAfter = async () => {
-      if (splitAfterRenderInFlightRef.current) return
-      splitAfterRenderInFlightRef.current = true
+      if (splitAfterRenderOwnerRef.current !== null) return
+      splitAfterRenderOwnerRef.current = renderGeneration
 
       try {
-        while (!cancelled && splitAfterPendingFrameRef.current !== null) {
+        while (isCurrent() && splitAfterPendingFrameRef.current !== null) {
           const targetFrame = splitAfterPendingFrameRef.current
           splitAfterPendingFrameRef.current = null
 
           const renderer = await ensureSplitAfterRenderer()
+          if (!isCurrent()) return
           const offscreen = splitAfterCanvasRef.current
           const displayCanvas = gpuEffectsCanvasRef.current
-          if (cancelled || !renderer || !offscreen || !displayCanvas) return
+          if (
+            !renderer ||
+            !offscreen ||
+            !displayCanvas ||
+            splitAfterRendererRef.current !== renderer ||
+            splitAfterCanvasRef.current !== offscreen
+          )
+            return
 
           try {
             renderer.invalidateFrameCache({ frames: [targetFrame] })
@@ -940,35 +960,54 @@ const VideoPreviewBase = memo(function VideoPreviewBase({
             // Some renderer doubles do not support selective invalidation.
           }
           await renderer.renderFrame(targetFrame)
-          if (cancelled || splitAfterPendingFrameRef.current !== null) continue
+          if (
+            !isCurrent() ||
+            splitAfterRendererRef.current !== renderer ||
+            splitAfterCanvasRef.current !== offscreen ||
+            gpuEffectsCanvasRef.current !== displayCanvas
+          )
+            return
+          if (splitAfterPendingFrameRef.current !== null) continue
 
           const displayCtx = displayCanvas.getContext('2d')
           if (!displayCtx) return
+          if (!isCurrent()) return
           drawSourceToPreviewDisplayCanvas(displayCtx, displayCanvas, offscreen)
-          setSplitAfterRenderedFrame(targetFrame)
+          if (!isCurrent()) return
+          setSplitAfterPresentation({
+            frame: targetFrame,
+            structureKey: fastScrubRendererStructureKey,
+          })
         }
       } finally {
-        splitAfterRenderInFlightRef.current = false
-        if (!cancelled && splitAfterPendingFrameRef.current !== null) {
-          void renderPendingSplitAfter()
+        if (splitAfterRenderOwnerRef.current === renderGeneration) {
+          splitAfterRenderOwnerRef.current = null
+        }
+        if (splitAfterPendingFrameRef.current !== null) {
+          queueMicrotask(() => splitAfterRenderPumpRef.current())
         }
       }
     }
 
-    void renderPendingSplitAfter()
+    splitAfterRenderPumpRef.current = () => {
+      void renderPendingSplitAfter()
+    }
+    splitAfterRenderPumpRef.current()
 
     return () => {
       cancelled = true
+      if (splitAfterRenderGenerationRef.current === renderGeneration) {
+        splitAfterRenderGenerationRef.current += 1
+      }
     }
   }, [
     comparisonTargetFrame,
     ensureSplitAfterRenderer,
+    fastScrubRendererStructureKey,
     gpuEffectsCanvasRef,
     livePreviewEdits,
     stageColorGradeComparisonMode,
   ])
-
-  useEffect(() => () => disposeSplitAfterRenderer(), [disposeSplitAfterRenderer])
 
   const livePlayerFrame = playerRef.current?.getCurrentFrame()
   const normalizedLivePlayerFrame =
@@ -981,7 +1020,8 @@ const VideoPreviewBase = memo(function VideoPreviewBase({
   const isColorGradeComparisonFrameReady =
     comparisonDisplayedFrame === comparisonTargetFrame &&
     (isSplitGradeComparison
-      ? splitAfterRenderedFrame === comparisonTargetFrame
+      ? splitAfterPresentation?.frame === comparisonTargetFrame &&
+        splitAfterPresentation.structureKey === fastScrubRendererStructureKey
       : stageColorGradeComparisonMode === 'before' ||
         effectivePlayerDisplayedFrame === comparisonTargetFrame)
   const stageRenderedOverlayVisible = isColorGradeComparisonActive

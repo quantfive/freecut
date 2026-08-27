@@ -127,8 +127,16 @@ export function getExportableSequence(sequenceId: string | null): ExportableSequ
   if (sequenceId === null) {
     const root = getRootTimelineSnapshot(current)
     const metadata = useProjectStore.getState().currentProject?.metadata
-    // Main's audio bus / range are live when Main is active, else held aside.
-    const busAudioEq = activeTabId === null ? playback.busAudioEq : nav.mainHolder?.busAudioEq
+    // Main owns the live mixer/range only when Main itself is the loaded
+    // composition. While drilling from Main, its complete snapshot is the
+    // null-composition root stash; while another tab is active it is held in
+    // mainHolder. The active tab alone cannot distinguish Main from a drilled
+    // child because both retain a null root breadcrumb.
+    const heldRoot =
+      activeTabId === null
+        ? nav.stashStack.find((stash) => stash.compositionId === null)
+        : nav.mainHolder
+    const busAudioEq = nav.activeCompositionId === null ? playback.busAudioEq : heldRoot?.busAudioEq
     return {
       id: null,
       name: MAIN_LABEL,
@@ -143,7 +151,7 @@ export function getExportableSequence(sequenceId: string | null): ExportableSequ
       busAudioEq: cloneAudioEq(busAudioEq),
       masterBusDb: playback.masterBusDb,
       durationFrames: furthestItemEnd(root.items),
-      ...range(nav.mainHolder),
+      ...range(heldRoot),
     }
   }
 

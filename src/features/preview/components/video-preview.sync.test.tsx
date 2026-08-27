@@ -257,6 +257,7 @@ vi.mock('@/infrastructure/browser/blob-url-manager', async () => {
   return {
     blobUrlManager: {
       get: (mediaId: string) => mockState.blobUrls.get(mediaId) ?? null,
+      getEpoch: () => String(mockState.version.current),
       getMediaIdByUrl: (url: string) =>
         [...mockState.blobUrls.entries()].find(([, candidate]) => candidate === url)?.[0] ?? null,
       has: (mediaId: string) => mockState.blobUrls.has(mediaId),
@@ -548,6 +549,24 @@ function getCanvasClearRectCallCount(canvas: HTMLCanvasElement) {
       if (context.canvas !== canvas || typeof context.clearRect !== 'function') return total
       if (!('mock' in context.clearRect)) return total
       return total + (context.clearRect as { mock: { calls: unknown[] } }).mock.calls.length
+    }, 0) ?? 0
+  )
+}
+
+function getCanvasDrawImageCallCountFor(canvas: HTMLCanvasElement) {
+  const results = canvasGetContextSpy?.mock.results as
+    | Array<{ type: string; value: unknown }>
+    | undefined
+  return (
+    results?.reduce((total: number, result) => {
+      if (result.type !== 'return' || !result.value) return total
+      const context = result.value as {
+        canvas?: HTMLCanvasElement
+        drawImage?: unknown
+      }
+      if (context.canvas !== canvas || typeof context.drawImage !== 'function') return total
+      if (!('mock' in context.drawImage)) return total
+      return total + (context.drawImage as { mock: { calls: unknown[] } }).mock.calls.length
     }, 0) ?? 0
   )
 }
@@ -2066,6 +2085,96 @@ describe('VideoPreview sync behavior', () => {
       expect(container.querySelector('[data-grade-comparison-after-layer="true"]')).not.toBeNull()
       expect(screen.getByTestId('mock-player-frame')).toHaveTextContent('0')
     })
+  })
+
+  it('retires a deferred split-grade surface before same-item source replacement', async () => {
+    canvasPixelReadbackEnabled = true
+    const gradeEffect = {
+      id: 'effect-grade',
+      enabled: true,
+      effect: {
+        type: 'gpu-effect' as const,
+        gpuEffectType: 'gpu-color-wheels' as const,
+        params: { exposure: 0.5 },
+      },
+    }
+    setSingleVideoItemAtFrame({
+      id: 'item-graded-replacement',
+      src: 'blob:old-graded-source',
+      effects: [gradeEffect],
+    })
+
+    const { container } = renderDefaultPreview()
+    await waitFor(() => expect(rendererMockState.instances).toHaveLength(1))
+    act(() => {
+      useGizmoStore.getState().setColorGradeComparisonMode('split')
+    })
+
+    const splitRenderer = await waitFor(() => {
+      expect(rendererMockState.instances).toHaveLength(2)
+      expect(container.querySelector('[data-grade-comparison-after-layer="true"]')).not.toBeNull()
+      return rendererMockState.instances[1]!
+    })
+    const rendererCalls = createCompositionRendererMock.mock.calls as unknown as Array<
+      [unknown, HTMLCanvasElement]
+    >
+    const oldSplitOffscreen = rendererCalls[1]![1]
+    const gpuDisplayCanvas = container.querySelectorAll('canvas')[1] as HTMLCanvasElement
+    setMockCanvasBlank(oldSplitOffscreen, false)
+    setMockCanvasBlank(gpuDisplayCanvas, false)
+
+    let resolveOldRender: (() => void) | null = null
+    splitRenderer.renderFrame.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveOldRender = resolve
+        }),
+    )
+    act(() => {
+      useGizmoStore.getState().setEffectsPreviewNew({
+        'item-graded-replacement': [
+          { ...gradeEffect, effect: { ...gradeEffect.effect, params: { exposure: 0.8 } } },
+        ],
+      })
+    })
+    await waitFor(() => expect(resolveOldRender).not.toBeNull())
+
+    const clearCountBeforeReplacement = getCanvasClearRectCallCount(gpuDisplayCanvas)
+    const drawCountBeforeReplacement = getCanvasDrawImageCallCountFor(gpuDisplayCanvas)
+    const defaultRendererFactory = createCompositionRendererMock.getMockImplementation()!
+    createCompositionRendererMock.mockImplementation(() => new Promise<never>(() => undefined))
+
+    act(() => {
+      useItemsStore.getState().setItems([
+        {
+          id: 'item-graded-replacement',
+          type: 'video',
+          trackId: 'track-video',
+          from: 0,
+          durationInFrames: 120,
+          src: 'blob:new-graded-source',
+          effects: [gradeEffect],
+        } as unknown as TimelineItem,
+      ])
+    })
+
+    await waitFor(() => expect(splitRenderer.dispose).toHaveBeenCalledOnce())
+    expect(getCanvasClearRectCallCount(gpuDisplayCanvas)).toBeGreaterThan(
+      clearCountBeforeReplacement,
+    )
+    expect(blankCanvasState.has(gpuDisplayCanvas)).toBe(true)
+    expect(gpuDisplayCanvas.style.visibility).toBe('hidden')
+    expect(container.querySelector('[data-grade-comparison-after-layer="true"]')).toBeNull()
+
+    await act(async () => {
+      resolveOldRender?.()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(getCanvasDrawImageCallCountFor(gpuDisplayCanvas)).toBe(drawCountBeforeReplacement)
+    expect(blankCanvasState.has(gpuDisplayCanvas)).toBe(true)
+    expect(gpuDisplayCanvas.style.visibility).toBe('hidden')
+    createCompositionRendererMock.mockImplementation(defaultRendererFactory)
   })
 
   it('keeps the split after renderer warm when toggling away from split and back', async () => {

@@ -89,16 +89,40 @@ export function useClientRender(): UseClientRenderReturn {
   const [status, setStatus] = useState<ClientRenderStatus>('idle')
   const [error, setError] = useState<string | null>(null)
   const [result, setResult] = useState<ClientRenderResult | null>(null)
-  const resultRef = useRef<ClientRenderResult | null>(null)
+  const resultOwnerRef = useRef<{
+    runToken: number
+    result: ClientRenderResult
+    released: boolean
+  } | null>(null)
 
-  // AbortController for cancellation
-  const abortControllerRef = useRef<AbortController | null>(null)
-  const renderGenerationRef = useRef(0)
+  const activeRunRef = useRef<{
+    token: number
+    controller: AbortController
+  } | null>(null)
+  const latestRunTokenRef = useRef(0)
+
+  const abortActiveRun = useCallback(() => {
+    const run = activeRunRef.current
+    if (!run) return
+    activeRunRef.current = null
+    if (!run.controller.signal.aborted) run.controller.abort()
+  }, [])
+
+  const releaseOwnedResult = useCallback(
+    (
+      owner: { runToken: number; result: ClientRenderResult; released: boolean } | null | undefined,
+    ) => {
+      if (!owner || owner.released) return
+      owner.released = true
+      void releaseTemporaryExportOutput(owner.result)
+    },
+    [],
+  )
 
   /**
    * Handle progress updates from the render engine
    */
-  const handleProgress = useCallback((progressData: RenderProgress) => {
+  const applyProgress = useCallback((progressData: RenderProgress) => {
     setProgress(progressData.progress)
     setProgressMessage(progressData.message)
     setRenderedFrames(progressData.currentFrame)
@@ -128,28 +152,35 @@ export function useClientRender(): UseClientRenderReturn {
     async (settings: ExportSettings | ExtendedExportSettings, sequence?: ExportableSequence) => {
       const opId = createOperationId()
       const event = log.startEvent('render', opId)
-      const previousController = abortControllerRef.current
-      previousController?.abort()
-      const generation = ++renderGenerationRef.current
+      const runToken = ++latestRunTokenRef.current
+      abortActiveRun()
       const controller = new AbortController()
-      abortControllerRef.current = controller
+      const run = { token: runToken, controller }
+      activeRunRef.current = run
       let temporaryResult: ClientRenderResult | null = null
 
-      const releaseResult = (ownedResult: ClientRenderResult | null | undefined) => {
-        if (!ownedResult) return
-        if (resultRef.current === ownedResult) resultRef.current = null
-        void releaseTemporaryExportOutput(ownedResult)
+      const releaseTemporaryResult = () => {
+        const ownedResult = temporaryResult
+        temporaryResult = null
+        if (ownedResult) void releaseTemporaryExportOutput(ownedResult)
       }
+      const isActive = () =>
+        activeRunRef.current === run &&
+        latestRunTokenRef.current === runToken &&
+        !controller.signal.aborted
       const ensureActive = () => {
-        if (generation !== renderGenerationRef.current || controller.signal.aborted) {
+        if (!isActive()) {
           throw new DOMException('Render cancelled', 'AbortError')
         }
       }
+      const handleRunProgress = (progressData: RenderProgress) => {
+        if (isActive()) applyProgress(progressData)
+      }
 
       try {
-        const previousResult = resultRef.current
-        resultRef.current = null
-        releaseResult(previousResult)
+        const previousResultOwner = resultOwnerRef.current
+        resultOwnerRef.current = null
+        releaseOwnedResult(previousResultOwner)
         setIsExporting(true)
         setProgress(0)
         setProgressMessage(undefined)
@@ -199,14 +230,18 @@ export function useClientRender(): UseClientRenderReturn {
             masterBusDb,
           },
           signal,
-          handleProgress,
+          handleRunProgress,
         )
         ensureActive()
 
         if (smartCopy.result) {
           temporaryResult = smartCopy.result
-          resultRef.current = temporaryResult
           setResult(temporaryResult)
+          resultOwnerRef.current = {
+            runToken,
+            result: temporaryResult,
+            released: false,
+          }
           temporaryResult = null
           setStatus('completed')
           setProgress(100)
@@ -325,7 +360,7 @@ export function useClientRender(): UseClientRenderReturn {
           exportMode,
           composition,
           signal,
-          onProgress: handleProgress,
+          onProgress: handleRunProgress,
         })
         temporaryResult = renderResult
         ensureActive()
@@ -347,8 +382,8 @@ export function useClientRender(): UseClientRenderReturn {
         }
 
         if (finalResult !== renderResult) temporaryResult = finalResult
-        resultRef.current = finalResult
         setResult(finalResult)
+        resultOwnerRef.current = { runToken, result: finalResult, released: false }
         temporaryResult = null
         setStatus('completed')
         setProgress(100)
@@ -360,9 +395,8 @@ export function useClientRender(): UseClientRenderReturn {
           duration: renderResult.duration,
         })
       } catch (err) {
-        releaseResult(temporaryResult)
-        temporaryResult = null
-        if (generation !== renderGenerationRef.current) return
+        releaseTemporaryResult()
+        if (runToken !== latestRunTokenRef.current) return
         if (err instanceof DOMException && err.name === 'AbortError') {
           event.set('outcome', 'cancelled')
           event.set('duration_ms', Date.now())
@@ -375,13 +409,13 @@ export function useClientRender(): UseClientRenderReturn {
           setStatus('failed')
         }
       } finally {
-        if (generation === renderGenerationRef.current) {
+        if (activeRunRef.current === run) {
+          activeRunRef.current = null
           setIsExporting(false)
-          if (abortControllerRef.current === controller) abortControllerRef.current = null
         }
       }
     },
-    [handleProgress],
+    [abortActiveRun, applyProgress, releaseOwnedResult],
   )
 
   /**
@@ -389,12 +423,12 @@ export function useClientRender(): UseClientRenderReturn {
    * which posts the cancel to its worker and terminates it.
    */
   const cancelExport = useCallback(() => {
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort()
+    if (activeRunRef.current) {
+      abortActiveRun()
       setStatus('cancelled')
       setIsExporting(false)
     }
-  }, [])
+  }, [abortActiveRun])
 
   /**
    * Download the rendered video/audio
@@ -445,9 +479,8 @@ export function useClientRender(): UseClientRenderReturn {
    * Reset state
    */
   const resetState = useCallback(() => {
-    renderGenerationRef.current++
-    abortControllerRef.current?.abort()
-    abortControllerRef.current = null
+    latestRunTokenRef.current++
+    abortActiveRun()
     setIsExporting(false)
     setProgress(0)
     setProgressMessage(undefined)
@@ -455,22 +488,21 @@ export function useClientRender(): UseClientRenderReturn {
     setTotalFrames(undefined)
     setStatus('idle')
     setError(null)
-    const previousResult = resultRef.current
-    resultRef.current = null
-    if (previousResult) void releaseTemporaryExportOutput(previousResult)
+    const previousResultOwner = resultOwnerRef.current
+    resultOwnerRef.current = null
+    releaseOwnedResult(previousResultOwner)
     setResult(null)
-  }, [])
+  }, [abortActiveRun, releaseOwnedResult])
 
   useEffect(
     () => () => {
-      renderGenerationRef.current++
-      abortControllerRef.current?.abort()
-      abortControllerRef.current = null
-      const ownedResult = resultRef.current
-      resultRef.current = null
-      if (ownedResult) void releaseTemporaryExportOutput(ownedResult)
+      latestRunTokenRef.current++
+      abortActiveRun()
+      const ownedResult = resultOwnerRef.current
+      resultOwnerRef.current = null
+      releaseOwnedResult(ownedResult)
     },
-    [],
+    [abortActiveRun, releaseOwnedResult],
   )
 
   /**
