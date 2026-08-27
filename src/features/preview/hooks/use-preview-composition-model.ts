@@ -78,6 +78,7 @@ interface BuildPreviewCompositionDataParams {
   previewRenderSize?: PreviewPlayerSize
   resolveProxyUrlFn?: (mediaId: string) => string | null
   getBlobUrlFn?: (mediaId: string) => string | null
+  authoritativeSourceUrls?: ReadonlyMap<string, string>
 }
 
 interface UsePreviewCompositionModelParams {
@@ -99,6 +100,29 @@ interface UsePreviewCompositionBaseModelParams {
   tracks: TimelineTrack[]
   itemsByTrackId: Record<string, TimelineItem[]>
   mediaById: Record<string, Parameters<typeof getMediaResolveCost>[0]>
+}
+
+interface PreviewSourceBindings {
+  identity: string
+  urls: ReadonlyMap<string, string>
+}
+
+function getPreviewSourceBindings(combinedTracks: TimelineTrack[]): PreviewSourceBindings {
+  const urls = new Map<string, string>()
+  const identities: Array<[mediaId: string, epoch: string, url: string]> = []
+  const seenMediaIds = new Set<string>()
+
+  for (const track of combinedTracks) {
+    for (const item of track.items) {
+      if (!item.mediaId || seenMediaIds.has(item.mediaId)) continue
+      seenMediaIds.add(item.mediaId)
+      const url = blobUrlManager.get(item.mediaId) ?? ''
+      if (url) urls.set(item.mediaId, url)
+      identities.push([item.mediaId, blobUrlManager.getEpoch(item.mediaId), url])
+    }
+  }
+
+  return { identity: JSON.stringify(identities), urls }
 }
 
 /**
@@ -224,6 +248,14 @@ export function usePreviewCompositionModel({
     () => ({ width: previewRenderWidth, height: previewRenderHeight }),
     [previewRenderHeight, previewRenderWidth],
   )
+  const sourceBindings = useMemo(() => {
+    // Blob URL notifications are synchronous external-store updates. Snapshot
+    // the active media epochs and URLs during render so a relink/invalidation
+    // cannot leave the passive-effect-backed resolvedUrls map owning a retired
+    // source for the next layout/presentation phase.
+    void blobUrlVersion
+    return getPreviewSourceBindings(combinedTracks)
+  }, [blobUrlVersion, combinedTracks])
   const {
     playbackVideoSourceSpans,
     scrubVideoSourceSpans,
@@ -252,6 +284,7 @@ export function usePreviewCompositionModel({
       blobUrlVersion,
       project,
       previewRenderSize,
+      authoritativeSourceUrls: sourceBindings.urls,
     })
   }, [
     blobUrlVersion,
@@ -264,6 +297,7 @@ export function usePreviewCompositionModel({
     previewRenderSize,
     proxyReadyCount,
     resolvedUrls,
+    sourceBindings.urls,
     transitions,
     useProxy,
   ])
@@ -374,6 +408,7 @@ export function usePreviewCompositionModel({
     fastScrubInputProps,
     fastScrubPreviewItems,
     fastScrubTracksTopologyFingerprint,
+    sourceBindingIdentity: sourceBindings.identity,
     getPreviewTransformOverride,
     getPreviewEffectsOverride,
     getPreviewCornerPinOverride,
@@ -397,6 +432,7 @@ export function buildPreviewCompositionData({
   previewRenderSize,
   resolveProxyUrlFn = resolveProxyUrl,
   getBlobUrlFn = (mediaId: string) => blobUrlManager.get(mediaId),
+  authoritativeSourceUrls,
 }: BuildPreviewCompositionDataParams) {
   void blobUrlVersion
   const resolvedTrackList: CompositionInputProps['tracks'] = []
@@ -423,9 +459,13 @@ export function buildPreviewCompositionData({
         continue
       }
 
-      const sourceUrl = resolvedUrls.get(item.mediaId) ?? getBlobUrlFn(item.mediaId) ?? ''
+      const sourceUrl = authoritativeSourceUrls
+        ? (authoritativeSourceUrls.get(item.mediaId) ?? '')
+        : (resolvedUrls.get(item.mediaId) ?? getBlobUrlFn(item.mediaId) ?? '')
       const proxyUrl =
-        item.type === 'video' ? resolveProxyUrlFn(item.mediaId) || sourceUrl : sourceUrl
+        item.type === 'video' && (!authoritativeSourceUrls || sourceUrl)
+          ? resolveProxyUrlFn(item.mediaId) || sourceUrl
+          : sourceUrl
       const resolvedSrc = useProxy && item.type === 'video' ? proxyUrl : sourceUrl
       const fastScrubSrc = resolvedSrc
       const hasMatchingAudioSrc = item.type !== 'video' || item.audioSrc === sourceUrl
