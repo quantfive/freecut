@@ -7,9 +7,17 @@ type HotkeyOptionsOrDependencies = Options | DependencyList
 export type DerivedHotkeyCommand = 'MARK_IN' | 'MARK_OUT'
 
 /** Command identifiers only; values never contain display or persisted bindings. */
-export const COMMAND_HOTKEYS = Object.freeze(
-  Object.fromEntries((Object.keys(HOTKEYS) as HotkeyKey[]).map((command) => [command, command])),
-) as Readonly<Record<HotkeyKey, HotkeyKey>>
+export const COMMAND_HOTKEYS = new Proxy({} as Record<HotkeyKey, HotkeyKey>, {
+  get: (_target, command) => (typeof command === 'string' ? (command as HotkeyKey) : undefined),
+  ownKeys: () => Object.keys(HOTKEYS),
+  getOwnPropertyDescriptor: (_target, command) =>
+    typeof command === 'string' && Object.hasOwn(HOTKEYS, command)
+      ? { configurable: true, enumerable: true, value: command, writable: false }
+      : undefined,
+  set: () => false,
+  defineProperty: () => false,
+  deleteProperty: () => false,
+}) as Readonly<Record<HotkeyKey, HotkeyKey>>
 
 const LOCAL_HOTKEY_BINDINGS = {
   DOPESHEET_DELETE: 'delete,backspace',
