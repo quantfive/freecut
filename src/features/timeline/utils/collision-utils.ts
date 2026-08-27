@@ -223,6 +223,68 @@ export function findNearestAvailableSpace(
   return findNearestAvailableSpaceInTrackItems(proposedFrom, durationInFrames, trackItems)
 }
 
+/**
+ * Find one timeline offset that places every cohort member without colliding.
+ *
+ * Each blocker creates a finite open interval of invalid offsets for one
+ * placement. The nearest valid offset must therefore be zero, the frame-zero
+ * lower bound, or one of those interval boundaries. Checking that finite set
+ * makes the result deterministic and guarantees that the chosen correction is
+ * valid for the entire cohort, including placements on different tracks.
+ */
+export function findNearestAvailableSharedOffset(
+  placements: ReadonlyArray<CollisionRect>,
+  allItems: ReadonlyArray<CollisionRect | TimelineItem>,
+): number | null {
+  if (placements.length === 0) return 0
+  if (
+    placements.some(
+      (placement) =>
+        !Number.isFinite(placement.from) ||
+        !Number.isFinite(placement.durationInFrames) ||
+        placement.durationInFrames < 0,
+    )
+  ) {
+    return null
+  }
+
+  const minimumOffset = Math.max(...placements.map((placement) => -placement.from))
+  const blockersByTrackId = buildCollisionTrackItemsMap(allItems)
+  const candidates = new Set<number>([minimumOffset])
+  if (minimumOffset <= 0) {
+    candidates.add(0)
+  }
+
+  for (const placement of placements) {
+    const placementEnd = placement.from + placement.durationInFrames
+    for (const blocker of blockersByTrackId.get(placement.trackId) ?? EMPTY_TRACK_ITEMS) {
+      const blockerEnd = blocker.from + blocker.durationInFrames
+      candidates.add(blocker.from - placementEnd)
+      candidates.add(blockerEnd - placement.from)
+    }
+  }
+
+  const isValidOffset = (offset: number): boolean => {
+    if (!Number.isFinite(offset) || offset < minimumOffset) return false
+
+    return placements.every((placement) => {
+      const start = placement.from + offset
+      const end = start + placement.durationInFrames
+      return (blockersByTrackId.get(placement.trackId) ?? EMPTY_TRACK_ITEMS).every((blocker) => {
+        const blockerEnd = blocker.from + blocker.durationInFrames
+        return !rangesOverlap(start, end, blocker.from, blockerEnd)
+      })
+    })
+  }
+
+  return (
+    [...candidates]
+      .filter((candidate) => candidate >= minimumOffset)
+      .sort((left, right) => Math.abs(left) - Math.abs(right) || left - right)
+      .find(isValidOffset) ?? null
+  )
+}
+
 export interface OverlapInfo {
   itemA: string
   itemB: string
