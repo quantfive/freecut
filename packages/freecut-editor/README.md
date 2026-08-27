@@ -38,6 +38,12 @@ provider details, URLs, paths, and media bytes remain host-owned.
 The same 0.3.0 surface retains the host-backed caption tracks, bounded cues,
 caption styles, and display toggles from 0.2.0.
 
+Hosts can also provide the optional `EditorHost.shortcuts` port. Its versioned
+`HostShortcutSettings` payload carries the same override map used by FreeCut's
+shortcut editor, including J/K/L transport. UI changes call `setSettings`, and
+host or agent changes can flow back through `subscribe`, so embedded shortcut
+configuration never becomes a UI-only setting.
+
 This package is built from a specific FreeCut commit. To create the local
 consumer artifact from a clean checkout, run:
 

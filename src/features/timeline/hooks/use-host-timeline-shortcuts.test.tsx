@@ -130,6 +130,25 @@ describe('useHostTimelineShortcuts', () => {
     expect(useTimelineStore.getState().items).toHaveLength(0)
   })
 
+  it('splits the hovered clip at the playhead on Shift+C', () => {
+    usePlaybackStore.setState({
+      currentFrame: 15,
+      previewFrame: null,
+      previewItemId: 'clip-1',
+    })
+    render(<HostShortcutHarness />)
+
+    fireEvent.keyDown(document, { key: 'C', code: 'KeyC', shiftKey: true })
+
+    expect(useTimelineStore.getState().items).toHaveLength(2)
+    expect(useTimelineStore.getState().items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: 'clip-1', from: 0, durationInFrames: 15 }),
+        expect.objectContaining({ from: 15, durationInFrames: 15 }),
+      ]),
+    )
+  })
+
   it('does not undo timeline edits on Mod+Z in host mode', () => {
     useTimelineStore.getState().moveItem('clip-1', 30)
     expect(useTimelineCommandStore.getState().undoStack).toHaveLength(1)

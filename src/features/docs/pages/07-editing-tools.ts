@@ -32,8 +32,8 @@ const page = {
         {
           kind: 'list',
           items: [
-            'A **ripple** trim changes an edit and shifts all later material, so the total duration changes.',
-            'A **rolling** trim moves the cut between two neighboring clips, with no change to overall duration.',
+            'Hold `Shift` while dragging a trim edge for a **ripple** trim, which shifts all later material.',
+            'Hold `Alt` while dragging a shared edge for a **rolling** trim, which moves the cut between neighboring clips without changing total duration.',
             'A **slip** edit changes which source frames appear inside a clip without moving the clip or its neighbors.',
             'A **slide** edit moves a clip along the track while automatically adjusting the neighboring cuts.',
           ],
@@ -41,7 +41,7 @@ const page = {
         {
           kind: 'note',
           tone: 'info',
-          text: 'Ripple and rolling are behaviors of the **Trim edit** tool, not separate tools with their own shortcut.',
+          text: 'Ripple and rolling are modifier behaviors of the **Trim edit** tool (`T`), not separate tools.',
         },
       ],
     },

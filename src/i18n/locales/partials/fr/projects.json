@@ -447,6 +447,9 @@
         },
         "items": {
           "playPause": "Lecture/Pause",
+          "shuttleReverse": "Lecture arrière",
+          "shuttlePause": "Mettre le transport en pause",
+          "shuttleForward": "Lecture avant",
           "previousFrame": "Image précédente",
           "nextFrame": "Image suivante",
           "goToStart": "Aller au début",

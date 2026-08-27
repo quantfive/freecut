@@ -18,6 +18,7 @@ const page = {
             'Double-click a media card, or use **Open In Source Monitor** from Media info, to load a source.',
             'The monitor header shows the source file name, with a close control to leave it.',
             'Source playback is independent of the timeline preview, so you can scrub a source without moving the timeline playhead.',
+            'Hover the Source Monitor and use `J`, `K`, or `L` to shuttle backward, pause, or shuttle forward without affecting program playback.',
             'Click the timecode readout to toggle between timecode and frame-number display.',
           ],
         },

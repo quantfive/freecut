@@ -47,11 +47,13 @@ vi.mock('@/features/timeline/deps/analysis', () => ({
 }))
 
 vi.mock('@/features/timeline/deps/settings', () => ({
-  useResolvedHotkeys: () => ({}),
+  useResolvedHotkeys: () => ({
+    RIPPLE_DELETE: 'mod+backspace',
+  }),
 }))
 
 vi.mock('@/config/hotkeys', () => ({
-  formatHotkeyBinding: () => '',
+  formatHotkeyBinding: (binding: string) => (binding === 'mod+backspace' ? 'Ctrl + Backspace' : ''),
 }))
 
 function renderContextMenu(overrides: Partial<ComponentProps<typeof ItemContextMenu>> = {}) {
@@ -119,6 +121,12 @@ describe('ItemContextMenu scene detection', () => {
     expect(screen.getByRole('button', { name: 'Fast (Histogram)' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'AI (Gemma Turbo)' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'AI (Liquid Vision)' })).toBeInTheDocument()
+  })
+
+  it('shows the resolved ripple-delete keycap', () => {
+    renderContextMenu()
+
+    expect(screen.getByText('Ctrl + Backspace')).toBeInTheDocument()
   })
 
   it('dispatches the selected verification model when a scene detection option is clicked', () => {

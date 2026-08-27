@@ -447,6 +447,9 @@
         },
         "items": {
           "playPause": "Oynat/Duraklat",
+          "shuttleReverse": "Geri sarma",
+          "shuttlePause": "Oynatmayı duraklat",
+          "shuttleForward": "İleri sarma",
           "previousFrame": "Önceki kare",
           "nextFrame": "Sonraki kare",
           "goToStart": "Başa git",

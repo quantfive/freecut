@@ -705,6 +705,7 @@ function CompositionActions({
 
 function DestructiveActions({
   t,
+  hotkeys,
   isSelected,
   canRippleDelete = true,
   canDelete = true,
@@ -720,7 +721,7 @@ function DestructiveActions({
           className="text-destructive focus:text-destructive"
         >
           {t('timeline.contextMenu.rippleDelete')}
-          <ContextMenuShortcut>Ctrl+Del</ContextMenuShortcut>
+          <ContextMenuShortcut>{formatHotkeyBinding(hotkeys.RIPPLE_DELETE)}</ContextMenuShortcut>
         </ContextMenuItem>
       )}
       {canDelete && (

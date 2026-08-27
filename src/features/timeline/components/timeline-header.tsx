@@ -59,6 +59,11 @@ function TrimEditIcon({ className }: { className?: string }) {
   )
 }
 
+function labelWithShortcut(label: string, binding: string): string {
+  const shortcut = formatHotkeyBinding(binding)
+  return shortcut ? `${label} (${shortcut})` : label
+}
+
 const InlineKeyframesToggle = memo(function InlineKeyframesToggle({
   isOpen,
   onToggle,
@@ -483,6 +488,29 @@ export const TimelineHeader = memo(function TimelineHeader({
     width: EDITOR_LAYOUT_CSS_VALUES.toolbarButtonSize,
     height: EDITOR_LAYOUT_CSS_VALUES.toolbarButtonSize,
   } as const
+  const selectToolTooltip = labelWithShortcut(
+    t('timeline.header.selectToolTooltip'),
+    hotkeys.SELECTION_TOOL,
+  )
+  const trimEditToolTooltip = [
+    labelWithShortcut(t('timeline.header.trimEditToolTooltip'), hotkeys.TRIM_EDIT_TOOL),
+    t('timeline.header.rippleTrimHint', { modifier: formatHotkeyBinding('shift') }),
+    t('timeline.header.rollingTrimHint', { modifier: formatHotkeyBinding('alt') }),
+  ].join(' · ')
+  const razorToolTooltipParts = [
+    labelWithShortcut(t('timeline.header.razorToolTooltip'), hotkeys.RAZOR_TOOL),
+  ]
+  const splitAtPlayheadShortcut = formatHotkeyBinding(hotkeys.SPLIT_AT_PLAYHEAD)
+  if (splitAtPlayheadShortcut) {
+    razorToolTooltipParts.push(
+      t('timeline.header.splitAtPlayheadHint', { shortcut: splitAtPlayheadShortcut }),
+    )
+  }
+  const razorToolTooltip = razorToolTooltipParts.join(' · ')
+  const rateStretchToolTooltip = labelWithShortcut(
+    t('timeline.header.rateStretchToolTooltip'),
+    hotkeys.RATE_STRETCH_TOOL,
+  )
 
   const handleUndo = () => {
     useTimelineStore.temporal.getState().undo()
@@ -522,8 +550,8 @@ export const TimelineHeader = memo(function TimelineHeader({
                   : ''
               }
               onClick={() => setActiveTool('select')}
-              aria-label={t('timeline.header.selectTool')}
-              data-tooltip={t('timeline.header.selectToolTooltip')}
+              aria-label={selectToolTooltip}
+              data-tooltip={selectToolTooltip}
             >
               <MousePointer2 className="w-3.5 h-3.5" />
             </Button>
@@ -538,8 +566,8 @@ export const TimelineHeader = memo(function TimelineHeader({
                   : ''
               }
               onClick={() => setActiveTool(activeTool === 'trim-edit' ? 'select' : 'trim-edit')}
-              aria-label={t('timeline.header.trimEditTool')}
-              data-tooltip={t('timeline.header.trimEditToolTooltip')}
+              aria-label={trimEditToolTooltip}
+              data-tooltip={trimEditToolTooltip}
             >
               <TrimEditIcon className="w-3.5 h-3.5" />
             </Button>
@@ -554,8 +582,8 @@ export const TimelineHeader = memo(function TimelineHeader({
                   : ''
               }
               onClick={() => setActiveTool(activeTool === 'razor' ? 'select' : 'razor')}
-              aria-label={t('timeline.header.razorTool')}
-              data-tooltip={t('timeline.header.razorToolTooltip')}
+              aria-label={razorToolTooltip}
+              data-tooltip={razorToolTooltip}
             >
               <Scissors className="w-3.5 h-3.5 -rotate-90" />
             </Button>
@@ -573,8 +601,8 @@ export const TimelineHeader = memo(function TimelineHeader({
                 onClick={() =>
                   setActiveTool(activeTool === 'rate-stretch' ? 'select' : 'rate-stretch')
                 }
-                aria-label={t('timeline.header.rateStretchTool')}
-                data-tooltip={t('timeline.header.rateStretchToolTooltip')}
+                aria-label={rateStretchToolTooltip}
+                data-tooltip={rateStretchToolTooltip}
               >
                 <Gauge className="w-3.5 h-3.5" />
               </Button>

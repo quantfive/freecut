@@ -15,6 +15,7 @@ import { EditorHostProvider } from './context-provider'
 import { HostCaptionEditorProvider } from './caption-editor-context'
 import { HostTranscriptEditorProvider } from './transcript-editor-context'
 import { EmbeddedEditorHostRuntime } from './runtime'
+import { mountHostShortcutSettings } from './shortcut-settings'
 import '@/index.css'
 
 interface HostSurfaceState {
@@ -33,18 +34,36 @@ export function FreeCutEditorSurface({ host }: { host: EditorHost }) {
 
   useEffect(() => {
     let cancelled = false
+    let unmountShortcutSettings: (() => void) | undefined
     setState(null)
     setError(null)
-    void Promise.all([Promise.resolve(host.load()), i18nReady])
-      .then(([snapshot]) => {
-        if (cancelled) return
+
+    const initialize = async () => {
+      unmountShortcutSettings = await mountHostShortcutSettings(host)
+      if (cancelled) {
+        unmountShortcutSettings()
+        unmountShortcutSettings = undefined
+        return
+      }
+
+      const [snapshot] = await Promise.all([Promise.resolve(host.load()), i18nReady])
+      if (!cancelled) {
         setState({ snapshot, runtime: new EmbeddedEditorHostRuntime(host, snapshot) })
-      })
+      }
+    }
+
+    void initialize()
+      .then(() => undefined)
       .catch((caught) => {
-        if (!cancelled) setError(caught instanceof Error ? caught : new Error(String(caught)))
+        unmountShortcutSettings?.()
+        unmountShortcutSettings = undefined
+        if (cancelled) return
+        setError(caught instanceof Error ? caught : new Error(String(caught)))
       })
+
     return () => {
       cancelled = true
+      unmountShortcutSettings?.()
     }
   }, [host])
 

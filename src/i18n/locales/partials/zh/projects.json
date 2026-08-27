@@ -447,6 +447,9 @@
         },
         "items": {
           "playPause": "播放/暂停",
+          "shuttleReverse": "反向穿梭",
+          "shuttlePause": "暂停传输",
+          "shuttleForward": "正向穿梭",
           "previousFrame": "上一帧",
           "nextFrame": "下一帧",
           "goToStart": "跳到开头",
