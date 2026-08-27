@@ -78,9 +78,28 @@ const BARRIER_DECLARATION_KINDS = new Set([
   SyntaxKind.ModuleDeclaration,
 ])
 
-function createScope(parent, kind, isVarScope = false, isConstantBoundary = false) {
+const UNCERTAIN_WRITE_ANCESTOR_KINDS = new Set([
+  SyntaxKind.ConditionalExpression,
+  SyntaxKind.DoStatement,
+  SyntaxKind.ForInStatement,
+  SyntaxKind.ForOfStatement,
+  SyntaxKind.ForStatement,
+  SyntaxKind.IfStatement,
+  SyntaxKind.SwitchStatement,
+  SyntaxKind.TryStatement,
+  SyntaxKind.WhileStatement,
+  SyntaxKind.WithStatement,
+])
+
+function createScope(
+  parent,
+  kind,
+  isVarScope = false,
+  isConstantBoundary = false,
+  owner,
+) {
   const region = !parent || isConstantBoundary ? { bindings: new Map() } : parent.region
-  return { parent, kind, isVarScope, isConstantBoundary, region, bindings: new Map() }
+  return { parent, kind, isVarScope, isConstantBoundary, region, bindings: new Map(), owner }
 }
 
 function declareBinding(scope, name, binding) {
@@ -97,7 +116,16 @@ function declareBinding(scope, name, binding) {
 }
 
 function hasModifier(node, kind) {
-  return node.modifiers?.some((modifier) => modifier.kind === kind) ?? false
+  return node?.modifiers?.some((modifier) => modifier.kind === kind) ?? false
+}
+
+function isAmbientDeclaration(node) {
+  let current = node
+  while (current) {
+    if (hasModifier(current, SyntaxKind.DeclareKeyword)) return true
+    current = current.parent
+  }
+  return false
 }
 
 function bindingNames(name) {
@@ -120,7 +148,7 @@ function nearestVarScope(scope) {
   return current
 }
 
-function variableBinding(declaration, declarationScope, isConst, isResolvableConst) {
+function variableBinding(declaration, declarationScope, isConst, isResolvableConst, isHoisted) {
   if (isResolvableConst && isIdentifier(declaration.name) && declaration.initializer) {
     return {
       kind: 'constant',
@@ -135,7 +163,9 @@ function variableBinding(declaration, declarationScope, isConst, isResolvableCon
       initializer: declaration.initializer,
       scope: declarationScope,
       mutationPositions: [],
-      availableAfter: declaration.end,
+      writes: [],
+      isHoisted,
+      availableAfter: isHoisted ? 0 : declaration.end,
     }
   }
   return { kind: 'unknown-shadow', availableAfter: declaration.end }
@@ -147,9 +177,18 @@ function declareVariableList(declarationList, scope, { resolveLoopConstants = fa
   const declarationScope = isBlockScoped ? scope : nearestVarScope(scope)
   const isResolvableConst =
     isConst && (declarationScope.kind !== 'loop' || resolveLoopConstants)
+  const isAmbient = isAmbientDeclaration(declarationList)
+
+  if (isAmbient) return
 
   for (const declaration of declarationList.declarations) {
-    const binding = variableBinding(declaration, declarationScope, isConst, isResolvableConst)
+    const binding = variableBinding(
+      declaration,
+      declarationScope,
+      isConst,
+      isResolvableConst,
+      !isBlockScoped,
+    )
     if (isIdentifier(declaration.name)) {
       declareBinding(declarationScope, declaration.name.text, binding)
     } else {
@@ -159,28 +198,40 @@ function declareVariableList(declarationList, scope, { resolveLoopConstants = fa
 }
 
 function declareImportBindings(node, scope) {
-  if (isImportEqualsDeclaration(node)) {
-    declareBarrier(scope, node.name)
-    return
-  }
+  if (isImportEqualsDeclaration(node)) return declareImportEqualsBinding(node, scope)
   if (!isImportDeclaration(node) || !node.importClause) return
+  if (node.importClause.isTypeOnly) return
 
   const { name, namedBindings } = node.importClause
   if (name) declareBarrier(scope, name)
+  declareNamedImportBindings(namedBindings, scope)
+}
+
+function declareImportEqualsBinding(node, scope) {
+  if (!node.isTypeOnly) declareBarrier(scope, node.name)
+}
+
+function declareNamedImportBindings(namedBindings, scope) {
   if (!namedBindings) return
   if (namedBindings.name) {
     declareBarrier(scope, namedBindings.name)
     return
   }
-  for (const element of namedBindings.elements) declareBarrier(scope, element.name)
+  for (const element of namedBindings.elements) {
+    if (!element.isTypeOnly) declareBarrier(scope, element.name)
+  }
 }
 
 function createFunctionLexicalScope(node, currentScope) {
-  if (node.kind === SyntaxKind.FunctionDeclaration && node.name) {
+  if (
+    node.kind === SyntaxKind.FunctionDeclaration &&
+    node.name &&
+    !isAmbientDeclaration(node)
+  ) {
     declareBarrier(currentScope, node.name, { kind: 'static-shadow' })
   }
 
-  const functionScope = createScope(currentScope, 'function', true, true)
+  const functionScope = createScope(currentScope, 'function', true, true, node)
   if (NAMED_FUNCTION_SCOPE_KINDS.has(node.kind) && node.name) {
     declareBarrier(functionScope, node.name)
   }
@@ -189,11 +240,11 @@ function createFunctionLexicalScope(node, currentScope) {
 }
 
 function createClassLexicalScope(node, currentScope) {
-  if (node.kind === SyntaxKind.ClassDeclaration && node.name) {
+  if (node.kind === SyntaxKind.ClassDeclaration && node.name && !isAmbientDeclaration(node)) {
     declareBarrier(currentScope, node.name, { kind: 'static-shadow' })
   }
 
-  const classScope = createScope(currentScope, 'class', false, true)
+  const classScope = createScope(currentScope, 'class', false, true, node)
   if (node.name) declareBarrier(classScope, node.name)
   return classScope
 }
@@ -250,8 +301,14 @@ function predeclareNodeBindings(node, currentScope) {
   if (isImportDeclaration(node) || isImportEqualsDeclaration(node)) {
     return declareImportBindings(node, currentScope)
   }
-  if (isConstEnumDeclaration(node)) return declareConstEnum(node, currentScope)
-  if (BARRIER_DECLARATION_KINDS.has(node.kind) && node.name) {
+  if (isConstEnumDeclaration(node) && !isAmbientDeclaration(node)) {
+    return declareConstEnum(node, currentScope)
+  }
+  if (
+    BARRIER_DECLARATION_KINDS.has(node.kind) &&
+    node.name &&
+    !isAmbientDeclaration(node)
+  ) {
     declareBarrier(currentScope, node.name)
   }
 }
@@ -356,27 +413,91 @@ function findLexicalBinding(scope, name) {
   return undefined
 }
 
-function assignmentTargetIdentifier(node) {
-  const assignment =
-    isBinaryExpression(node) &&
-    node.operatorToken.kind >= SyntaxKind.FirstAssignment &&
-    node.operatorToken.kind <= SyntaxKind.LastAssignment
-  if (assignment && isIdentifier(node.left)) return node.left
-  const update =
-    isPrefixUnaryExpression(node) || isPostfixUnaryExpression(node)
-      ? UPDATE_OPERATORS.has(node.operator)
-      : false
-  return update && isIdentifier(node.operand) ? node.operand : undefined
+function hasUncertainWriteAncestor(node) {
+  let current = node.parent
+  while (current) {
+    if (UNCERTAIN_WRITE_ANCESTOR_KINDS.has(current.kind)) return true
+    if (
+      isBinaryExpression(current) &&
+      (current.operatorToken.kind === SyntaxKind.AmpersandAmpersandToken ||
+        current.operatorToken.kind === SyntaxKind.BarBarToken ||
+        current.operatorToken.kind === SyntaxKind.QuestionQuestionToken)
+    ) {
+      return true
+    }
+    current = current.parent
+  }
+  return false
+}
+
+function crossesNestedFunction(scope, binding) {
+  let current = scope
+  while (current && current !== binding.scope) {
+    if (current.kind === 'function') return true
+    current = current.parent
+  }
+  return current !== binding.scope
+}
+
+function assignmentWriteDescriptors(node) {
+  if (isBinaryExpression(node)) return binaryAssignmentWriteDescriptors(node)
+  if (isPrefixUnaryExpression(node) || isPostfixUnaryExpression(node)) {
+    return updateWriteDescriptors(node)
+  }
+  if (node.kind === SyntaxKind.ForInStatement || node.kind === SyntaxKind.ForOfStatement) {
+    return loopWriteDescriptors(node)
+  }
+  return []
+}
+
+function binaryAssignmentWriteDescriptors(node) {
+  if (
+    node.operatorToken.kind < SyntaxKind.FirstAssignment ||
+    node.operatorToken.kind > SyntaxKind.LastAssignment
+  ) {
+    return []
+  }
+  const names = bindingNames(node.left)
+  if (names.length === 0) return []
+  const isSimple = node.operatorToken.kind === SyntaxKind.EqualsToken
+  return names.map((name) => ({
+    name,
+    expression: isSimple && isIdentifier(node.left) ? node.right : undefined,
+    isSimple: isSimple && isIdentifier(node.left),
+  }))
+}
+
+function updateWriteDescriptors(node) {
+  if (!UPDATE_OPERATORS.has(node.operator) || !isIdentifier(node.operand)) return []
+  return [{ name: node.operand.text, expression: undefined, isSimple: false }]
+}
+
+function loopWriteDescriptors(node) {
+  return bindingNames(node.initializer).map((name) => ({
+    name,
+    expression: undefined,
+    isSimple: false,
+  }))
 }
 
 function markMutableBindingWrites(sourceFile, nodeScopes, sourceScope) {
   walkAst(sourceFile, (node) => {
-    const identifier = assignmentTargetIdentifier(node)
-    if (!identifier) return
-    const scope = nodeScopes.get(identifier) ?? nodeScopes.get(node) ?? sourceScope
-    const binding = findLexicalBinding(scope, identifier.text)
-    if (binding?.kind === 'mutable') {
-      binding.mutationPositions.push(node.end)
+    const descriptors = assignmentWriteDescriptors(node)
+    if (descriptors.length === 0) return
+    const scope = nodeScopes.get(node) ?? sourceScope
+    const isUncertain = hasUncertainWriteAncestor(node)
+    for (const descriptor of descriptors) {
+      const binding = findLexicalBinding(scope, descriptor.name)
+      if (binding?.kind !== 'mutable') continue
+      const write = {
+        position: node.end,
+        expression: descriptor.expression,
+        scope,
+        isSimple: descriptor.isSimple,
+        isUncertain: isUncertain || crossesNestedFunction(scope, binding),
+      }
+      binding.mutationPositions.push(write.position)
+      binding.writes.push(write)
     }
   })
 }
@@ -475,6 +596,91 @@ function evaluateConstantBindingValue(binding, resolving, depth) {
   return result
 }
 
+function evaluateMutableBindingValue(
+  binding,
+  resolving,
+  referenceScope,
+  referencePosition,
+  depth,
+) {
+  if (resolving.has(binding) || depth > MAX_CONSTANT_EVALUATION_DEPTH) return undefined
+
+  const writes = binding.writes ?? []
+  if (writes.length > 1) return undefined
+  if (writes.length === 0) {
+    return evaluateMutableInitializerValue(
+      binding,
+      resolving,
+      referenceScope,
+      referencePosition,
+      depth + 1,
+    )
+  }
+  return evaluateMutableAssignmentValue(
+    binding,
+    writes[0],
+    resolving,
+    referenceScope,
+    referencePosition,
+    depth + 1,
+  )
+}
+
+function evaluateMutableInitializerValue(
+  binding,
+  resolving,
+  referenceScope,
+  referencePosition,
+  depth,
+) {
+  if (!binding.initializer) return undefined
+  if (referencePosition < binding.initializer.getStart()) return undefined
+  if (!isBindingAvailable(binding, referencePosition)) return undefined
+  const nextResolving = new Set(resolving).add(binding)
+  const result = evaluateConstantValue(
+    binding.initializer,
+    binding.scope,
+    nextResolving,
+    referenceScope,
+    referencePosition,
+    undefined,
+    depth + 1,
+  )
+  return result ? { ...result, state: binding.initializer } : undefined
+}
+
+function mutableAssignmentIsFoldable(binding, write, referencePosition) {
+  if (binding.initializer) return false
+  if (!write.isSimple || write.isUncertain) return false
+  if (!write.expression || write.position >= referencePosition) return false
+  return !expressionReferencesMutableBinding(write.expression, write.scope)
+}
+
+function evaluateMutableAssignmentValue(
+  binding,
+  write,
+  resolving,
+  referenceScope,
+  referencePosition,
+  depth,
+) {
+  // Rolldown only folds a mutable binding with a single, simple assignment
+  // when there was no initializer. Any explicit reassignment invalidates the
+  // binding's constant state, including writes after an earlier use.
+  if (!mutableAssignmentIsFoldable(binding, write, referencePosition)) return undefined
+  const nextResolving = new Set(resolving).add(binding)
+  const result = evaluateConstantValue(
+    write.expression,
+    write.scope,
+    nextResolving,
+    referenceScope,
+    referencePosition,
+    undefined,
+    depth + 1,
+  )
+  return result ? { ...result, state: write } : undefined
+}
+
 function mutableShadowBlocks(candidate, referencePosition, resolving, depth) {
   if (candidate.mutationPositions.some((position) => position <= referencePosition)) return true
   if (!candidate.initializer) return false
@@ -545,6 +751,52 @@ function dependencyMatchesUseSite(
     return false
   }
   const visibleBinding = findBinding(referenceScope, dependency.name)
+  if (dependency.binding.kind === 'mutable') {
+    return mutableDependencyMatchesUseSite(
+      dependency,
+      visibleBinding,
+      referenceScope,
+      referencePosition,
+      resolving,
+      depth + 1,
+    )
+  }
+  return nonMutableDependencyMatchesUseSite(
+    dependency,
+    visibleBinding,
+    referencePosition,
+    resolving,
+    depth + 1,
+  )
+}
+
+function mutableDependencyMatchesUseSite(
+  dependency,
+  visibleBinding,
+  referenceScope,
+  referencePosition,
+  resolving,
+  depth,
+) {
+  if (visibleBinding !== dependency.binding) return false
+  if (!isBindingAvailable(visibleBinding, referencePosition)) return false
+  const current = evaluateMutableBindingValue(
+    dependency.binding,
+    resolving,
+    referenceScope,
+    referencePosition,
+    depth + 1,
+  )
+  return current?.state === dependency.state && current.value === dependency.value
+}
+
+function nonMutableDependencyMatchesUseSite(
+  dependency,
+  visibleBinding,
+  referencePosition,
+  resolving,
+  depth,
+) {
   if (
     !visibleBinding ||
     visibleBinding === dependency.binding ||
@@ -566,17 +818,26 @@ function evaluateConstantBinding(
   const binding = findBinding(scope, expression.text)
   if (
     !binding ||
-    binding.kind !== 'constant' ||
+    (binding.kind !== 'constant' && binding.kind !== 'mutable') ||
     resolving.has(binding) ||
     !isBindingAvailable(binding, expression.getStart())
   ) {
     return undefined
   }
 
-  const value = evaluateConstantBindingValue(binding, resolving, depth + 1)
+  const value =
+    binding.kind === 'constant'
+      ? evaluateConstantBindingValue(binding, resolving, depth + 1)
+      : evaluateMutableBindingValue(
+          binding,
+          resolving,
+          referenceScope,
+          referencePosition,
+          depth + 1,
+        )
   if (!value) return undefined
   const dependencies = [
-    { name: expression.text, binding, value: value.value },
+    { name: expression.text, binding, value: value.value, state: value.state },
     ...value.dependencies,
   ]
   if (
@@ -854,25 +1115,60 @@ function possibleConditionalTarget(expression, context) {
   )
 }
 
+function expressionReferencesMutableBinding(expression, scope) {
+  let found = false
+  walkAst(expression, (node) => {
+    if (!isIdentifier(node)) return
+    const binding = findBinding(scope, node.text)
+    if (binding?.kind === 'mutable') found = true
+  })
+  return found
+}
+
 function possibleIdentifierTarget(expression, context) {
   const { scope, resolving, referenceScope, referencePosition, depth } = context
   const binding = findBinding(scope, expression.text)
-  if (
-    !binding ||
-    binding.kind !== 'constant' ||
-    resolving.has(binding) ||
-    !isBindingAvailable(binding, expression.getStart())
-  ) {
+  if (!identifierTargetBindingIsAvailable(binding, resolving, expression.getStart())) {
     return false
   }
+  if (binding.kind === 'mutable') {
+    return mutableIdentifierTarget(binding, context)
+  }
+  if (binding.kind !== 'constant') return false
+  return constantIdentifierTarget(expression, binding, context)
+}
+
+function identifierTargetBindingIsAvailable(binding, resolving, referencePosition) {
+  return Boolean(
+    binding &&
+      !resolving.has(binding) &&
+      isBindingAvailable(binding, referencePosition),
+  )
+}
+
+function mutableIdentifierTarget(binding, context) {
+  const value = evaluateMutableBindingValue(
+    binding,
+    context.resolving,
+    context.referenceScope,
+    context.referencePosition,
+    context.depth + 1,
+  )
+  return value?.value === REACT_HOTKEYS_HOOK_MODULE
+}
+
+function constantIdentifierTarget(expression, binding, context) {
+  const value = evaluateConstantBindingValue(binding, context.resolving, context.depth + 1)
+  if (value) return constantTargetDependenciesMatch(expression, binding, value, context)
+  if (expressionReferencesMutableBinding(binding.initializer, binding.scope)) return false
   const dependency = { name: expression.text, binding }
   if (
     !dependencyMatchesUseSite(
       dependency,
-      referenceScope,
-      referencePosition,
-      resolving,
-      depth + 1,
+      context.referenceScope,
+      context.referencePosition,
+      context.resolving,
+      context.depth + 1,
     )
   ) {
     return false
@@ -880,10 +1176,27 @@ function possibleIdentifierTarget(expression, context) {
   return expressionMayResolveToReactHotkeys(
     binding.initializer,
     binding.scope,
-    new Set(resolving).add(binding),
-    referenceScope,
-    referencePosition,
-    depth + 1,
+    new Set(context.resolving).add(binding),
+    context.referenceScope,
+    context.referencePosition,
+    context.depth + 1,
+  )
+}
+
+function constantTargetDependenciesMatch(expression, binding, value, context) {
+  if (value.value !== REACT_HOTKEYS_HOOK_MODULE) return false
+  const dependencies = [
+    { name: expression.text, binding, value: value.value },
+    ...value.dependencies,
+  ]
+  return dependencies.every((dependency) =>
+    dependencyMatchesUseSite(
+      dependency,
+      context.referenceScope,
+      context.referencePosition,
+      context.resolving,
+      context.depth + 1,
+    ),
   )
 }
 
