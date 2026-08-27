@@ -63,6 +63,21 @@ const clockState = vi.hoisted(() => ({
   playbackRate: 1,
 }))
 
+const resolvedHotkeysState = vi.hoisted(() => ({
+  hotkeys: {
+    MARK_IN: 'i',
+    MARK_OUT: 'o',
+    CLEAR_IN_OUT: 'alt+x',
+    GO_TO_START: 'home',
+    PREVIOUS_FRAME: 'left',
+    PLAY_PAUSE: 'space',
+    NEXT_FRAME: 'right',
+    GO_TO_END: 'end',
+    INSERT_EDIT: 'comma',
+    OVERWRITE_EDIT: 'period',
+  },
+}))
+
 vi.mock('@/features/preview/deps/player-context', () => ({
   PlayerEmitterProvider: ({ children }: { children: ReactNode }) => <>{children}</>,
   ClockBridgeProvider: ({ children }: { children: ReactNode }) => <>{children}</>,
@@ -133,7 +148,10 @@ vi.mock('@/features/preview/deps/settings', () => {
     { getState: () => settingsState },
   )
 
-  return { useSettingsStore }
+  return {
+    useSettingsStore,
+    useResolvedHotkeys: () => resolvedHotkeysState.hotkeys,
+  }
 })
 
 vi.mock('@/shared/state/editor', () => {
@@ -195,6 +213,56 @@ describe('SourceMonitor current media ownership', () => {
     editorStoreState.sourcePreviewMediaId = 'media-1'
     clockState.currentFrame = 0
     clockState.isPlaying = false
+    resolvedHotkeysState.hotkeys = {
+      MARK_IN: 'i',
+      MARK_OUT: 'o',
+      CLEAR_IN_OUT: 'alt+x',
+      GO_TO_START: 'home',
+      PREVIOUS_FRAME: 'left',
+      PLAY_PAUSE: 'space',
+      NEXT_FRAME: 'right',
+      GO_TO_END: 'end',
+      INSERT_EDIT: 'comma',
+      OVERWRITE_EDIT: 'period',
+    }
+  })
+
+  it('updates visible shortcut labels after remap and reset', async () => {
+    const rendered = render(<SourceMonitor mediaId="media-1" />)
+
+    await waitFor(() => expect(rendered.getByLabelText('Mark In (I)')).toBeInTheDocument())
+
+    resolvedHotkeysState.hotkeys = {
+      ...resolvedHotkeysState.hotkeys,
+      MARK_IN: 'shift+f',
+    }
+    rendered.rerender(<SourceMonitor mediaId="media-1" />)
+    expect(rendered.getByLabelText('Mark In (Shift + F)')).toBeInTheDocument()
+
+    resolvedHotkeysState.hotkeys = {
+      ...resolvedHotkeysState.hotkeys,
+      MARK_IN: 'i',
+    }
+    rendered.rerender(<SourceMonitor mediaId="media-1" />)
+    expect(rendered.getByLabelText('Mark In (I)')).toBeInTheDocument()
+  })
+
+  it('uses macOS modifier names in visible shortcut labels', async () => {
+    const originalPlatform = navigator.platform
+    Object.defineProperty(navigator, 'platform', { configurable: true, value: 'MacIntel' })
+    resolvedHotkeysState.hotkeys = {
+      ...resolvedHotkeysState.hotkeys,
+      CLEAR_IN_OUT: 'alt+x',
+    }
+
+    try {
+      const rendered = render(<SourceMonitor mediaId="media-1" />)
+      await waitFor(() =>
+        expect(rendered.getByLabelText('Clear In/Out (Option + X)')).toBeInTheDocument(),
+      )
+    } finally {
+      Object.defineProperty(navigator, 'platform', { configurable: true, value: originalPlatform })
+    }
   })
 
   it('does not release the current media during the initial Strict Mode remount', async () => {
