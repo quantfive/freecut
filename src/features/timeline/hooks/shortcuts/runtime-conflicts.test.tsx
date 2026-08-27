@@ -1,23 +1,42 @@
 import { fireEvent, render } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vite-plus/test'
 import { useHotkeys } from 'react-hotkeys-hook'
-import { HOTKEY_OPTIONS } from '@/config/hotkeys'
+import {
+  HOTKEY_OPTIONS,
+  getRuntimeHotkeyBinding,
+  resolveHotkeys,
+  type HotkeyBindingMap,
+} from '@/config/hotkeys'
 import { useResolvedHotkeys, useSettingsStore } from '@/features/timeline/deps/settings'
 import { usePlaybackStore } from '@/shared/state/playback'
 import { useTimelineStore } from '../../stores/timeline-store'
 import { useInOutShortcuts } from './use-in-out-shortcuts'
 import { usePlaybackShortcuts } from './use-playback-shortcuts'
 
+const runtimeHotkeysOverride = vi.hoisted(() => ({
+  current: null as HotkeyBindingMap | null,
+}))
+
+vi.mock('@/features/timeline/deps/settings', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/features/timeline/deps/settings')>()
+  return {
+    ...actual,
+    useResolvedHotkeys: () => runtimeHotkeysOverride.current ?? actual.useResolvedHotkeys(),
+  }
+})
+
 function RuntimeConflictHarness({ onJoin }: { onJoin: () => void }) {
   const hotkeys = useResolvedHotkeys()
+  const joinBinding = getRuntimeHotkeyBinding(hotkeys, 'JOIN_ITEMS')
   usePlaybackShortcuts({})
   useInOutShortcuts()
-  useHotkeys(hotkeys.JOIN_ITEMS, onJoin, HOTKEY_OPTIONS, [onJoin, hotkeys.JOIN_ITEMS])
+  useHotkeys(joinBinding ?? [], onJoin, HOTKEY_OPTIONS, [onJoin, joinBinding])
   return null
 }
 
 describe('runtime shortcut ownership', () => {
   beforeEach(() => {
+    runtimeHotkeysOverride.current = null
     useSettingsStore.getState().resetHotkeys()
     usePlaybackStore.setState({
       currentFrame: 48,
@@ -67,5 +86,21 @@ describe('runtime shortcut ownership', () => {
 
     fireEvent.keyDown(document, { key: 'J', code: 'KeyJ', shiftKey: true })
     expect(onJoin).toHaveBeenCalledTimes(1)
+  })
+
+  it('executes one deterministic handler for a legacy meta versus mod collision', () => {
+    const legacyHotkeys = {
+      ...resolveHotkeys(),
+      MARK_IN: 'meta+j',
+      JOIN_ITEMS: 'mod+shift+j',
+    }
+    runtimeHotkeysOverride.current = legacyHotkeys
+    const onJoin = vi.fn()
+    render(<RuntimeConflictHarness onJoin={onJoin} />)
+
+    fireEvent.keyDown(document, { key: 'J', code: 'KeyJ', metaKey: true, shiftKey: true })
+
+    expect(onJoin).toHaveBeenCalledTimes(1)
+    expect(useTimelineStore.getState().inPoint).toBeNull()
   })
 })

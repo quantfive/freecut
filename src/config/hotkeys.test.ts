@@ -11,6 +11,7 @@ import {
   getBrowserHostileHotkey,
   getHotkeyBindingFromEventData,
   getHotkeyPrimaryTokenFromEventData,
+  getRuntimeHotkeyBinding,
   normalizeHotkeyBinding,
   parseHotkeyImportDocument,
   resolveHotkeyConfiguration,
@@ -58,7 +59,9 @@ describe('transport and editing defaults', () => {
 
 describe('normalizeHotkeyBinding', () => {
   it('orders modifiers consistently and normalizes aliases', () => {
-    expect(normalizeHotkeyBinding('Shift+Ctrl+ArrowLeft')).toBe('mod+shift+left')
+    expect(normalizeHotkeyBinding('Shift+Ctrl+ArrowLeft')).toBe('ctrl+shift+left')
+    expect(normalizeHotkeyBinding('SHIFT+Command+J')).toBe('meta+shift+j')
+    expect(normalizeHotkeyBinding('shift+MOD+j')).toBe('mod+shift+j')
   })
 })
 
@@ -69,6 +72,11 @@ describe('formatHotkeyBinding', () => {
 
   it('formats punctuation bindings for windows', () => {
     expect(formatHotkeyBinding('mod+shift+comma', 'Win32')).toBe('Ctrl + Shift + ,')
+  })
+
+  it('preserves explicit physical modifier labels', () => {
+    expect(formatHotkeyBinding('ctrl+meta+k', 'MacIntel')).toBe('Ctrl + Cmd + K')
+    expect(formatHotkeyBinding('meta+ctrl+k', 'Win32')).toBe('Ctrl + Meta + K')
   })
 })
 
@@ -155,6 +163,12 @@ describe('findHotkeyConflicts', () => {
 
     expect(findHotkeyConflicts(bindings, 'j', 'MARK_IN')).toContain('JOIN_ITEMS')
   })
+
+  it('finds platform alias overlap in primary and derived chords', () => {
+    const bindings = resolveHotkeys({ MARK_IN: 'meta+j' })
+
+    expect(findHotkeyConflicts(bindings, 'mod+shift+j', 'JOIN_ITEMS')).toContain('MARK_IN')
+  })
 })
 
 describe('resolveHotkeyConfiguration', () => {
@@ -230,6 +244,62 @@ describe('resolveHotkeyConfiguration', () => {
     )
   })
 
+  it('rejects meta versus mod collisions in derived runtime chords', () => {
+    const result = resolveHotkeyConfiguration({
+      MARK_IN: 'meta+j',
+      JOIN_ITEMS: 'mod+shift+j',
+    })
+
+    expect(result.overrides).toEqual({})
+    expect(result.warnings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          command: 'MARK_IN',
+          conflictingCommand: 'JOIN_ITEMS',
+          resolution: 'fallback',
+        }),
+      ]),
+    )
+  })
+
+  it('rejects ctrl versus mod collisions on Windows and Linux', () => {
+    const result = resolveHotkeyConfiguration({
+      MARK_IN: 'ctrl+j',
+      JOIN_ITEMS: 'mod+shift+j',
+    })
+
+    expect(result.overrides).toEqual({})
+    expect(result.warnings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ command: 'MARK_IN', conflictingCommand: 'JOIN_ITEMS' }),
+      ]),
+    )
+  })
+
+  it('keeps explicit meta and ctrl chords distinct', () => {
+    const result = resolveHotkeyConfiguration({
+      PLAY_PAUSE: 'meta+f10',
+      SHUTTLE_PAUSE: 'ctrl+f10',
+    })
+
+    expect(result.overrides).toEqual({
+      PLAY_PAUSE: 'meta+f10',
+      SHUTTLE_PAUSE: 'ctrl+f10',
+    })
+    expect(result.warnings).toEqual([])
+  })
+
+  it('deterministically suppresses one legacy runtime alias claimant', () => {
+    const bindings = {
+      ...resolveHotkeys(),
+      MARK_IN: 'meta+j',
+      JOIN_ITEMS: 'mod+shift+j',
+    }
+
+    expect(getRuntimeHotkeyBinding(bindings, 'JOIN_ITEMS')).toBe('mod+shift+j')
+    expect(getRuntimeHotkeyBinding(bindings, 'MARK_IN', 'preview')).toBeNull()
+  })
+
   it('keeps ordinary remaps whose direct and derived runtime chords are unique', () => {
     const result = resolveHotkeyConfiguration({
       MARK_IN: 'q',
@@ -252,7 +322,7 @@ describe('sanitizeHotkeyOverrides', () => {
       }),
     ).toEqual({
       PLAY_PAUSE: 'shift+space',
-      EXPORT: 'mod+e',
+      EXPORT: 'ctrl+e',
       DELETE_SELECTED: '',
     })
   })
@@ -279,7 +349,7 @@ describe('createHotkeyExportDocument', () => {
     expect(exportDocument.version).toBe(HOTKEY_EXPORT_VERSION)
     expect(exportDocument.overrides).toEqual({
       PLAY_PAUSE: 'shift+space',
-      EXPORT: 'mod+e',
+      EXPORT: 'ctrl+e',
     })
     expect(exportDocument.commands).toContainEqual(
       expect.objectContaining({
@@ -300,7 +370,7 @@ describe('createHotkeyExportDocument', () => {
     expect(exportDocument.commands).toContainEqual(
       expect.objectContaining({
         id: 'EXPORT',
-        binding: 'mod+e',
+        binding: 'ctrl+e',
         defaultBinding: 'mod+shift+e',
         isCustom: true,
       }),
@@ -362,7 +432,7 @@ describe('parseHotkeyImportDocument', () => {
     ).toEqual({
       overrides: {
         PLAY_PAUSE: 'shift+space',
-        EXPORT: 'mod+e',
+        EXPORT: 'ctrl+e',
       },
       importedCommandCount: 2,
       ignoredCommandCount: 1,
@@ -409,7 +479,7 @@ describe('parseHotkeyImportDocument', () => {
     ).toEqual({
       overrides: {
         PLAY_PAUSE: '',
-        EXPORT: 'mod+e',
+        EXPORT: 'ctrl+e',
       },
       importedCommandCount: 2,
       ignoredCommandCount: 0,
@@ -429,7 +499,7 @@ describe('parseHotkeyImportDocument', () => {
     ).toEqual({
       overrides: {
         PLAY_PAUSE: 'shift+space',
-        EXPORT: 'mod+e',
+        EXPORT: 'ctrl+e',
         DELETE_SELECTED: '',
       },
       importedCommandCount: 3,

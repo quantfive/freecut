@@ -8,7 +8,7 @@ import { usePlaybackStore } from '@/shared/state/playback'
 import { useEditorStore } from '@/shared/state/editor'
 import { useTimelineStore } from '../../stores/timeline-store'
 import { useSelectionStore } from '@/shared/state/selection'
-import { HOTKEY_OPTIONS } from '@/config/hotkeys'
+import { HOTKEY_OPTIONS, getRuntimeHotkeyBinding } from '@/config/hotkeys'
 import { canJoinMultipleItems } from '@/features/timeline/utils/clip-utils'
 import { canLinkSelection, hasLinkedItems } from '@/features/timeline/utils/linked-items'
 import {
@@ -26,6 +26,7 @@ import { useDeleteShortcuts } from './use-delete-shortcuts'
 
 export function useEditingShortcuts(callbacks: TimelineShortcutCallbacks) {
   const hotkeys = useResolvedHotkeys()
+  const joinItemsBinding = getRuntimeHotkeyBinding(hotkeys, 'JOIN_ITEMS')
   const selectedItemIds = useSelectionStore((s) => s.selectedItemIds)
   const editKeyframePanelOpen = useSelectionStore((s) => s.editKeyframePanelOpen)
   const clearSelection = useSelectionStore((s) => s.clearSelection)
@@ -206,7 +207,7 @@ export function useEditingShortcuts(callbacks: TimelineShortcutCallbacks) {
 
   // Editing: Shift+J - Join selected clips
   useHotkeys(
-    hotkeys.JOIN_ITEMS,
+    joinItemsBinding ?? [],
     (event) => {
       if (selectedItemIds.length < 2) return
 
@@ -222,7 +223,7 @@ export function useEditingShortcuts(callbacks: TimelineShortcutCallbacks) {
       }
     },
     HOTKEY_OPTIONS,
-    [selectedItemIds, items, joinItems],
+    [joinItemsBinding, selectedItemIds, items, joinItems],
   )
 
   useHotkeys(

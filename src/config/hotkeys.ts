@@ -164,6 +164,10 @@ interface RuntimeHotkeyClaim {
   variant: RuntimeHotkeyVariant
 }
 
+interface RuntimePhysicalHotkeyClaim extends RuntimeHotkeyClaim {
+  physicalBinding: string
+}
+
 export interface BrowserHostileHotkey {
   binding: string
   browserAction: string
@@ -174,17 +178,16 @@ interface HotkeyCommandLookup {
   byDefaultBinding: Map<string, HotkeyKey>
 }
 
-const HOTKEY_MODIFIERS = ['mod', 'alt', 'shift'] as const
+const HOTKEY_MODIFIERS = ['mod', 'ctrl', 'meta', 'alt', 'shift'] as const
 const HOTKEY_MODIFIER_SET = new Set<string>(HOTKEY_MODIFIERS)
 const HOTKEY_MODIFIER_ORDER = new Map<string, number>(
   HOTKEY_MODIFIERS.map((token, index) => [token, index]),
 )
 
 const HOTKEY_TOKEN_ALIASES: Record<string, string> = {
-  cmd: 'mod',
-  command: 'mod',
-  ctrl: 'mod',
-  control: 'mod',
+  cmd: 'meta',
+  command: 'meta',
+  control: 'ctrl',
   option: 'alt',
   return: 'enter',
   esc: 'escape',
@@ -222,6 +225,23 @@ const HOTKEY_KEY_LABELS: Record<string, string> = {
   escape: 'Esc',
   tab: 'Tab',
   enter: 'Enter',
+}
+
+const HOTKEY_MODIFIER_LABELS: Record<HotkeyPlatform, Record<string, string>> = {
+  mac: {
+    mod: 'Cmd',
+    ctrl: 'Ctrl',
+    meta: 'Cmd',
+    alt: 'Option',
+    shift: 'Shift',
+  },
+  windows: {
+    mod: 'Ctrl',
+    ctrl: 'Ctrl',
+    meta: 'Meta',
+    alt: 'Alt',
+    shift: 'Shift',
+  },
 }
 
 const HOTKEY_CODE_TOKEN_MAP: Record<string, string> = {
@@ -469,9 +489,16 @@ function createResolvedHotkeyBindings(
 }
 
 function getDuplicateRuntimeHotkeyGroups(bindings: HotkeyBindingMap): RuntimeHotkeyClaim[][] {
-  return Object.values(getRuntimeHotkeyConflictGraph(bindings)).filter(
-    (claims) => new Set(claims.map((claim) => claim.command)).size > 1,
-  )
+  const duplicateGroups = new Map<string, RuntimeHotkeyClaim[]>()
+  for (const claims of Object.values(getRuntimeHotkeyConflictGraph(bindings))) {
+    if (new Set(claims.map((claim) => claim.command)).size < 2) continue
+    const signature = claims
+      .map((claim) => `${claim.command}:${claim.variant}:${claim.binding}`)
+      .sort()
+      .join('|')
+    if (!duplicateGroups.has(signature)) duplicateGroups.set(signature, claims)
+  }
+  return [...duplicateGroups.values()]
 }
 
 function createConflictFallbackWarnings(
@@ -481,13 +508,12 @@ function createConflictFallbackWarnings(
 ): HotkeyConflictWarning[] {
   return conflicts.flatMap((claims) => {
     const commands = [...new Set(claims.map((claim) => claim.command))]
-    const collisionBinding = claims[0]!.binding
     return commands
       .filter((key) => !rejected.has(key) && key in requested && requested[key] !== HOTKEYS[key])
       .map((key) => ({
         code: 'duplicate_binding' as const,
         command: key,
-        binding: collisionBinding,
+        binding: claims.find((claim) => claim.command === key)!.binding,
         resolution: 'fallback' as const,
         conflictingCommand: commands.find((command) => command !== key)!,
       }))
@@ -662,17 +688,8 @@ export function hasHotkeyPrimaryToken(binding: string): boolean {
 }
 
 function formatHotkeyToken(token: string, platform: HotkeyPlatform): string {
-  if (token === 'mod') {
-    return platform === 'mac' ? 'Cmd' : 'Ctrl'
-  }
-
-  if (token === 'alt') {
-    return platform === 'mac' ? 'Option' : 'Alt'
-  }
-
-  if (token === 'shift') {
-    return 'Shift'
-  }
+  const modifierLabel = HOTKEY_MODIFIER_LABELS[platform][token]
+  if (modifierLabel) return modifierLabel
 
   if (HOTKEY_KEY_LABELS[token]) {
     return HOTKEY_KEY_LABELS[token]
@@ -702,7 +719,15 @@ export function getBrowserHostileHotkey(binding: string): BrowserHostileHotkey |
     return null
   }
 
-  return BROWSER_HOSTILE_HOTKEY_MAP.get(normalizedBinding) ?? null
+  const directMatch = BROWSER_HOSTILE_HOTKEY_MAP.get(normalizedBinding)
+  if (directMatch) return directMatch
+
+  const portableModifierBinding = normalizeHotkeyBinding(
+    splitHotkeyBinding(normalizedBinding)
+      .map((token) => (token === 'ctrl' || token === 'meta' ? 'mod' : token))
+      .join('+'),
+  )
+  return BROWSER_HOSTILE_HOTKEY_MAP.get(portableModifierBinding) ?? null
 }
 
 export function getHotkeyPrimaryTokenFromEventData(eventData: HotkeyEventData): string | null {
@@ -784,6 +809,17 @@ function getCommandRuntimeHotkeyClaims(command: HotkeyKey, binding: string): Run
   return claims
 }
 
+function getPhysicalHotkeyBindings(binding: string): string[] {
+  const tokens = splitHotkeyBinding(binding)
+  return (['mac', 'windows'] as const).map((platform) => {
+    const physicalTokens = tokens.map((token) => {
+      if (token !== 'mod') return token
+      return platform === 'mac' ? 'meta' : 'ctrl'
+    })
+    return `${platform}:${normalizeHotkeyBinding(physicalTokens.join('+'))}`
+  })
+}
+
 /**
  * Canonical graph of every physical chord registered at runtime, including
  * modifier-derived variants. Claim insertion order is the deterministic owner
@@ -791,14 +827,16 @@ function getCommandRuntimeHotkeyClaims(command: HotkeyKey, binding: string): Run
  */
 function getRuntimeHotkeyConflictGraph(
   bindings: HotkeyBindingMap,
-): Record<string, RuntimeHotkeyClaim[]> {
-  const conflicts: Record<string, RuntimeHotkeyClaim[]> = {}
+): Record<string, RuntimePhysicalHotkeyClaim[]> {
+  const conflicts: Record<string, RuntimePhysicalHotkeyClaim[]> = {}
 
   for (const [key, binding] of Object.entries(bindings) as [HotkeyKey, string][]) {
     for (const claim of getCommandRuntimeHotkeyClaims(key, binding)) {
-      const bindingClaims = conflicts[claim.binding] ?? []
-      bindingClaims.push(claim)
-      conflicts[claim.binding] = bindingClaims
+      for (const physicalBinding of getPhysicalHotkeyBindings(claim.binding)) {
+        const bindingClaims = conflicts[physicalBinding] ?? []
+        bindingClaims.push({ ...claim, physicalBinding })
+        conflicts[physicalBinding] = bindingClaims
+      }
     }
   }
 
@@ -815,8 +853,12 @@ export function getRuntimeHotkeyBinding(
   )
   if (!claim) return null
 
-  const owner = getRuntimeHotkeyConflictGraph(bindings)[claim.binding]?.[0]
-  return owner?.command === command && owner.variant === variant ? claim.binding : null
+  const graph = getRuntimeHotkeyConflictGraph(bindings)
+  const ownsEveryPhysicalBinding = getPhysicalHotkeyBindings(claim.binding).every((binding) => {
+    const owner = graph[binding]?.[0]
+    return owner?.command === command && owner.variant === variant
+  })
+  return ownsEveryPhysicalBinding ? claim.binding : null
 }
 
 export function findHotkeyConflicts(
@@ -830,10 +872,11 @@ export function findHotkeyConflicts(
   }
 
   if (!currentKey) {
+    const graph = getRuntimeHotkeyConflictGraph(bindings)
     return [
       ...new Set(
-        (getRuntimeHotkeyConflictGraph(bindings)[normalizedBinding] ?? []).map(
-          (claim) => claim.command,
+        getPhysicalHotkeyBindings(normalizedBinding).flatMap((physicalBinding) =>
+          (graph[physicalBinding] ?? []).map((claim) => claim.command),
         ),
       ),
     ]
@@ -843,8 +886,10 @@ export function findHotkeyConflicts(
   const graph = getRuntimeHotkeyConflictGraph(candidateBindings)
   const conflicts = new Set<HotkeyKey>()
   for (const claim of getCommandRuntimeHotkeyClaims(currentKey, normalizedBinding)) {
-    for (const candidate of graph[claim.binding] ?? []) {
-      if (candidate.command !== currentKey) conflicts.add(candidate.command)
+    for (const physicalBinding of getPhysicalHotkeyBindings(claim.binding)) {
+      for (const candidate of graph[physicalBinding] ?? []) {
+        if (candidate.command !== currentKey) conflicts.add(candidate.command)
+      }
     }
   }
   return (Object.keys(HOTKEYS) as HotkeyKey[]).filter((key) => conflicts.has(key))
