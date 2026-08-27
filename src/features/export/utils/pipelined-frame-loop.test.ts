@@ -182,6 +182,81 @@ describe('runPipelinedFrameLoop', () => {
     expect(samples[1]?.closed).toBe(true)
   })
 
+  it('preserves a render error while observing a late encoder rejection', async () => {
+    const renderError = new Error('render failed')
+    const encoderError = new Error('encoder failed after render')
+    const encode = deferred()
+    const unhandledRejections: unknown[] = []
+    const onUnhandledRejection = (reason: unknown) => unhandledRejections.push(reason)
+    process.on('unhandledRejection', onUnhandledRejection)
+
+    try {
+      const { events, samples, run } = createHarness(3, {
+        renderImpl: (frame) => {
+          if (frame === 1) throw renderError
+        },
+        encodeImpl: () => encode.promise,
+      })
+
+      const outcome = run().then(
+        () => null,
+        (error: unknown) => error,
+      )
+      await tick()
+      expect(events).toContain('render-1')
+
+      encode.reject(encoderError)
+      expect(await outcome).toBe(renderError)
+      await tick()
+      expect(unhandledRejections).toEqual([])
+      expect(samples[0]?.closed).toBe(true)
+    } finally {
+      process.off('unhandledRejection', onUnhandledRejection)
+    }
+  })
+
+  it('preserves a pending error while observing a late encoder rejection', async () => {
+    const pendingError = new Error('audio task failed')
+    const encoderError = new Error('encoder failed after pending error')
+    const encodes: Deferred[] = []
+    const unhandledRejections: unknown[] = []
+    const onUnhandledRejection = (reason: unknown) => unhandledRejections.push(reason)
+    process.on('unhandledRejection', onUnhandledRejection)
+    let raised: unknown
+
+    try {
+      const { events, samples, run } = createHarness(4, {
+        getPendingError: () => raised,
+        renderImpl: (frame) => {
+          if (frame === 1) raised = pendingError
+        },
+        encodeImpl: () => {
+          const encode = deferred()
+          encodes.push(encode)
+          return encode.promise
+        },
+      })
+
+      const outcome = run().then(
+        () => null,
+        (error: unknown) => error,
+      )
+      await tick()
+      expect(events).toContain('render-1')
+      encodes[0]?.resolve()
+      await tick()
+      expect(events).toContain('encode-start-1')
+
+      encodes[1]?.reject(encoderError)
+      expect(await outcome).toBe(pendingError)
+      await tick()
+      expect(unhandledRejections).toEqual([])
+      expect(samples[1]?.closed).toBe(true)
+    } finally {
+      process.off('unhandledRejection', onUnhandledRejection)
+    }
+  })
+
   it('honours an abort signalled before the loop starts', async () => {
     const controller = new AbortController()
     controller.abort()
