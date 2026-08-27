@@ -156,6 +156,50 @@ describe('host shortcut settings round trip', () => {
     unmountB()
   })
 
+  it('invalidates deferred host A when replacement B omits the optional shortcut port', async () => {
+    useSettingsStore.getState().replaceHotkeyOverrides({ PLAY_PAUSE: 'shift+space' })
+    let resolveA!: (settings: HostShortcutSettings) => void
+    const hostA = createShortcutHost(createHostShortcutSettings({ SHUTTLE_REVERSE: 'a' }))
+    hostA.host.shortcuts!.getSettings = vi.fn(
+      () => new Promise<HostShortcutSettings>((resolve) => (resolveA = resolve)),
+    )
+    const mountA = mountHostShortcutSettings(hostA.host)
+    const hostB = { ...createShortcutHost(createHostShortcutSettings({})).host }
+    delete hostB.shortcuts
+
+    const unmountB = await mountHostShortcutSettings(hostB)
+    resolveA(createHostShortcutSettings({ SHUTTLE_REVERSE: 'a' }))
+    const unmountA = await mountA
+
+    expect(hostA.listenerCount()).toBe(0)
+    expect(useSettingsStore.getState().hotkeyOverrides).toEqual({
+      PLAY_PAUSE: 'shift+space',
+    })
+    unmountA()
+    unmountB()
+  })
+
+  it('cancels deferred hydration on unmount before subscribing', async () => {
+    useSettingsStore.getState().replaceHotkeyOverrides({ PLAY_PAUSE: 'shift+space' })
+    let resolveSettings!: (settings: HostShortcutSettings) => void
+    const host = createShortcutHost(createHostShortcutSettings({ SHUTTLE_REVERSE: 'q' }))
+    host.host.shortcuts!.getSettings = vi.fn(
+      () => new Promise<HostShortcutSettings>((resolve) => (resolveSettings = resolve)),
+    )
+    const controller = new AbortController()
+    const mounting = mountHostShortcutSettings(host.host, controller.signal)
+
+    controller.abort()
+    resolveSettings(createHostShortcutSettings({ SHUTTLE_REVERSE: 'q' }))
+    const unmount = await mounting
+
+    expect(host.listenerCount()).toBe(0)
+    expect(useSettingsStore.getState().hotkeyOverrides).toEqual({
+      PLAY_PAUSE: 'shift+space',
+    })
+    unmount()
+  })
+
   it('does not execute a queued write after its host is disposed', async () => {
     const host = createShortcutHost(createHostShortcutSettings({ SHUTTLE_PAUSE: 'p' }))
     const unmount = await mountHostShortcutSettings(host.host)
