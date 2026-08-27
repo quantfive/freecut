@@ -34,7 +34,7 @@
   ],
   "dependencies": {
     "packageJson": "package.json",
-    "packageJsonSha256": "a2762fb7549da91ee6f5707dd712199198563231a710c8dbed2fa3f910d982ba",
+    "packageJsonSha256": "7786ffe5cde5b09b6f88fc4fd13af399365ac0d6dc32f320d6f719c6f62edc89",
     "lockfile": "package-lock.json",
     "lockfileVersion": 3,
     "lockfileSha256": "b4a86741ce7891da1f63df01b6fdd4ed507e8887d5097c6a0f93fc2ea6f3420e",
