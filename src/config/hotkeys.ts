@@ -971,11 +971,38 @@ export function parseHotkeyImportDocument(source: unknown): HotkeyImportResult {
   })
 }
 
+const GLOBAL_HOTKEY_OPT_IN = '[data-global-hotkeys="allow"]'
+const DIALOG_SELECTOR = '[role="dialog"], dialog'
+const DIALOG_CONTROL_SELECTOR =
+  'button, input, textarea, select, [role="button"], [contenteditable="true"], [contenteditable=""]'
+
+function isContentEditableTarget(target: Element): boolean {
+  const editable = target.closest('[contenteditable]')
+  return editable !== null && editable.getAttribute('contenteditable') !== 'false'
+}
+
+/**
+ * Returns true when a global shortcut should be ignored for the focused DOM
+ * target. Ignoring here is intentional: react-hotkeys-hook then leaves the
+ * event alone, preserving dialog controls' default actions and propagation.
+ */
+export function shouldIgnoreGlobalHotkey(event: KeyboardEvent): boolean {
+  const target = event.target
+  if (typeof Element === 'undefined' || !(target instanceof Element)) return false
+  if (target.closest(GLOBAL_HOTKEY_OPT_IN)) return false
+  if (isContentEditableTarget(target)) return true
+
+  const dialog = target.closest(DIALOG_SELECTOR)
+  return dialog !== null && target.closest(DIALOG_CONTROL_SELECTOR) !== null
+}
+
 /**
  * Options for react-hotkeys-hook.
- * Prevents shortcuts from firing in input fields.
+ * Prevents shortcuts from firing in editable fields and dialog controls.
  */
 export const HOTKEY_OPTIONS = {
   enableOnFormTags: false,
+  enableOnContentEditable: false,
+  ignoreEventWhen: shouldIgnoreGlobalHotkey,
   preventDefault: true,
 } as const
