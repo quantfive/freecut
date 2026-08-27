@@ -5,6 +5,7 @@ import {
   getTrackKind,
   type TrackKind,
 } from './classic-tracks'
+import { isTimelineTrackLocked, partitionItemMutationIdsByLock } from './track-lock-invariants'
 
 export interface TrackContentDragPlan {
   kind: TrackKind
@@ -34,7 +35,7 @@ export function resolveTrackContentDragPlan(params: {
   selectedTrackIds: string[]
 }): TrackContentDragPlan | null {
   const anchorTrack = params.tracks.find((track) => track.id === params.anchorTrackId)
-  if (!anchorTrack) {
+  if (!anchorTrack || isTimelineTrackLocked(params.tracks, anchorTrack.id)) {
     return null
   }
 
@@ -49,6 +50,14 @@ export function resolveTrackContentDragPlan(params: {
   }
 
   const selectedTrackIds = new Set(params.selectedTrackIds)
+  if (
+    sectionTracks.some(
+      (track) => selectedTrackIds.has(track.id) && isTimelineTrackLocked(params.tracks, track.id),
+    )
+  ) {
+    return null
+  }
+
   const draggedTrackIds = sectionTracks
     .filter((track) => selectedTrackIds.has(track.id))
     .map((track) => track.id)
@@ -69,7 +78,10 @@ export function buildTrackContentCreateTrackMovePlan(params: {
   const sectionTracks = getKindTracks(params.tracks, params.kind)
   const draggedTrackIdsSet = new Set(params.draggedTrackIds)
   const draggedTracks = sectionTracks.filter((track) => draggedTrackIdsSet.has(track.id))
-  if (draggedTracks.length === 0) {
+  if (
+    draggedTracks.length === 0 ||
+    draggedTracks.some((track) => isTimelineTrackLocked(params.tracks, track.id))
+  ) {
     return null
   }
 
@@ -121,6 +133,13 @@ export function buildTrackContentCreateTrackMovePlan(params: {
     ]
   })
 
+  const mutationPartition = partitionItemMutationIdsByLock({
+    items: params.items,
+    tracks: params.tracks,
+    itemIds: updates.map((update) => update.id),
+  })
+  if (mutationPartition.blockedIds.length > 0) return null
+
   return {
     tracks: nextTracks,
     updates,
@@ -128,6 +147,7 @@ export function buildTrackContentCreateTrackMovePlan(params: {
 }
 
 export function buildTrackContentMoveUpdates(params: {
+  tracks: TimelineTrack[]
   sectionTrackIds: string[]
   draggedTrackIds: string[]
   items: TimelineItem[]
@@ -174,7 +194,18 @@ export function buildTrackContentMoveUpdates(params: {
     }
   })
 
-  return params.items.flatMap((item) => {
+  const affectedTrackIds = new Set<string>()
+  for (const [sourceTrackId, destinationTrackId] of destinationTrackIdBySourceTrackId) {
+    affectedTrackIds.add(sourceTrackId)
+    affectedTrackIds.add(destinationTrackId)
+  }
+  if (
+    Array.from(affectedTrackIds).some((trackId) => isTimelineTrackLocked(params.tracks, trackId))
+  ) {
+    return []
+  }
+
+  const updates = params.items.flatMap((item) => {
     const destinationTrackId = destinationTrackIdBySourceTrackId.get(item.trackId)
     if (!destinationTrackId) {
       return []
@@ -188,4 +219,12 @@ export function buildTrackContentMoveUpdates(params: {
       },
     ]
   })
+
+  const mutationPartition = partitionItemMutationIdsByLock({
+    items: params.items,
+    tracks: params.tracks,
+    itemIds: updates.map((update) => update.id),
+  })
+
+  return mutationPartition.blockedIds.length > 0 ? [] : updates
 }

@@ -152,6 +152,10 @@ function applyRippleRemoval(ids: string[]): { removedIds: string[]; affectedIds:
   const syncLockResult = propagateRemovedIntervalsToSyncLockedTracks({
     editedTrackIds,
     intervals: removedIntervals,
+    additionalAffectedIds: new Set([
+      ...allRemoveIds,
+      ...filteredUpdates.map((update) => update.id),
+    ]),
   })
 
   const cascadedRemoveIds = Array.from(new Set([...allRemoveIds, ...syncLockResult.removedIds]))
