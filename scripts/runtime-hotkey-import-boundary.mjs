@@ -37,6 +37,12 @@ const BINARY_VALUE_RESOLVERS = new Map([
 
 const UPDATE_OPERATORS = new Set([SyntaxKind.PlusPlusToken, SyntaxKind.MinusMinusToken])
 
+const SHORT_CIRCUIT_OPERATORS = new Set([
+  SyntaxKind.AmpersandAmpersandToken,
+  SyntaxKind.BarBarToken,
+  SyntaxKind.QuestionQuestionToken,
+])
+
 const FUNCTION_SCOPE_KINDS = new Set([
   SyntaxKind.FunctionDeclaration,
   SyntaxKind.FunctionExpression,
@@ -99,7 +105,15 @@ function createScope(
   owner,
 ) {
   const region = !parent || isConstantBoundary ? { bindings: new Map() } : parent.region
-  return { parent, kind, isVarScope, isConstantBoundary, region, bindings: new Map(), owner }
+  return {
+    parent,
+    kind,
+    isVarScope,
+    isConstantBoundary,
+    region,
+    bindings: new Map(),
+    owner: owner ?? parent?.owner,
+  }
 }
 
 function declareBinding(scope, name, binding) {
@@ -164,8 +178,10 @@ function variableBinding(declaration, declarationScope, isConst, isResolvableCon
       scope: declarationScope,
       mutationPositions: [],
       writes: [],
+      owner: declarationScope.owner,
       isHoisted,
       availableAfter: isHoisted ? 0 : declaration.end,
+      assignmentAvailableAfter: declaration.end,
     }
   }
   return { kind: 'unknown-shadow', availableAfter: declaration.end }
@@ -269,6 +285,7 @@ function createChildLexicalScope(node, currentScope) {
     'block',
     BLOCK_VAR_SCOPE_KINDS.has(node.kind),
     node.kind === SyntaxKind.ModuleBlock,
+    node.kind === SyntaxKind.ModuleBlock ? node : undefined,
   )
 }
 
@@ -314,7 +331,7 @@ function predeclareNodeBindings(node, currentScope) {
 }
 
 function buildLexicalScopes(sourceFile) {
-  const sourceScope = createScope(undefined, 'source', true, true)
+  const sourceScope = createScope(undefined, 'source', true, true, sourceFile)
   const nodeScopes = new WeakMap()
 
   function visitLoopHeader(node, currentScope) {
@@ -413,30 +430,85 @@ function findLexicalBinding(scope, name) {
   return undefined
 }
 
-function hasUncertainWriteAncestor(node) {
-  let current = node.parent
-  while (current) {
-    if (UNCERTAIN_WRITE_ANCESTOR_KINDS.has(current.kind)) return true
-    if (
-      isBinaryExpression(current) &&
-      (current.operatorToken.kind === SyntaxKind.AmpersandAmpersandToken ||
-        current.operatorToken.kind === SyntaxKind.BarBarToken ||
-        current.operatorToken.kind === SyntaxKind.QuestionQuestionToken)
-    ) {
-      return true
-    }
-    current = current.parent
-  }
-  return false
+function staticControlValue(expression, nodeScopes, sourceScope) {
+  const scope = nodeScopes.get(expression) ?? sourceScope
+  const result = evaluateConstantValue(
+    expression,
+    scope,
+    new Set(),
+    scope,
+    expression.getStart(),
+  )
+  return result ? { known: true, value: result.value } : { known: false }
 }
 
-function crossesNestedFunction(scope, binding) {
-  let current = scope
-  while (current && current !== binding.scope) {
-    if (current.kind === 'function') return true
+function conditionalBranchStatus(
+  branch,
+  condition,
+  whenTrue,
+  whenFalse,
+  nodeScopes,
+  sourceScope,
+) {
+  if (branch === condition) return 'reachable'
+  const control = staticControlValue(condition, nodeScopes, sourceScope)
+  if (!control.known) return 'uncertain'
+  return branch === (control.value ? whenTrue : whenFalse) ? 'reachable' : 'unreachable'
+}
+
+function logicalRightStatus(node, expression, nodeScopes, sourceScope) {
+  if (node !== expression.right) return 'reachable'
+  const left = staticControlValue(expression.left, nodeScopes, sourceScope)
+  if (!left.known) return 'uncertain'
+  const executes =
+    expression.operatorToken.kind === SyntaxKind.AmpersandAmpersandToken
+      ? Boolean(left.value)
+      : expression.operatorToken.kind === SyntaxKind.BarBarToken
+        ? !left.value
+        : left.value === null
+  return executes ? 'reachable' : 'unreachable'
+}
+
+function controlFlowAncestorStatus(current, branch, nodeScopes, sourceScope) {
+  if (current.kind === SyntaxKind.IfStatement) {
+    return conditionalBranchStatus(
+      branch,
+      current.expression,
+      current.thenStatement,
+      current.elseStatement,
+      nodeScopes,
+      sourceScope,
+    )
+  }
+  if (current.kind === SyntaxKind.ConditionalExpression) {
+    return conditionalBranchStatus(
+      branch,
+      current.condition,
+      current.whenTrue,
+      current.whenFalse,
+      nodeScopes,
+      sourceScope,
+    )
+  }
+  if (
+    isBinaryExpression(current) &&
+    SHORT_CIRCUIT_OPERATORS.has(current.operatorToken.kind)
+  ) {
+    return logicalRightStatus(branch, current, nodeScopes, sourceScope)
+  }
+  return UNCERTAIN_WRITE_ANCESTOR_KINDS.has(current.kind) ? 'uncertain' : 'reachable'
+}
+
+function controlFlowWriteStatus(node, owner, nodeScopes, sourceScope) {
+  let branch = node
+  let current = node.parent
+  while (current && current !== owner) {
+    const status = controlFlowAncestorStatus(current, branch, nodeScopes, sourceScope)
+    if (status !== 'reachable') return status
+    branch = current
     current = current.parent
   }
-  return current !== binding.scope
+  return current === owner ? 'reachable' : 'uncertain'
 }
 
 function assignmentWriteDescriptors(node) {
@@ -481,25 +553,42 @@ function loopWriteDescriptors(node) {
 }
 
 function markMutableBindingWrites(sourceFile, nodeScopes, sourceScope) {
+  const writes = []
   walkAst(sourceFile, (node) => {
     const descriptors = assignmentWriteDescriptors(node)
     if (descriptors.length === 0) return
     const scope = nodeScopes.get(node) ?? sourceScope
-    const isUncertain = hasUncertainWriteAncestor(node)
     for (const descriptor of descriptors) {
       const binding = findLexicalBinding(scope, descriptor.name)
       if (binding?.kind !== 'mutable') continue
       const write = {
+        node,
+        start: node.getStart(),
         position: node.end,
         expression: descriptor.expression,
         scope,
         isSimple: descriptor.isSimple,
-        isUncertain: isUncertain || crossesNestedFunction(scope, binding),
+        isReachable: true,
+        isUncertain: true,
       }
-      binding.mutationPositions.push(write.position)
       binding.writes.push(write)
+      writes.push({ binding, write })
     }
   })
+
+  for (const { binding, write } of writes) {
+    const status =
+      scopeOwner(write.scope) === binding.owner
+        ? controlFlowWriteStatus(write.node, binding.owner, nodeScopes, sourceScope)
+        : 'uncertain'
+    write.isReachable = status !== 'unreachable'
+    write.isUncertain = status !== 'reachable'
+    if (write.isReachable) binding.mutationPositions.push(write.position)
+  }
+}
+
+function scopeOwner(scope) {
+  return scope?.owner
 }
 
 function isBindingAvailable(binding, referencePosition) {
@@ -605,7 +694,7 @@ function evaluateMutableBindingValue(
 ) {
   if (resolving.has(binding) || depth > MAX_CONSTANT_EVALUATION_DEPTH) return undefined
 
-  const writes = binding.writes ?? []
+  const writes = (binding.writes ?? []).filter((write) => write.isReachable)
   if (writes.length > 1) return undefined
   if (writes.length === 0) {
     return evaluateMutableInitializerValue(
@@ -651,6 +740,7 @@ function evaluateMutableInitializerValue(
 
 function mutableAssignmentIsFoldable(binding, write, referencePosition) {
   if (binding.initializer) return false
+  if (write.start < binding.assignmentAvailableAfter) return false
   if (!write.isSimple || write.isUncertain) return false
   if (!write.expression || write.position >= referencePosition) return false
   return !expressionReferencesMutableBinding(write.expression, write.scope)

@@ -37,6 +37,53 @@ const ROLLDOWN_PARITY_CASES = [
     resolves: true,
   },
   {
+    name: 'function owner inside dynamic branch',
+    source:
+      "declare const enabled: boolean; if (enabled) { function load() { let pkg; pkg = 'react-hotkeys-hook'; return import(pkg) } load() }",
+    resolves: true,
+  },
+  {
+    name: 'class owner inside dynamic branch',
+    source:
+      "declare const enabled: boolean; if (enabled) { class Loader { static { let pkg; pkg = 'react-hotkeys-hook'; import(pkg) } } new Loader() }",
+    resolves: true,
+  },
+  {
+    name: 'mutable statically true branch write',
+    source: "let pkg; if (true) pkg = 'react-hotkeys-hook'; import(pkg)",
+    resolves: true,
+  },
+  {
+    name: 'mutable statically false else write',
+    source: "let pkg; if (false) pkg = 'other'; else pkg = 'react-hotkeys-hook'; import(pkg)",
+    resolves: true,
+  },
+  {
+    name: 'mutable dead branch reassignment',
+    source: "let pkg = 'react-hotkeys-hook'; if (false) pkg = 'other'; import(pkg)",
+    resolves: true,
+  },
+  {
+    name: 'mutable statically executed logical write',
+    source: "let pkg; true && (pkg = 'react-hotkeys-hook'); import(pkg)",
+    resolves: true,
+  },
+  {
+    name: 'mutable statically selected conditional write',
+    source: "let pkg; true ? pkg = 'react-hotkeys-hook' : pkg = 'other'; import(pkg)",
+    resolves: true,
+  },
+  {
+    name: 'var assignment before declaration',
+    source: "pkg = 'react-hotkeys-hook'; var pkg; import(pkg)",
+    resolves: false,
+  },
+  {
+    name: 'let assignment before declaration',
+    source: "pkg = 'react-hotkeys-hook'; let pkg; import(pkg)",
+    resolves: false,
+  },
+  {
     name: 'mutable read before assignment',
     source: "export function load() { let pkg; import(pkg); pkg = 'react-hotkeys-hook' }",
     resolves: false,
@@ -62,6 +109,12 @@ const ROLLDOWN_PARITY_CASES = [
     name: 'mutable loop write',
     source:
       "declare const enabled: boolean; export function load() { let pkg; while (enabled) pkg = 'react-hotkeys-hook'; return import(pkg) }",
+    resolves: false,
+  },
+  {
+    name: 'mutable exception-path write',
+    source:
+      "export function load() { let pkg; try { pkg = 'react-hotkeys-hook' } finally {} return import(pkg) }",
     resolves: false,
   },
   {
