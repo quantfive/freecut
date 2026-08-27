@@ -415,6 +415,7 @@ export function rippleTrimItem(id: string, handle: 'start' | 'end', trimDelta: n
           const result = propagateRemovedIntervalsToSyncLockedTracks({
             editedTrackIds: editedTracks,
             intervals: [interval],
+            additionalAffectedIds: new Set([...syncedIds, ...updates.map((update) => update.id)]),
           })
           lockedAffected = result.affectedIds
           lockedRemoved = result.removedIds
@@ -423,6 +424,7 @@ export function rippleTrimItem(id: string, handle: 'start' | 'end', trimDelta: n
             editedTrackIds: editedTracks,
             cutFrame: insertAt,
             amount: shift,
+            additionalAffectedIds: new Set([...syncedIds, ...updates.map((update) => update.id)]),
           })
           lockedAffected = result.affectedIds
         }

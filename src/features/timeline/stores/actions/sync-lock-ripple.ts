@@ -2,7 +2,9 @@ import { useItemsStore } from '../items-store'
 import type { TimelineItem, TimelineTrack } from '@/types/timeline'
 import { isTrackSyncLockEnabled } from '../../utils/track-sync-lock'
 import type { PreviewItemUpdate } from '../../utils/item-edit-preview'
-import { applySplitBookkeeping } from './split-bookkeeping'
+import { applySplitBookkeeping, type SplitResultEntry } from './split-bookkeeping'
+import { getLinkedItems } from '../../utils/linked-items'
+import { isTimelineTrackLocked } from '../../utils/track-lock-invariants'
 
 export interface RipplePropagationResult {
   affectedIds: string[]
@@ -52,30 +54,34 @@ function normalizeIntervals(intervals: TimeInterval[]): TimeInterval[] {
   return merged
 }
 
+function canSyncLockRippleTrack(
+  tracks: TimelineTrack[],
+  track: TimelineTrack | undefined,
+  trackId: string,
+): boolean {
+  return isTrackSyncLockEnabled(track) && !isTimelineTrackLocked(tracks, trackId)
+}
+
 function getCandidateTrackIdsFromState(
   items: TimelineItem[],
   tracks: TimelineTrack[],
   editedTrackIds: Set<string>,
 ): string[] {
-  const trackIds = new Set<string>()
+  const trackById = new Map(tracks.map((track) => [track.id, track]))
+  const declaredCandidateIds = tracks
+    .filter(
+      (track) => !editedTrackIds.has(track.id) && canSyncLockRippleTrack(tracks, track, track.id),
+    )
+    .map((track) => track.id)
+  const itemCandidateIds = items
+    .map((item) => item.trackId)
+    .filter(
+      (trackId) =>
+        !editedTrackIds.has(trackId) &&
+        canSyncLockRippleTrack(tracks, trackById.get(trackId), trackId),
+    )
 
-  for (const track of tracks) {
-    if (!editedTrackIds.has(track.id) && isTrackSyncLockEnabled(track)) {
-      trackIds.add(track.id)
-    }
-  }
-
-  for (const item of items) {
-    if (editedTrackIds.has(item.trackId)) continue
-    if (trackIds.has(item.trackId)) continue
-
-    const track = tracks.find((candidate) => candidate.id === item.trackId)
-    if (isTrackSyncLockEnabled(track)) {
-      trackIds.add(item.trackId)
-    }
-  }
-
-  return [...trackIds]
+  return uniqueIds([...declaredCandidateIds, ...itemCandidateIds])
 }
 
 function getCandidateTrackIds(editedTrackIds: Set<string>): string[] {
@@ -103,29 +109,41 @@ function setPreviewUpdate(
   })
 }
 
-function splitItemWithBookkeeping(
-  itemId: string,
-  splitFrame: number,
-): { leftItem: TimelineItem; rightItem: TimelineItem } | null {
-  const current = useItemsStore.getState().itemById[itemId]
-  if (!current) {
-    return null
+function applySplitBookkeepingByLinkedGroup(entries: SplitResultEntry[]): void {
+  const unlinkedEntries: SplitResultEntry[] = []
+  const entriesByLinkedGroupId = new Map<string, SplitResultEntry[]>()
+
+  for (const entry of entries) {
+    if (!entry.originalLinkedGroupId) {
+      unlinkedEntries.push(entry)
+      continue
+    }
+
+    const groupEntries = entriesByLinkedGroupId.get(entry.originalLinkedGroupId)
+    if (groupEntries) groupEntries.push(entry)
+    else entriesByLinkedGroupId.set(entry.originalLinkedGroupId, [entry])
   }
 
-  const result = useItemsStore.getState()._splitItem(itemId, splitFrame)
-  if (!result) {
-    return null
+  applySplitBookkeeping(unlinkedEntries)
+  for (const groupEntries of entriesByLinkedGroupId.values()) {
+    applySplitBookkeeping(groupEntries)
   }
+}
 
-  applySplitBookkeeping([
-    {
-      originalId: current.id,
-      originalLinkedGroupId: current.linkedGroupId,
-      result,
-    },
-  ])
+function splitItemsWithBookkeeping(itemIds: string[], splitFrame: number): SplitResultEntry[] {
+  const store = useItemsStore.getState()
+  const entries = itemIds.flatMap((itemId) => {
+    const current = useItemsStore.getState().itemById[itemId]
+    if (!current) return []
 
-  return result
+    const result = store._splitItem(itemId, splitFrame)
+    return result
+      ? [{ originalId: current.id, originalLinkedGroupId: current.linkedGroupId, result }]
+      : []
+  })
+
+  applySplitBookkeepingByLinkedGroup(entries)
+  return entries
 }
 
 function buildRemovedIntervalPreviewUpdatesForTrack(
@@ -242,11 +260,92 @@ function buildInsertedGapPreviewUpdatesForTrack(
   return [...updatesById.values()]
 }
 
+function getAtomicCandidateTrackIds(params: {
+  items: TimelineItem[]
+  tracks: TimelineTrack[]
+  candidateTrackIds: string[]
+  updatesByTrackId: ReadonlyMap<string, PreviewItemUpdate[]>
+  additionalAffectedIds?: ReadonlySet<string>
+}): string[] {
+  const safeTrackIds = new Set(params.candidateTrackIds)
+  const itemById = new Map(params.items.map((item) => [item.id, item]))
+
+  let changed = true
+  while (changed) {
+    changed = false
+    const affectedIds = new Set(params.additionalAffectedIds ?? [])
+    for (const trackId of safeTrackIds) {
+      for (const update of params.updatesByTrackId.get(trackId) ?? []) {
+        affectedIds.add(update.id)
+      }
+    }
+
+    for (const trackId of [...safeTrackIds]) {
+      const trackUpdates = params.updatesByTrackId.get(trackId) ?? []
+      const blocksTrack = trackUpdates.some((update) => {
+        const item = itemById.get(update.id)
+        if (!item) return true
+
+        const linkedItems = getLinkedItems(params.items, item.id)
+        if (linkedItems.length <= 1) return false
+
+        const hasLockedMember = linkedItems.some((linkedItem) =>
+          isTimelineTrackLocked(params.tracks, linkedItem.trackId),
+        )
+        const mutatesWholeCohort = linkedItems.every((linkedItem) => affectedIds.has(linkedItem.id))
+        return hasLockedMember || !mutatesWholeCohort
+      })
+
+      if (blocksTrack) {
+        safeTrackIds.delete(trackId)
+        changed = true
+      }
+    }
+  }
+
+  return params.candidateTrackIds.filter((trackId) => safeTrackIds.has(trackId))
+}
+
+function buildRemovedUpdatesByTrack(params: {
+  items: TimelineItem[]
+  candidateTrackIds: string[]
+  intervals: TimeInterval[]
+}): Map<string, PreviewItemUpdate[]> {
+  return new Map(
+    params.candidateTrackIds.map((trackId) => [
+      trackId,
+      buildRemovedIntervalPreviewUpdatesForTrack(
+        params.items.filter((item) => item.trackId === trackId),
+        params.intervals,
+      ),
+    ]),
+  )
+}
+
+function buildInsertedUpdatesByTrack(params: {
+  items: TimelineItem[]
+  candidateTrackIds: string[]
+  cutFrame: number
+  amount: number
+}): Map<string, PreviewItemUpdate[]> {
+  return new Map(
+    params.candidateTrackIds.map((trackId) => [
+      trackId,
+      buildInsertedGapPreviewUpdatesForTrack(
+        params.items.filter((item) => item.trackId === trackId),
+        params.cutFrame,
+        params.amount,
+      ),
+    ]),
+  )
+}
+
 export function buildRemovedIntervalPreviewUpdatesForSyncLockedTracks(params: {
   items: TimelineItem[]
   tracks: TimelineTrack[]
   editedTrackIds: Set<string>
   intervals: TimeInterval[]
+  additionalAffectedIds?: ReadonlySet<string>
 }): PreviewItemUpdate[] {
   const intervals = normalizeIntervals(params.intervals)
   if (intervals.length === 0) {
@@ -258,13 +357,20 @@ export function buildRemovedIntervalPreviewUpdatesForSyncLockedTracks(params: {
     params.tracks,
     params.editedTrackIds,
   )
+  const updatesByTrackId = buildRemovedUpdatesByTrack({
+    items: params.items,
+    candidateTrackIds,
+    intervals,
+  })
+  const atomicTrackIds = getAtomicCandidateTrackIds({
+    items: params.items,
+    tracks: params.tracks,
+    candidateTrackIds,
+    updatesByTrackId,
+    additionalAffectedIds: params.additionalAffectedIds,
+  })
 
-  return candidateTrackIds.flatMap((trackId) =>
-    buildRemovedIntervalPreviewUpdatesForTrack(
-      params.items.filter((item) => item.trackId === trackId),
-      intervals,
-    ),
-  )
+  return atomicTrackIds.flatMap((trackId) => updatesByTrackId.get(trackId) ?? [])
 }
 
 export function buildInsertedGapPreviewUpdatesForSyncLockedTracks(params: {
@@ -273,6 +379,7 @@ export function buildInsertedGapPreviewUpdatesForSyncLockedTracks(params: {
   editedTrackIds: Set<string>
   cutFrame: number
   amount: number
+  additionalAffectedIds?: ReadonlySet<string>
 }): PreviewItemUpdate[] {
   const cutFrame = Math.max(0, Math.round(params.cutFrame))
   const amount = Math.max(0, Math.round(params.amount))
@@ -285,75 +392,72 @@ export function buildInsertedGapPreviewUpdatesForSyncLockedTracks(params: {
     params.tracks,
     params.editedTrackIds,
   )
+  const updatesByTrackId = buildInsertedUpdatesByTrack({
+    items: params.items,
+    candidateTrackIds,
+    cutFrame,
+    amount,
+  })
+  const atomicTrackIds = getAtomicCandidateTrackIds({
+    items: params.items,
+    tracks: params.tracks,
+    candidateTrackIds,
+    updatesByTrackId,
+    additionalAffectedIds: params.additionalAffectedIds,
+  })
 
-  return candidateTrackIds.flatMap((trackId) =>
-    buildInsertedGapPreviewUpdatesForTrack(
-      params.items.filter((item) => item.trackId === trackId),
-      cutFrame,
-      amount,
-    ),
-  )
+  return atomicTrackIds.flatMap((trackId) => updatesByTrackId.get(trackId) ?? [])
 }
 
-function removeItemsOnTrackInterval(
-  trackId: string,
+function removeIntervalFromTracks(
+  trackIds: ReadonlySet<string>,
   interval: TimeInterval,
 ): RipplePropagationResult {
   const store = useItemsStore.getState()
   const affectedIds: string[] = []
-  const removedIds: string[] = []
   const overlapping = useItemsStore
     .getState()
     .items.filter(
       (item) =>
-        item.trackId === trackId &&
+        trackIds.has(item.trackId) &&
         item.from < interval.end &&
         item.from + item.durationInFrames > interval.start,
     )
-    .sort((left, right) => left.from - right.from)
 
-  for (const overlappingItem of overlapping) {
-    const current = useItemsStore.getState().itemById[overlappingItem.id]
-    if (!current || current.trackId !== trackId) continue
-
-    const itemEnd = current.from + current.durationInFrames
-    const startsBeforeInterval = current.from < interval.start
-    const endsAfterInterval = itemEnd > interval.end
-
-    if (!startsBeforeInterval && !endsAfterInterval) {
-      store._removeItems([current.id])
-      removedIds.push(current.id)
-      continue
-    }
-
-    if (startsBeforeInterval && endsAfterInterval) {
-      const splitAtStart = splitItemWithBookkeeping(current.id, interval.start)
-      if (!splitAtStart) continue
-      affectedIds.push(splitAtStart.leftItem.id, splitAtStart.rightItem.id)
-
-      const splitAtEnd = splitItemWithBookkeeping(splitAtStart.rightItem.id, interval.end)
-      if (!splitAtEnd) continue
-      store._removeItems([splitAtEnd.leftItem.id])
-      removedIds.push(splitAtEnd.leftItem.id)
-      affectedIds.push(splitAtEnd.rightItem.id)
-      continue
-    }
-
-    if (startsBeforeInterval) {
-      const split = splitItemWithBookkeeping(current.id, interval.start)
-      if (!split) continue
-      store._removeItems([split.rightItem.id])
-      removedIds.push(split.rightItem.id)
-      affectedIds.push(split.leftItem.id)
-      continue
-    }
-
-    const split = splitItemWithBookkeeping(current.id, interval.end)
-    if (!split) continue
-    store._removeItems([split.leftItem.id])
-    removedIds.push(split.leftItem.id)
-    affectedIds.push(split.rightItem.id)
+  const startSplitEntries = splitItemsWithBookkeeping(
+    overlapping.filter((item) => item.from < interval.start).map((item) => item.id),
+    interval.start,
+  )
+  for (const entry of startSplitEntries) {
+    affectedIds.push(entry.result.leftItem.id, entry.result.rightItem.id)
   }
+
+  const endSplitEntries = splitItemsWithBookkeeping(
+    useItemsStore
+      .getState()
+      .items.filter(
+        (item) =>
+          trackIds.has(item.trackId) &&
+          item.from < interval.end &&
+          item.from + item.durationInFrames > interval.end,
+      )
+      .map((item) => item.id),
+    interval.end,
+  )
+  for (const entry of endSplitEntries) {
+    affectedIds.push(entry.result.leftItem.id, entry.result.rightItem.id)
+  }
+
+  const removedIds = useItemsStore
+    .getState()
+    .items.filter(
+      (item) =>
+        trackIds.has(item.trackId) &&
+        item.from >= interval.start &&
+        item.from + item.durationInFrames <= interval.end,
+    )
+    .map((item) => item.id)
+  if (removedIds.length > 0) store._removeItems(removedIds)
 
   return {
     affectedIds: uniqueIds(affectedIds),
@@ -362,7 +466,7 @@ function removeItemsOnTrackInterval(
 }
 
 function shiftTrackItems(
-  trackId: string,
+  trackIds: ReadonlySet<string>,
   predicate: (item: TimelineItem) => boolean,
   delta: number,
 ): string[] {
@@ -373,7 +477,7 @@ function shiftTrackItems(
   const store = useItemsStore.getState()
   const updates = useItemsStore
     .getState()
-    .items.filter((item) => item.trackId === trackId && predicate(item))
+    .items.filter((item) => trackIds.has(item.trackId) && predicate(item))
     .map((item) => ({
       id: item.id,
       from: Math.max(0, item.from + delta),
@@ -389,35 +493,49 @@ function shiftTrackItems(
 export function propagateRemovedIntervalsToSyncLockedTracks(params: {
   editedTrackIds: Set<string>
   intervals: TimeInterval[]
+  additionalAffectedIds?: ReadonlySet<string>
 }): RipplePropagationResult {
   const intervals = normalizeIntervals(params.intervals)
   if (intervals.length === 0) {
     return { affectedIds: [], removedIds: [] }
   }
 
+  const { items, tracks } = useItemsStore.getState()
   const candidateTrackIds = getCandidateTrackIds(params.editedTrackIds)
+  const updatesByTrackId = buildRemovedUpdatesByTrack({ items, candidateTrackIds, intervals })
+  const atomicTrackIds = new Set(
+    getAtomicCandidateTrackIds({
+      items,
+      tracks,
+      candidateTrackIds,
+      updatesByTrackId,
+      additionalAffectedIds: params.additionalAffectedIds,
+    }),
+  )
   const affectedIds: string[] = []
   const removedIds: string[] = []
 
-  for (const trackId of candidateTrackIds) {
-    let removedFrames = 0
-    for (const interval of intervals) {
-      const currentInterval = {
-        start: interval.start - removedFrames,
-        end: interval.end - removedFrames,
-      }
-      const intervalLength = currentInterval.end - currentInterval.start
-      if (intervalLength <= 0) continue
-
-      const overlapResult = removeItemsOnTrackInterval(trackId, currentInterval)
-      affectedIds.push(...overlapResult.affectedIds)
-      removedIds.push(...overlapResult.removedIds)
-      affectedIds.push(
-        ...shiftTrackItems(trackId, (item) => item.from >= currentInterval.end, -intervalLength),
-      )
-
-      removedFrames += intervalLength
+  let removedFrames = 0
+  for (const interval of intervals) {
+    const currentInterval = {
+      start: interval.start - removedFrames,
+      end: interval.end - removedFrames,
     }
+    const intervalLength = currentInterval.end - currentInterval.start
+    if (intervalLength <= 0) continue
+
+    const overlapResult = removeIntervalFromTracks(atomicTrackIds, currentInterval)
+    affectedIds.push(...overlapResult.affectedIds)
+    removedIds.push(...overlapResult.removedIds)
+    affectedIds.push(
+      ...shiftTrackItems(
+        atomicTrackIds,
+        (item) => item.from >= currentInterval.end,
+        -intervalLength,
+      ),
+    )
+
+    removedFrames += intervalLength
   }
 
   return {
@@ -430,6 +548,7 @@ export function propagateInsertedGapToSyncLockedTracks(params: {
   editedTrackIds: Set<string>
   cutFrame: number
   amount: number
+  additionalAffectedIds?: ReadonlySet<string>
 }): RipplePropagationResult {
   const cutFrame = Math.max(0, Math.round(params.cutFrame))
   const amount = Math.max(0, Math.round(params.amount))
@@ -437,30 +556,42 @@ export function propagateInsertedGapToSyncLockedTracks(params: {
     return { affectedIds: [], removedIds: [] }
   }
 
+  const { items, tracks } = useItemsStore.getState()
   const candidateTrackIds = getCandidateTrackIds(params.editedTrackIds)
+  const updatesByTrackId = buildInsertedUpdatesByTrack({
+    items,
+    candidateTrackIds,
+    cutFrame,
+    amount,
+  })
+  const atomicTrackIds = new Set(
+    getAtomicCandidateTrackIds({
+      items,
+      tracks,
+      candidateTrackIds,
+      updatesByTrackId,
+      additionalAffectedIds: params.additionalAffectedIds,
+    }),
+  )
   const affectedIds: string[] = []
 
-  for (const trackId of candidateTrackIds) {
-    const straddledItems = useItemsStore
+  const splitEntries = splitItemsWithBookkeeping(
+    useItemsStore
       .getState()
       .items.filter(
         (item) =>
-          item.trackId === trackId &&
+          atomicTrackIds.has(item.trackId) &&
           item.from < cutFrame &&
           item.from + item.durationInFrames > cutFrame,
       )
-      .sort((left, right) => left.from - right.from)
-
-    for (const straddledItem of straddledItems) {
-      const current = useItemsStore.getState().itemById[straddledItem.id]
-      if (!current || current.trackId !== trackId) continue
-      const splitResult = splitItemWithBookkeeping(current.id, cutFrame)
-      if (!splitResult) continue
-      affectedIds.push(splitResult.leftItem.id, splitResult.rightItem.id)
-    }
-
-    affectedIds.push(...shiftTrackItems(trackId, (item) => item.from >= cutFrame, amount))
+      .map((item) => item.id),
+    cutFrame,
+  )
+  for (const entry of splitEntries) {
+    affectedIds.push(entry.result.leftItem.id, entry.result.rightItem.id)
   }
+
+  affectedIds.push(...shiftTrackItems(atomicTrackIds, (item) => item.from >= cutFrame, amount))
 
   return {
     affectedIds: uniqueIds(affectedIds),

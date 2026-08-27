@@ -594,6 +594,10 @@ export function useTimelineTrim(
                   items: allItems,
                   tracks: useItemsStore.getState().tracks,
                   editedTrackIds,
+                  additionalAffectedIds: new Set([
+                    ...synchronizedItems.map((linkedItem) => linkedItem.id),
+                    ...linkedPreviewUpdates.map((update) => update.id),
+                  ]),
                   intervals: [
                     {
                       start: currentItem.from + currentItem.durationInFrames + rippleShift,
@@ -605,6 +609,10 @@ export function useTimelineTrim(
                   items: allItems,
                   tracks: useItemsStore.getState().tracks,
                   editedTrackIds,
+                  additionalAffectedIds: new Set([
+                    ...synchronizedItems.map((linkedItem) => linkedItem.id),
+                    ...linkedPreviewUpdates.map((update) => update.id),
+                  ]),
                   cutFrame: currentItem.from + currentItem.durationInFrames,
                   amount: rippleShift,
                 })

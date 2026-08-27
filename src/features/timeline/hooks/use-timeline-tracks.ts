@@ -232,8 +232,8 @@ export function useTimelineTracks() {
   )
 
   /**
-   * Toggle track solo state
-   * Only one track can be soloed at a time - soloing a track will unsolo all others
+   * Toggle one track's solo state without changing any other soloed tracks.
+   * Multi-track solo is additive so editors can audition several stems together.
    * Reads latest state to avoid stale closure bugs
    */
   const toggleTrackSolo = useCallback(
