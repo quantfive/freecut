@@ -8,9 +8,9 @@
  *
  * Behavior must stay bit-identical to the original inline loop — this is the
  * export hot path. Every exit drains an in-flight encode so its sample closes
- * and its rejection is observed. Failures retain their occurrence order: a
- * render, pending audio, or abort failure that happens first is not replaced
- * by a later encode or cleanup failure, and vice versa.
+ * and its rejection is observed. Primary render, encode, audio, and abort
+ * failures retain their source-boundary order. Cleanup failures are tracked
+ * separately and surface only when no primary operation failed.
  */
 
 export interface CloseableSample {
@@ -23,26 +23,41 @@ interface RecordedFailure {
 
 export interface PipelinedFrameLoopFailureState {
   readonly firstFailure: RecordedFailure | null
+  readonly firstPrimaryFailure: RecordedFailure | null
+  readonly firstCleanupFailure: RecordedFailure | null
   reportFailure(error: unknown): void
+  reportCleanupFailure(error: unknown): void
 }
 
 /**
- * Shared first-error latch for concurrently running export sources.
+ * Shared failure ownership for concurrently running export sources.
  *
  * Sources publish when their failure becomes observable. Promise sources must
  * attach their rejection observer immediately; abort publication is queued as
  * a microtask so same-turn promise rejection and abort events are ordered by
  * the source events that queued their observers, not by a synchronous abort
- * listener racing ahead of already-fired promise rejections.
+ * listener racing ahead of already-fired promise rejections. Cleanup has its
+ * own first-error latch so continuation order cannot let cleanup mask a
+ * primary source failure.
  */
 export function createPipelinedFrameLoopFailureState(): PipelinedFrameLoopFailureState {
-  let firstFailure: RecordedFailure | null = null
+  let firstPrimaryFailure: RecordedFailure | null = null
+  let firstCleanupFailure: RecordedFailure | null = null
   return {
     get firstFailure() {
-      return firstFailure
+      return firstPrimaryFailure ?? firstCleanupFailure
+    },
+    get firstPrimaryFailure() {
+      return firstPrimaryFailure
+    },
+    get firstCleanupFailure() {
+      return firstCleanupFailure
     },
     reportFailure(error) {
-      firstFailure ??= { error }
+      firstPrimaryFailure ??= { error }
+    },
+    reportCleanupFailure(error) {
+      firstCleanupFailure ??= { error }
     },
   }
 }
@@ -86,7 +101,7 @@ export interface PipelinedFrameLoopDeps<S extends CloseableSample> {
   onFrameProgress: (frame: number) => void
 }
 
-interface EncodeSettlement {
+interface OperationSettlement {
   status: 'fulfilled' | 'rejected'
   reason?: unknown
 }
@@ -100,13 +115,27 @@ async function encodeAndCloseSample<S extends CloseableSample>(
     reportFailure: (error: unknown) => void,
   ) => Promise<void>,
   recordSettledFailure: (error: unknown) => void,
-): Promise<EncodeSettlement> {
+  recordSynchronousFailure: (error: unknown) => Promise<void>,
+  recordCleanupFailure: (error: unknown) => void,
+): Promise<OperationSettlement> {
   let failure: RecordedFailure | null = null
+  let encoding: Promise<void> | null = null
   try {
-    await encodeSample(sample, keyFrame, recordSettledFailure)
+    encoding = encodeSample(sample, keyFrame, recordSettledFailure)
   } catch (error) {
     failure = { error }
-    recordSettledFailure(error)
+    await recordSynchronousFailure(error)
+  }
+
+  if (encoding) {
+    const settlement: OperationSettlement = await encoding.then(
+      (): OperationSettlement => ({ status: 'fulfilled' }),
+      (error: unknown): OperationSettlement => {
+        recordSettledFailure(error)
+        return { status: 'rejected', reason: error }
+      },
+    )
+    if (settlement.status === 'rejected') failure = { error: settlement.reason }
   }
 
   try {
@@ -119,7 +148,7 @@ async function encodeAndCloseSample<S extends CloseableSample>(
     // failure represented by this settlement.
     if (!failure) {
       failure = { error }
-      recordSettledFailure(error)
+      recordCleanupFailure(error)
     }
   }
 
@@ -143,7 +172,7 @@ export async function runPipelinedFrameLoop<S extends CloseableSample>(
   // The promise stored here never rejects. Encode and sample-cleanup failures
   // are reflected into a settlement immediately, so an encoder rejection is
   // observed even while renderFrame remains pending for another event turn.
-  let pendingEncode: Promise<EncodeSettlement> | null = null
+  let pendingEncode: Promise<OperationSettlement> | null = null
   let abortError: DOMException | null = null
   let abortCleanupStarted = false
   let abortPublicationQueued = false
@@ -151,6 +180,10 @@ export async function runPipelinedFrameLoop<S extends CloseableSample>(
 
   const recordFailure = (error: unknown) => {
     failureState.reportFailure(error)
+  }
+
+  const recordCleanupFailure = (error: unknown) => {
+    failureState.reportCleanupFailure(error)
   }
 
   const getAbortError = () => {
@@ -166,7 +199,18 @@ export async function runPipelinedFrameLoop<S extends CloseableSample>(
     })
   }
 
-  const drainPendingEncode = async (): Promise<EncodeSettlement | null> => {
+  const recordSynchronousFailure = async (error: unknown) => {
+    if (abortPublicationQueued) {
+      // Abort reserves its boundary synchronously but publishes in a
+      // microtask. Yield once so an observer queued before the abort can
+      // publish first, while the abort itself stays ahead of this later
+      // synchronous throw.
+      await Promise.resolve()
+    }
+    recordFailure(error)
+  }
+
+  const drainPendingEncode = async (): Promise<OperationSettlement | null> => {
     if (!pendingEncode) return null
     const encode = pendingEncode
     try {
@@ -182,70 +226,123 @@ export async function runPipelinedFrameLoop<S extends CloseableSample>(
     try {
       await onAbort()
     } catch (error) {
-      recordFailure(error)
+      recordCleanupFailure(error)
     }
   }
 
   const throwRecordedFailureAfterDrain = async () => {
+    if (signal?.aborted) await runAbortCleanup()
     const failure = failureState.firstFailure
     if (!failure) return
-    if (signal?.aborted) await runAbortCleanup()
     throw failure.error
+  }
+
+  const renderAndObserve = async (frame: number) => {
+    let rendering: Promise<void>
+    try {
+      rendering = renderFrame(frame, recordFailure)
+    } catch (error) {
+      await recordSynchronousFailure(error)
+      throw error
+    }
+    const settlement: OperationSettlement = await rendering.then(
+      (): OperationSettlement => ({ status: 'fulfilled' }),
+      (error: unknown): OperationSettlement => {
+        recordFailure(error)
+        return { status: 'rejected', reason: error }
+      },
+    )
+    if (settlement.status === 'rejected') throw settlement.reason
+  }
+
+  const isRecordedFailure = (error: unknown) =>
+    failureState.firstPrimaryFailure?.error === error ||
+    failureState.firstCleanupFailure?.error === error
+
+  const drainFinalEncode = async () => {
+    await drainPendingEncode()
+    if (totalFrames > 0) await throwRecordedFailureAfterDrain()
   }
 
   signal?.addEventListener('abort', publishAbort, { once: true })
 
-  try {
-    for (let frame = 0; frame < totalFrames; frame++) {
-      const pendingFailure = failureState.firstFailure
-      if (pendingFailure) throw pendingFailure.error
+  const runLoop = async () => {
+    try {
+      for (let frame = 0; frame < totalFrames; frame++) {
+        const pendingFailure = failureState.firstFailure
+        if (pendingFailure) throw pendingFailure.error
 
-      // Check for abort — drain any in-flight encode first so the encoder is
-      // idle before we cancel the output. The first recorded failure wins, so
-      // this AbortError is preserved over an encoder failure during the drain.
-      if (signal?.aborted) {
-        publishAbort()
-        // Let reactions queued by source failures that fired before abort run
-        // before the queued abort publication. If abort fired first, its
-        // publication was queued first and remains primary.
-        await Promise.resolve()
-        await drainPendingEncode()
-        await throwRecordedFailureAfterDrain()
+        // Check for abort — drain any in-flight encode first so the encoder is
+        // idle before we cancel the output. The first recorded failure wins, so
+        // this AbortError is preserved over an encoder failure during the drain.
+        if (signal?.aborted) {
+          publishAbort()
+          // Let reactions queued by source failures that fired before abort run
+          // before the queued abort publication. If abort fired first, its
+          // publication was queued first and remains primary.
+          await Promise.resolve()
+          await drainPendingEncode()
+          await throwRecordedFailureAfterDrain()
+        }
+
+        // Render frame first — this overlaps with the previous frame's encode
+        // that is still in flight. The previous sample already copied its
+        // pixels, so writing to the capture surface here cannot corrupt it.
+        await renderAndObserve(frame)
+
+        // Now wait for the previous encode to finish before capturing a new
+        // sample. This ensures at most one encode is in flight and that frames
+        // are fed to the encoder in order.
+        const previousEncode = await drainPendingEncode()
+        if (previousEncode?.status === 'rejected') await throwRecordedFailureAfterDrain()
+
+        // Snapshot pixels into a sample. The capture copies pixel data
+        // immediately — the surface is free for the next render.
+        const sample = captureSample(frame)
+
+        // Kick off encoding in the background. NOT awaited here — it runs
+        // concurrently with the next iteration's renderFrame().
+        const isKeyFrame = frame === 0
+        pendingEncode = encodeAndCloseSample(
+          sample,
+          isKeyFrame,
+          encodeSample,
+          recordFailure,
+          recordSynchronousFailure,
+          recordCleanupFailure,
+        )
+
+        onFrameProgress(frame)
       }
 
-      // Render frame first — this overlaps with the previous frame's encode
-      // that is still in flight. The previous sample already copied its
-      // pixels, so writing to the capture surface here cannot corrupt it.
-      await renderFrame(frame, recordFailure)
-
-      // Now wait for the previous encode to finish before capturing a new
-      // sample. This ensures at most one encode is in flight and that frames
-      // are fed to the encoder in order.
-      const previousEncode = await drainPendingEncode()
-      if (previousEncode?.status === 'rejected') await throwRecordedFailureAfterDrain()
-
-      // Snapshot pixels into a sample. The capture copies pixel data
-      // immediately — the surface is free for the next render.
-      const sample = captureSample(frame)
-
-      // Kick off encoding in the background. NOT awaited here — it runs
-      // concurrently with the next iteration's renderFrame().
-      const isKeyFrame = frame === 0
-      pendingEncode = encodeAndCloseSample(sample, isKeyFrame, encodeSample, recordFailure)
-
-      onFrameProgress(frame)
+      // Drain the final in-flight encode before finalizing
+      await drainFinalEncode()
+    } catch (primaryError) {
+      if (!isRecordedFailure(primaryError)) await recordSynchronousFailure(primaryError)
+      await drainPendingEncode()
+      await throwRecordedFailureAfterDrain()
+      throw primaryError
     }
+  }
 
-    // Drain the final in-flight encode before finalizing
-    await drainPendingEncode()
-    if (totalFrames > 0) await throwRecordedFailureAfterDrain()
-  } catch (primaryError) {
-    recordFailure(primaryError)
-    await drainPendingEncode()
-    await throwRecordedFailureAfterDrain()
-    throw primaryError
-  } finally {
-    listenerActive = false
+  const loopSettlement: OperationSettlement = await runLoop().then(
+    (): OperationSettlement => ({ status: 'fulfilled' }),
+    (error: unknown): OperationSettlement => ({ status: 'rejected', reason: error }),
+  )
+
+  listenerActive = false
+  let listenerRemovalFailure: RecordedFailure | null = null
+  try {
     signal?.removeEventListener('abort', publishAbort)
+  } catch (error) {
+    listenerRemovalFailure = { error }
+    recordCleanupFailure(error)
+  }
+
+  if (loopSettlement.status === 'rejected') {
+    throw failureState.firstFailure?.error ?? loopSettlement.reason
+  }
+  if (listenerRemovalFailure) {
+    throw failureState.firstFailure?.error ?? listenerRemovalFailure.error
   }
 }
