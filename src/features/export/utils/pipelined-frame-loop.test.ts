@@ -39,6 +39,7 @@ interface HarnessOptions {
   getPendingError?: () => unknown
   renderImpl?: (frame: number) => void | Promise<void>
   encodeImpl?: (sample: FakeSample, keyFrame: boolean) => Promise<void>
+  closeImpl?: (sample: FakeSample) => void
 }
 
 function createHarness(totalFrames: number, opts: HarnessOptions = {}) {
@@ -61,6 +62,7 @@ function createHarness(totalFrames: number, opts: HarnessOptions = {}) {
           close() {
             this.closed = true
             events.push(`close-${frame}`)
+            opts.closeImpl?.(this)
           },
         }
         samples.push(sample)
@@ -180,6 +182,125 @@ describe('runPipelinedFrameLoop', () => {
     expect(events).toContain('render-2')
     expect(events).not.toContain('capture-2')
     expect(samples[1]?.closed).toBe(true)
+  })
+
+  it('observes an immediate encode rejection while the next render stays pending', async () => {
+    const encoderError = new Error('encoder rejected immediately')
+    const nextRender = deferred()
+    const unhandledRejections: unknown[] = []
+    const onUnhandledRejection = (reason: unknown) => unhandledRejections.push(reason)
+    process.on('unhandledRejection', onUnhandledRejection)
+    let outcome: Promise<unknown> | undefined
+
+    try {
+      const { events, samples, run } = createHarness(2, {
+        renderImpl: (frame) => (frame === 1 ? nextRender.promise : undefined),
+        encodeImpl: (sample) =>
+          sample.frame === 0 ? Promise.reject(encoderError) : Promise.resolve(),
+      })
+
+      outcome = run().then(
+        () => null,
+        (error: unknown) => error,
+      )
+      await tick()
+      await tick()
+
+      expect(events).toContain('render-1')
+      expect(unhandledRejections).toEqual([])
+
+      nextRender.resolve()
+      expect(await outcome).toBe(encoderError)
+      expect(samples[0]?.closed).toBe(true)
+    } finally {
+      nextRender.resolve()
+      await outcome
+      process.off('unhandledRejection', onUnhandledRejection)
+    }
+  })
+
+  it('preserves an earlier audio error when video rejects during a pending render', async () => {
+    const audioError = new Error('audio task failed first')
+    const encoderError = new Error('video encoder failed later')
+    const encode = deferred()
+    const nextRender = deferred()
+    const unhandledRejections: unknown[] = []
+    const onUnhandledRejection = (reason: unknown) => unhandledRejections.push(reason)
+    process.on('unhandledRejection', onUnhandledRejection)
+    let pendingError: unknown
+    let outcome: Promise<unknown> | undefined
+
+    try {
+      const { events, samples, run } = createHarness(2, {
+        getPendingError: () => pendingError,
+        renderImpl: (frame) => (frame === 1 ? nextRender.promise : undefined),
+        encodeImpl: () => encode.promise,
+      })
+
+      outcome = run().then(
+        () => null,
+        (error: unknown) => error,
+      )
+      await tick()
+      expect(events).toContain('render-1')
+
+      pendingError = audioError
+      encode.reject(encoderError)
+      await tick()
+      expect(unhandledRejections).toEqual([])
+
+      nextRender.resolve()
+      expect(await outcome).toBe(audioError)
+      expect(samples[0]?.closed).toBe(true)
+    } finally {
+      nextRender.resolve()
+      encode.resolve()
+      await outcome
+      process.off('unhandledRejection', onUnhandledRejection)
+    }
+  })
+
+  it('preserves the video error when sample cleanup and rendering fail later', async () => {
+    const encoderError = new Error('video encoder failed first')
+    const cleanupError = new Error('sample cleanup failed later')
+    const renderError = new Error('render failed last')
+    const encode = deferred()
+    const nextRender = deferred()
+    const unhandledRejections: unknown[] = []
+    const onUnhandledRejection = (reason: unknown) => unhandledRejections.push(reason)
+    process.on('unhandledRejection', onUnhandledRejection)
+    let outcome: Promise<unknown> | undefined
+
+    try {
+      const { events, samples, run } = createHarness(2, {
+        renderImpl: (frame) => (frame === 1 ? nextRender.promise : undefined),
+        encodeImpl: () => encode.promise,
+        closeImpl: () => {
+          throw cleanupError
+        },
+      })
+
+      outcome = run().then(
+        () => null,
+        (error: unknown) => error,
+      )
+      await tick()
+      expect(events).toContain('render-1')
+
+      encode.reject(encoderError)
+      await tick()
+      nextRender.reject(renderError)
+
+      expect(await outcome).toBe(encoderError)
+      await tick()
+      expect(unhandledRejections).toEqual([])
+      expect(samples[0]?.closed).toBe(true)
+    } finally {
+      encode.resolve()
+      nextRender.resolve()
+      await outcome
+      process.off('unhandledRejection', onUnhandledRejection)
+    }
   })
 
   it('preserves a render error while observing a late encoder rejection', async () => {
@@ -309,6 +430,50 @@ describe('runPipelinedFrameLoop', () => {
     expect(samples[1]?.closed).toBe(true)
     expect(events).not.toContain('render-2')
     expect(events).not.toContain('capture-2')
+  })
+
+  it('observes and drains a pending encode when abort wins during rendering', async () => {
+    const controller = new AbortController()
+    const encoderError = new Error('encoder failed after abort')
+    const encode = deferred()
+    const nextRender = deferred()
+    const unhandledRejections: unknown[] = []
+    const onUnhandledRejection = (reason: unknown) => unhandledRejections.push(reason)
+    process.on('unhandledRejection', onUnhandledRejection)
+    let outcome: Promise<unknown> | undefined
+
+    try {
+      const { events, samples, run } = createHarness(2, {
+        signal: controller.signal,
+        renderImpl: (frame) => (frame === 1 ? nextRender.promise : undefined),
+        encodeImpl: () => encode.promise,
+      })
+
+      outcome = run().then(
+        () => null,
+        (error: unknown) => error,
+      )
+      await tick()
+      expect(events).toContain('render-1')
+
+      controller.abort()
+      encode.reject(encoderError)
+      await tick()
+      expect(unhandledRejections).toEqual([])
+
+      nextRender.resolve()
+      const error = await outcome
+      expect(error).toBeInstanceOf(DOMException)
+      expect((error as DOMException).name).toBe('AbortError')
+      expect(events).toContain('abort-cancel')
+      expect(samples[0]?.closed).toBe(true)
+    } finally {
+      controller.abort()
+      encode.resolve()
+      nextRender.resolve()
+      await outcome
+      process.off('unhandledRejection', onUnhandledRejection)
+    }
   })
 
   it('throws a pending error at the top of the next iteration', async () => {

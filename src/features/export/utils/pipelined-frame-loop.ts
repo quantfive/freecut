@@ -8,8 +8,9 @@
  *
  * Behavior must stay bit-identical to the original inline loop — this is the
  * export hot path. Every exit drains an in-flight encode so its sample closes
- * and its rejection is observed. A render or pending error remains the primary
- * error when that drain also fails.
+ * and its rejection is observed. Failures retain their occurrence order: a
+ * render, pending audio, or abort failure that happens first is not replaced
+ * by a later encode or cleanup failure, and vice versa.
  */
 
 export interface CloseableSample {
@@ -41,11 +42,20 @@ export interface PipelinedFrameLoopDeps<S extends CloseableSample> {
   encodeSample: (sample: S, keyFrame: boolean) => Promise<void>
   /**
    * Abort path: called after the in-flight encode has been drained (its
-   * errors discarded), before the AbortError is thrown.
+   * errors observed), before the selected failure is thrown.
    */
   onAbort: () => Promise<void>
   /** Called once per frame, synchronously after its encode is kicked off. */
   onFrameProgress: (frame: number) => void
+}
+
+interface EncodeSettlement {
+  status: 'fulfilled' | 'rejected'
+  reason?: unknown
+}
+
+interface RecordedFailure {
+  error: unknown
 }
 
 export async function runPipelinedFrameLoop<S extends CloseableSample>(
@@ -62,7 +72,37 @@ export async function runPipelinedFrameLoop<S extends CloseableSample>(
     onFrameProgress,
   } = deps
 
-  let pendingEncode: Promise<void> | null = null
+  // The promise stored here never rejects. Encode and sample-cleanup failures
+  // are reflected into a settlement immediately, so an encoder rejection is
+  // observed even while renderFrame remains pending for another event turn.
+  let pendingEncode: Promise<EncodeSettlement> | null = null
+  let firstFailure: RecordedFailure | null = null
+  let abortError: DOMException | null = null
+  let abortCleanupStarted = false
+
+  const recordFailure = (error: unknown) => {
+    firstFailure ??= { error }
+  }
+
+  const getAbortError = () => {
+    abortError ??= new DOMException('Render cancelled', 'AbortError')
+    return abortError
+  }
+
+  const recordEncodeFailure = (error: unknown) => {
+    // A pending audio error or abort may have happened while renderFrame was
+    // still pending, before this encode rejected. Observe those primary exit
+    // conditions before recording the later encoder failure.
+    try {
+      const pendingError = getPendingError?.()
+      if (pendingError) recordFailure(pendingError)
+    } catch (pendingError) {
+      recordFailure(pendingError)
+    }
+
+    if (signal?.aborted) recordFailure(getAbortError())
+    recordFailure(error)
+  }
 
   const drainPendingEncode = async () => {
     if (!pendingEncode) return
@@ -74,22 +114,37 @@ export async function runPipelinedFrameLoop<S extends CloseableSample>(
     }
   }
 
+  const runAbortCleanup = async () => {
+    if (abortCleanupStarted) return
+    abortCleanupStarted = true
+    try {
+      await onAbort()
+    } catch (error) {
+      recordFailure(error)
+    }
+  }
+
+  const throwFirstFailure = (): void => {
+    const failure = firstFailure
+    if (failure) throw failure.error
+  }
+
   try {
     for (let frame = 0; frame < totalFrames; frame++) {
       const pendingError = getPendingError?.()
-      if (pendingError) throw pendingError
+      if (pendingError) {
+        recordFailure(pendingError)
+        throw pendingError
+      }
 
-      // Check for abort — drain any in-flight encode first so the encoder
-      // is idle before we cancel the output. Discard encoder errors since
-      // we are aborting anyway and must always surface AbortError.
+      // Check for abort — drain any in-flight encode first so the encoder is
+      // idle before we cancel the output. The first recorded failure wins, so
+      // this AbortError is preserved over an encoder failure during the drain.
       if (signal?.aborted) {
-        try {
-          await drainPendingEncode()
-        } catch {
-          /* discarded — aborting */
-        }
-        await onAbort()
-        throw new DOMException('Render cancelled', 'AbortError')
+        recordFailure(getAbortError())
+        await drainPendingEncode()
+        await runAbortCleanup()
+        throwFirstFailure()
       }
 
       // Render frame first — this overlaps with the previous frame's encode
@@ -101,6 +156,10 @@ export async function runPipelinedFrameLoop<S extends CloseableSample>(
       // sample. This ensures at most one encode is in flight and that frames
       // are fed to the encoder in order.
       await drainPendingEncode()
+      if (firstFailure) {
+        if (signal?.aborted) await runAbortCleanup()
+        throwFirstFailure()
+      }
 
       // Snapshot pixels into a sample. The capture copies pixel data
       // immediately — the surface is free for the next render.
@@ -109,15 +168,30 @@ export async function runPipelinedFrameLoop<S extends CloseableSample>(
       // Kick off encoding in the background. NOT awaited here — it runs
       // concurrently with the next iteration's renderFrame().
       const isKeyFrame = frame === 0
-      pendingEncode = (async () => {
+      pendingEncode = (async (): Promise<EncodeSettlement> => {
+        let failure: RecordedFailure | null = null
         try {
           await encodeSample(sample, isKeyFrame)
-        } finally {
+        } catch (error) {
+          failure = { error }
+          recordEncodeFailure(error)
+        }
+
+        try {
           // The encoder does NOT close samples. We must close to release the
           // underlying frame's GPU memory, otherwise the browser throttles
           // after ~8-16 outstanding frames.
           sample.close()
+        } catch (error) {
+          // If encoding already failed, it happened before cleanup and remains
+          // the failure represented by this settlement.
+          if (!failure) {
+            failure = { error }
+            recordFailure(error)
+          }
         }
+
+        return failure ? { status: 'rejected', reason: failure.error } : { status: 'fulfilled' }
       })()
 
       onFrameProgress(frame)
@@ -125,12 +199,14 @@ export async function runPipelinedFrameLoop<S extends CloseableSample>(
 
     // Drain the final in-flight encode before finalizing
     await drainPendingEncode()
-  } catch (primaryError) {
-    try {
-      await drainPendingEncode()
-    } catch {
-      // Preserve the error that selected this exit path.
+    if (firstFailure) {
+      if (signal?.aborted) await runAbortCleanup()
+      throwFirstFailure()
     }
-    throw primaryError
+  } catch (primaryError) {
+    recordFailure(primaryError)
+    await drainPendingEncode()
+    if (signal?.aborted) await runAbortCleanup()
+    throwFirstFailure()
   }
 }
