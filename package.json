@@ -43,6 +43,8 @@
     "routes": "tsr generate",
     "test": "vp test",
     "test:run": "vp test run",
+    "test:responsive": "playwright test --config playwright.mobile.config.ts",
+    "test:editor-hardening": "vp test run src/features/timeline/components/timeline-content.test.tsx src/features/timeline/components/timeline-item/use-timeline-item-pointer-handlers.test.tsx src/features/timeline/hooks/shortcuts/use-clipboard-shortcuts.test.tsx src/features/timeline/hooks/shortcuts/use-playback-shortcuts.test.tsx src/features/timeline/stores/export-snapshot.test.ts src/features/export/components/export-dialog.test.tsx src/features/export/hooks/client-render-source.test.ts src/features/export/hooks/use-client-render.test.tsx src/features/preview/workers/consume-video-samples.test.ts src/features/preview/utils/media-resolver.test.ts src/features/preview/hooks/use-preview-media-resolution.test.tsx src/features/preview/components/source-composition.generation.test.tsx src/features/preview/components/video-preview.sync.test.tsx src/infrastructure/browser/blob-url-manager.test.ts",
     "test:preview-sync": "vp test run src/features/preview/components/video-preview.sync.test.tsx",
     "test:preview-sync:stress": "node scripts/preview-sync-stress.mjs --runs 20",
     "test:coverage": "vp test run --coverage",

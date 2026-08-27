@@ -19,7 +19,7 @@
  * back to the Reconnect state mid-session.
  */
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
   ensureKnownWorkspaceForCurrent,
@@ -30,7 +30,9 @@ import {
   saveWorkspaceHandleRecord,
 } from '@/infrastructure/storage/handles-db'
 import { onPermissionLost, setWorkspaceRoot } from '@/infrastructure/storage/workspace-fs/root'
+import { bootstrapWorkspace } from '@/infrastructure/storage/workspace-fs/bootstrap'
 import { createLogger } from '@/shared/logging/logger'
+import { autoPurgeExpiredTrash } from './deps/trash-auto-purge'
 import { WorkspaceGateSplash } from './workspace-gate-splash'
 import { usePathname } from './use-pathname'
 
@@ -58,25 +60,43 @@ export function WorkspaceGate({ children }: { children: React.ReactNode }) {
   const { t } = useTranslation()
   const pathname = usePathname()
   const needsWorkspace = isStorageProtectedPath(pathname)
+  const activationControllerRef = useRef<AbortController | null>(null)
+  const purgeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const activate = useCallback(async (handle: FileSystemDirectoryHandle) => {
+    activationControllerRef.current?.abort()
+    const controller = new AbortController()
+    activationControllerRef.current = controller
     setWorkspaceRoot(handle)
     try {
-      const { bootstrapWorkspace } = await import('@/infrastructure/storage/workspace-fs/bootstrap')
-      await bootstrapWorkspace(handle)
+      await bootstrapWorkspace(handle, { signal: controller.signal })
     } catch (error) {
+      if (controller.signal.aborted) return
       logger.warn('bootstrapWorkspace failed', error)
     }
+    if (controller.signal.aborted) return
     // Fire the auto-purge sweep for long-trashed projects in the
     // background — it touches disk and we don't want it to block the
     // app render. Wrapped in setTimeout so it runs after first paint.
-    setTimeout(() => {
-      void import('./deps/trash-auto-purge').then(({ autoPurgeExpiredTrash }) =>
-        autoPurgeExpiredTrash(),
-      )
+    purgeTimeoutRef.current = setTimeout(() => {
+      purgeTimeoutRef.current = null
+      if (!controller.signal.aborted) {
+        void autoPurgeExpiredTrash()
+      }
     }, 0)
     setStatus({ kind: 'ready' })
     window.dispatchEvent(new Event('freecut:ensure-toaster'))
+  }, [])
+
+  useEffect(() => {
+    return () => {
+      activationControllerRef.current?.abort()
+      activationControllerRef.current = null
+      if (purgeTimeoutRef.current !== null) {
+        clearTimeout(purgeTimeoutRef.current)
+        purgeTimeoutRef.current = null
+      }
+    }
   }, [])
 
   // Initial load: check if we have a saved handle, check its permission.

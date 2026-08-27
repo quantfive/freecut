@@ -1,5 +1,5 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite-plus/test'
-import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import type { ReactNode } from 'react'
 
 const mocks = vi.hoisted(() => ({
@@ -30,6 +30,9 @@ const mocks = vi.hoisted(() => ({
   initTransitionChainSubscription: vi.fn(() => vi.fn()),
   createProjectUpgradeBackup: vi.fn(),
   resizablePanelGroup: vi.fn(),
+  editorWidth: 1440,
+  setLeftSidebarOpen: vi.fn(),
+  setRightSidebarOpen: vi.fn(),
 }))
 
 vi.mock('@tanstack/react-router', () => ({
@@ -69,15 +72,21 @@ vi.mock('@/app/error-boundary', () => ({
 }))
 
 vi.mock('./toolbar', () => ({
-  Toolbar: () => <div data-testid="toolbar" />,
+  Toolbar: ({ compact }: { compact?: boolean }) => (
+    <div data-testid="toolbar" data-compact={compact ? 'true' : 'false'} />
+  ),
 }))
 
 vi.mock('./media-sidebar', () => ({
-  MediaSidebar: () => <div data-testid="media-sidebar" />,
+  MediaSidebar: ({ mobileDrawer }: { mobileDrawer?: boolean }) => (
+    <div data-testid="media-sidebar" data-mobile-drawer={mobileDrawer ? 'true' : 'false'} />
+  ),
 }))
 
 vi.mock('./properties-sidebar', () => ({
-  PropertiesSidebar: () => <div data-testid="properties-sidebar" />,
+  PropertiesSidebar: ({ mobileDrawer }: { mobileDrawer?: boolean }) => (
+    <div data-testid="properties-sidebar" data-mobile-drawer={mobileDrawer ? 'true' : 'false'} />
+  ),
 }))
 
 vi.mock('./preview-area', () => ({
@@ -106,11 +115,17 @@ vi.mock('./interaction-lock-region', () => ({
 }))
 
 vi.mock('./audio-meter-panel', () => ({
-  AudioMeterPanel: () => <div data-testid="audio-meter-panel" />,
+  AudioMeterPanel: ({ mobileDrawer }: { mobileDrawer?: boolean }) => (
+    <div data-testid="audio-meter-panel" data-mobile-drawer={mobileDrawer ? 'true' : 'false'} />
+  ),
 }))
 
 vi.mock('@/features/editor/deps/timeline-ui', () => ({
-  importTimeline: vi.fn().mockResolvedValue({ Timeline: () => <div data-testid="timeline" /> }),
+  importTimeline: vi.fn().mockResolvedValue({
+    Timeline: ({ compact }: { compact?: boolean }) => (
+      <div data-testid="timeline" data-compact={compact ? 'true' : 'false'} />
+    ),
+  }),
   importBentoLayoutDialog: vi.fn().mockResolvedValue({ BentoLayoutDialog: () => null }),
   importFillerRemovalDialog: vi.fn().mockResolvedValue({ FillerRemovalDialog: () => null }),
   importReverseConformDialog: vi.fn().mockResolvedValue({ ReverseConformDialog: () => null }),
@@ -149,6 +164,7 @@ vi.mock('../hooks/use-auto-save', () => ({
 }))
 
 vi.mock('@/features/editor/deps/timeline-hooks', () => ({
+  useHostTimelineShortcuts: vi.fn(),
   useTimelineShortcuts: vi.fn(),
   useTransitionBreakageNotifications: vi.fn(),
 }))
@@ -234,6 +250,9 @@ vi.mock('@/shared/state/editor', () => ({
       propertiesFullColumn: boolean
       mediaFullColumn: boolean
       workspace: string
+      sourcePreviewMediaId: string | null
+      setLeftSidebarOpen: typeof mocks.setLeftSidebarOpen
+      setRightSidebarOpen: typeof mocks.setRightSidebarOpen
     }) => unknown,
   ) =>
     selector({
@@ -241,6 +260,9 @@ vi.mock('@/shared/state/editor', () => ({
       propertiesFullColumn: mocks.editorState.propertiesFullColumn,
       mediaFullColumn: mocks.editorState.mediaFullColumn,
       workspace: mocks.editorState.workspace,
+      sourcePreviewMediaId: null,
+      setLeftSidebarOpen: mocks.setLeftSidebarOpen,
+      setRightSidebarOpen: mocks.setRightSidebarOpen,
     }),
 }))
 
@@ -514,5 +536,137 @@ describe('editor shell height ownership', () => {
     const standalone = document.querySelector('[data-freecut-editor-shell="standalone"]')
     expect(standalone).toHaveClass('h-screen')
     expect(standalone).toContainElement(screen.getByRole('application'))
+  })
+})
+
+describe('editor responsive shell', () => {
+  const project = { id: 'project-1', name: 'Project', width: 1920, height: 1080, fps: 30 }
+  const migration = { storedSchemaVersion: 9, currentSchemaVersion: 9, requiresUpgrade: false }
+
+  beforeAll(() => {
+    vi.stubGlobal('requestIdleCallback', (callback: IdleRequestCallback) => {
+      callback({ didTimeout: false, timeRemaining: () => 50 } as IdleDeadline)
+      return 1
+    })
+    vi.stubGlobal('cancelIdleCallback', vi.fn())
+    vi.stubGlobal(
+      'ResizeObserver',
+      class ResizeObserverMock {
+        private readonly callback: ResizeObserverCallback
+
+        constructor(callback: ResizeObserverCallback) {
+          this.callback = callback
+        }
+
+        observe(target: Element) {
+          this.callback(
+            [
+              {
+                target,
+                contentRect: { width: mocks.editorWidth },
+                borderBoxSize: [{ inlineSize: mocks.editorWidth, blockSize: 844 }],
+              } as unknown as ResizeObserverEntry,
+            ],
+            this as unknown as ResizeObserver,
+          )
+        }
+
+        disconnect() {}
+        unobserve() {}
+      },
+    )
+  })
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mocks.editorWidth = 1440
+    mocks.editorState.workspace = 'edit'
+    mocks.editorState.propertiesFullColumn = false
+    mocks.editorState.mediaFullColumn = false
+    mocks.loadTimeline.mockResolvedValue(undefined)
+    mocks.loadMediaItems.mockResolvedValue(undefined)
+  })
+
+  afterEach(() => cleanup())
+
+  it('starts 390px standalone with core surfaces visible and persisted desktop panels untouched', async () => {
+    mocks.editorWidth = 390
+
+    render(<LoadedEditor projectId="project-1" project={project} migration={migration} />)
+
+    const shell = screen.getByRole('application')
+    await waitFor(() => expect(shell).toHaveAttribute('data-editor-layout', 'mobile'))
+    expect(screen.getByTestId('toolbar')).toHaveAttribute('data-compact', 'true')
+    expect(await screen.findByTestId('timeline')).toHaveAttribute('data-compact', 'true')
+    expect(screen.queryByTestId('media-sidebar')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('properties-sidebar')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('audio-meter-panel')).not.toBeInTheDocument()
+    expect(mocks.setLeftSidebarOpen).not.toHaveBeenCalled()
+    expect(mocks.setRightSidebarOpen).not.toHaveBeenCalled()
+    expect(mocks.syncSidebarLayout).not.toHaveBeenCalled()
+  })
+
+  it('opens each 390px panel as a focus-restoring drawer and closes it with Escape', async () => {
+    mocks.editorWidth = 390
+    render(<LoadedEditor projectId="project-1" project={project} migration={migration} />)
+    await waitFor(() =>
+      expect(screen.getByRole('application')).toHaveAttribute('data-editor-layout', 'mobile'),
+    )
+
+    for (const name of ['Media', 'Properties', 'Meters']) {
+      const trigger = screen.getByRole('button', { name })
+      trigger.focus()
+      fireEvent.click(trigger)
+
+      const drawer = await screen.findByRole('dialog', { name })
+      expect(drawer).toBeInTheDocument()
+      expect(drawer).toContainElement(document.activeElement as HTMLElement)
+      const expectedTestId =
+        name === 'Media'
+          ? 'media-sidebar'
+          : name === 'Properties'
+            ? 'properties-sidebar'
+            : 'audio-meter-panel'
+      expect(screen.getByTestId(expectedTestId)).toHaveAttribute('data-mobile-drawer', 'true')
+
+      fireEvent.keyDown(document, { key: 'Escape' })
+      await waitFor(() => expect(screen.queryByRole('dialog', { name })).not.toBeInTheDocument())
+      await waitFor(() => expect(trigger).toHaveFocus())
+    }
+  })
+
+  it('uses the same 390px layout inside a definite-height host surface', async () => {
+    mocks.editorWidth = 390
+    const hostRuntime = { mountStores: vi.fn(), unmountStores: vi.fn() }
+
+    render(
+      <div style={{ width: 390, height: 720 }}>
+        <LoadedEditor
+          projectId="project-1"
+          project={project}
+          migration={migration}
+          hostRuntime={hostRuntime}
+        />
+      </div>,
+    )
+
+    await waitFor(() =>
+      expect(screen.getByRole('application')).toHaveAttribute('data-editor-layout', 'mobile'),
+    )
+    expect(screen.getByTestId('toolbar')).toHaveAttribute('data-compact', 'true')
+    expect(await screen.findByTestId('timeline')).toHaveAttribute('data-compact', 'true')
+    expect(hostRuntime.mountStores).toHaveBeenCalledTimes(1)
+  })
+
+  it('preserves the existing 320/288/84 desktop layout branch at 1440px', async () => {
+    render(<LoadedEditor projectId="project-1" project={project} migration={migration} />)
+
+    const shell = screen.getByRole('application')
+    await waitFor(() => expect(shell).toHaveAttribute('data-editor-layout', 'desktop'))
+    expect(screen.getByTestId('toolbar')).toHaveAttribute('data-compact', 'false')
+    expect(await screen.findByTestId('timeline')).toHaveAttribute('data-compact', 'false')
+    expect(screen.getByTestId('media-sidebar')).toHaveAttribute('data-mobile-drawer', 'false')
+    expect(screen.getByTestId('properties-sidebar')).toHaveAttribute('data-mobile-drawer', 'false')
+    expect(screen.getByTestId('audio-meter-panel')).toHaveAttribute('data-mobile-drawer', 'false')
   })
 })

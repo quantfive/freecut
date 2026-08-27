@@ -55,6 +55,10 @@ function makeAudioItem(id: string, trackId: string): AudioItem {
   } as AudioItem
 }
 
+function makeVideoTracks(ids: string[]): TimelineTrack[] {
+  return ids.map((id, order) => makeTrack({ id, name: id.toUpperCase(), kind: 'video', order }))
+}
+
 describe('track content drag', () => {
   it('limits drag plans to the anchor section and ignores mixed A/V selections', () => {
     const tracks = [
@@ -100,6 +104,7 @@ describe('track content drag', () => {
 
     expect(
       buildTrackContentMoveUpdates({
+        tracks: makeVideoTracks(['v3', 'v2', 'v1']),
         sectionTrackIds: ['v3', 'v2', 'v1'],
         draggedTrackIds: ['v1'],
         items,
@@ -122,6 +127,7 @@ describe('track content drag', () => {
 
     expect(
       buildTrackContentMoveUpdates({
+        tracks: makeVideoTracks(['v4', 'v3', 'v2', 'v1']),
         sectionTrackIds: ['v4', 'v3', 'v2', 'v1'],
         draggedTrackIds: ['v2', 'v1'],
         items,
@@ -144,6 +150,7 @@ describe('track content drag', () => {
 
     expect(
       buildTrackContentMoveUpdates({
+        tracks: makeVideoTracks(['v3', 'v2', 'v1']),
         sectionTrackIds: ['v3', 'v2', 'v1'],
         draggedTrackIds: ['v2'],
         items,
@@ -217,5 +224,72 @@ describe('track content drag', () => {
       { id: 'clip-v2', from: 0, trackId: createdTracks?.[0]?.id },
       { id: 'clip-v1', from: 0, trackId: createdTracks?.[1]?.id },
     ])
+  })
+
+  it('does not start a content reorder from a locked track', () => {
+    const tracks = [
+      makeTrack({ id: 'v2', name: 'V2', kind: 'video', order: 0 }),
+      makeTrack({ id: 'v1', name: 'V1', kind: 'video', order: 1, locked: true }),
+    ]
+
+    expect(
+      resolveTrackContentDragPlan({
+        tracks,
+        anchorTrackId: 'v1',
+        selectedTrackIds: ['v1'],
+      }),
+    ).toBeNull()
+  })
+
+  it('rejects a fixed-lane reorder when any affected lane is locked', () => {
+    const tracks = [
+      makeTrack({ id: 'v3', name: 'V3', kind: 'video', order: 0 }),
+      makeTrack({ id: 'v2', name: 'V2', kind: 'video', order: 1, locked: true }),
+      makeTrack({ id: 'v1', name: 'V1', kind: 'video', order: 2 }),
+    ]
+    const items = [
+      makeVideoItem('clip-v3', 'v3'),
+      makeVideoItem('clip-v2', 'v2'),
+      makeVideoItem('clip-v1', 'v1'),
+    ]
+
+    expect(
+      buildTrackContentMoveUpdates({
+        tracks,
+        sectionTrackIds: ['v3', 'v2', 'v1'],
+        draggedTrackIds: ['v1'],
+        items,
+        insertIndex: 0,
+      }),
+    ).toEqual([])
+  })
+
+  it('rejects track-header moves when a moved item has a locked linked companion', () => {
+    const tracks = [
+      makeTrack({ id: 'v2', name: 'V2', kind: 'video', order: 0 }),
+      makeTrack({ id: 'v1', name: 'V1', kind: 'video', order: 1 }),
+      makeTrack({ id: 'a1', name: 'A1', kind: 'audio', order: 2, locked: true }),
+    ]
+    const video = { ...makeVideoItem('clip-v1', 'v1'), linkedGroupId: 'linked-av' }
+    const audio = { ...makeAudioItem('clip-a1', 'a1'), linkedGroupId: 'linked-av' }
+    const items = [video, audio]
+
+    expect(
+      buildTrackContentMoveUpdates({
+        tracks,
+        sectionTrackIds: ['v2', 'v1'],
+        draggedTrackIds: ['v1'],
+        items,
+        insertIndex: 0,
+      }),
+    ).toEqual([])
+    expect(
+      buildTrackContentCreateTrackMovePlan({
+        tracks,
+        items,
+        kind: 'video',
+        draggedTrackIds: ['v1'],
+      }),
+    ).toBeNull()
   })
 })

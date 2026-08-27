@@ -3,7 +3,7 @@
  */
 
 import { useCallback } from 'react'
-import { useHotkeys } from 'react-hotkeys-hook'
+import { useCommandHotkey } from '@/hooks/use-hotkey-registration'
 import { usePlaybackStore } from '@/shared/state/playback'
 import { usePreviewBridgeStore } from '@/shared/state/preview-bridge'
 import { useItemsStore } from '../../stores/items-store'
@@ -14,7 +14,6 @@ import type { TimelineShortcutCallbacks } from '../use-timeline-shortcuts'
 import { useSourcePlayerStore } from '@/shared/state/source-player'
 import { getFilteredItemSnapEdges } from '../../utils/timeline-snap-utils'
 import { getVisibleTrackIds } from '../../utils/group-utils'
-import { useResolvedHotkeys } from '@/features/timeline/deps/settings'
 
 /** Compute snap points on-demand from current store state (avoids reactive subscriptions). */
 function getSnapPoints(): number[] {
@@ -34,8 +33,13 @@ function getSnapPoints(): number[] {
   return Array.from(points).sort((a, b) => a - b)
 }
 
+function getFinalTimelineFrame(): number {
+  return useItemsStore
+    .getState()
+    .items.reduce((maxFrame, item) => Math.max(maxFrame, item.from + item.durationInFrames - 1), 0)
+}
+
 export function usePlaybackShortcuts(callbacks: TimelineShortcutCallbacks) {
-  const hotkeys = useResolvedHotkeys()
   const togglePlayPause = usePlaybackStore((s) => s.togglePlayPause)
   const shuttleForward = usePlaybackStore((s) => s.shuttleForward)
   const shuttleReverse = usePlaybackStore((s) => s.shuttleReverse)
@@ -54,8 +58,8 @@ export function usePlaybackShortcuts(callbacks: TimelineShortcutCallbacks) {
   )
 
   // Playback: Space - Play/Pause
-  useHotkeys(
-    hotkeys.PLAY_PAUSE,
+  useCommandHotkey(
+    'PLAY_PAUSE',
     (event) => {
       event.preventDefault()
       const { hoveredPanel, playerMethods } = useSourcePlayerStore.getState()
@@ -74,10 +78,10 @@ export function usePlaybackShortcuts(callbacks: TimelineShortcutCallbacks) {
     [togglePlayPause, isPlaying, callbacks],
   )
 
-  // Shuttle: L advances forward through 1x, 2x, and 4x. Ignore browser key
+  // Shuttle forward advances through 1x, 2x, and 4x. Ignore browser key
   // repeat so one physical press produces one transport transition.
-  useHotkeys(
-    'l',
+  useCommandHotkey(
+    'SHUTTLE_FORWARD',
     (event) => {
       if (event.repeat) return
       event.preventDefault()
@@ -96,10 +100,10 @@ export function usePlaybackShortcuts(callbacks: TimelineShortcutCallbacks) {
     [callbacks, shuttleForward],
   )
 
-  // Shuttle: J mirrors L in reverse. Browser media stays on a paused visual
+  // Shuttle reverse mirrors forward playback. Browser media stays on a paused visual
   // seek path for negative rates; the Clock still advances at display cadence.
-  useHotkeys(
-    'j',
+  useCommandHotkey(
+    'SHUTTLE_REVERSE',
     (event) => {
       if (event.repeat) return
       event.preventDefault()
@@ -118,33 +122,32 @@ export function usePlaybackShortcuts(callbacks: TimelineShortcutCallbacks) {
     [callbacks, shuttleReverse],
   )
 
-  // K owns pause only while a transport is active. When already paused it
-  // yields to the existing Edit keyframe shortcut.
-  useHotkeys(
-    'k',
+  // Pause always owns its binding, including while already paused, so transport
+  // routing cannot fall through to another command.
+  useCommandHotkey(
+    'SHUTTLE_PAUSE',
     (event) => {
       if (event.repeat) return
+      event.preventDefault()
+      event.stopPropagation()
       const { hoveredPanel, playerMethods } = useSourcePlayerStore.getState()
       if (hoveredPanel === 'source' && playerMethods) {
-        if (!playerMethods.isPlaying()) return
-        event.preventDefault()
-        event.stopPropagation()
         playerMethods.pause()
         return
       }
-      if (!usePlaybackStore.getState().isPlaying) return
-      event.preventDefault()
-      event.stopPropagation()
+      const wasPlaying = usePlaybackStore.getState().isPlaying
       pause()
-      callbacks.onPause?.()
+      if (wasPlaying) {
+        callbacks.onPause?.()
+      }
     },
     { ...HOTKEY_OPTIONS, eventListenerOptions: { capture: true } },
     [callbacks, pause],
   )
 
   // Navigation: Arrow Left - Previous frame
-  useHotkeys(
-    hotkeys.PREVIOUS_FRAME,
+  useCommandHotkey(
+    'PREVIOUS_FRAME',
     (event) => {
       event.preventDefault()
       const { hoveredPanel, playerMethods } = useSourcePlayerStore.getState()
@@ -160,8 +163,8 @@ export function usePlaybackShortcuts(callbacks: TimelineShortcutCallbacks) {
   )
 
   // Navigation: Arrow Right - Next frame
-  useHotkeys(
-    hotkeys.NEXT_FRAME,
+  useCommandHotkey(
+    'NEXT_FRAME',
     (event) => {
       event.preventDefault()
       const { hoveredPanel, playerMethods } = useSourcePlayerStore.getState()
@@ -170,15 +173,15 @@ export function usePlaybackShortcuts(callbacks: TimelineShortcutCallbacks) {
         return
       }
       const currentFrame = usePlaybackStore.getState().currentFrame
-      commitTimelineSeek(currentFrame + 1)
+      commitTimelineSeek(Math.min(currentFrame + 1, getFinalTimelineFrame()))
     },
     HOTKEY_OPTIONS,
     [commitTimelineSeek],
   )
 
   // Navigation: Home - Go to start
-  useHotkeys(
-    hotkeys.GO_TO_START,
+  useCommandHotkey(
+    'GO_TO_START',
     (event) => {
       event.preventDefault()
       const { hoveredPanel, playerMethods } = useSourcePlayerStore.getState()
@@ -193,29 +196,24 @@ export function usePlaybackShortcuts(callbacks: TimelineShortcutCallbacks) {
   )
 
   // Navigation: End - Go to end of timeline (last frame of last item)
-  useHotkeys(
-    hotkeys.GO_TO_END,
+  useCommandHotkey(
+    'GO_TO_END',
     (event) => {
       event.preventDefault()
       const { hoveredPanel, playerMethods } = useSourcePlayerStore.getState()
       if (hoveredPanel === 'source' && playerMethods) {
-        playerMethods.seek(playerMethods.getDurationInFrames() - 1)
+        playerMethods.seek(Math.max(0, playerMethods.getDurationInFrames() - 1))
         return
       }
-      const currentItems = useItemsStore.getState().items
-      const lastFrame = currentItems.reduce((max, item) => {
-        const itemEnd = item.from + item.durationInFrames
-        return Math.max(max, itemEnd)
-      }, 0)
-      commitTimelineSeek(lastFrame)
+      commitTimelineSeek(getFinalTimelineFrame())
     },
     HOTKEY_OPTIONS,
     [commitTimelineSeek],
   )
 
   // Navigation: Down - Jump to next snap point (clip edge or marker)
-  useHotkeys(
-    hotkeys.NEXT_SNAP_POINT,
+  useCommandHotkey(
+    'NEXT_SNAP_POINT',
     (event) => {
       event.preventDefault()
       const currentFrame = usePlaybackStore.getState().currentFrame
@@ -229,8 +227,8 @@ export function usePlaybackShortcuts(callbacks: TimelineShortcutCallbacks) {
   )
 
   // Navigation: Up - Jump to previous snap point (clip edge or marker)
-  useHotkeys(
-    hotkeys.PREVIOUS_SNAP_POINT,
+  useCommandHotkey(
+    'PREVIOUS_SNAP_POINT',
     (event) => {
       event.preventDefault()
       const currentFrame = usePlaybackStore.getState().currentFrame

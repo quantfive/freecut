@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+/// <reference path="./consumer-smoke-style.d.ts" />
 
 import '@testing-library/jest-dom'
 import '@quantfive/freecut-editor-surface/style.css'
@@ -6,10 +7,15 @@ import { render, screen, waitFor } from '@testing-library/react'
 import { beforeAll, describe, expect, it, vi } from 'vite-plus/test'
 import {
   FreeCutEditorSurface,
+  HOTKEYS,
   capabilityForCommand,
+  createHostShortcutSettings,
   isHostCapabilityEnabled,
   type EditorHost,
+  type EditorTranscriptPort,
   type EmbeddedEditorSnapshot,
+  type HostEditPredicate,
+  type HostNotice,
 } from '@quantfive/freecut-editor-surface'
 
 const snapshot: EmbeddedEditorSnapshot = {
@@ -44,6 +50,16 @@ function fakeHost(): EditorHost {
     submitEdit: vi.fn(() => {
       throw new Error('consumer smoke does not submit an edit')
     }),
+    subscribe: vi.fn(() => () => undefined),
+    shortcuts: {
+      getSettings: () =>
+        createHostShortcutSettings({
+          SHUTTLE_REVERSE: 'q',
+          SHUTTLE_PAUSE: 'w',
+          SHUTTLE_FORWARD: 'e',
+        }),
+      setSettings: vi.fn(),
+    },
   }
 }
 
@@ -108,10 +124,28 @@ describe('published FreeCut browser entry', () => {
 
     expect(screen.getByTestId('properties-clip-panel-host')).toBeInTheDocument()
     expect(await screen.findByTestId('caption-editor')).toBeInTheDocument()
+    expect(HOTKEYS).toMatchObject({
+      SHUTTLE_REVERSE: 'j',
+      SHUTTLE_PAUSE: 'k',
+      SHUTTLE_FORWARD: 'l',
+      EDIT_KEYFRAME_ADD: 'shift+k',
+    })
     expect(host.load).toHaveBeenCalledTimes(1)
+    expect(host.subscribe).toHaveBeenCalledTimes(1)
     expect(capabilityForCommand('move_item')).toBe('timeline.move')
+    expect(capabilityForCommand('ripple_delete')).toBe('timeline.remove')
     expect(capabilityForCommand('set_caption_style')).toBe('timeline.caption')
     expect(isHostCapabilityEnabled(host.capabilities, 'timeline.add')).toBe(false)
+
+    const predicate: HostEditPredicate = 'sourceRange'
+    const notice: HostNotice = {
+      kind: 'unsupported',
+      message: 'Unsupported edit',
+      detail: { code: 'ambiguous_change', failedPredicates: [predicate] },
+    }
+    const requestTranscription = vi.fn<NonNullable<EditorTranscriptPort['requestTranscription']>>()
+    expect(notice.detail?.failedPredicates).toEqual(['sourceRange'])
+    expect(requestTranscription).toBeTypeOf('function')
   })
 
   it('sizes the published surface against its container, never the viewport', async () => {

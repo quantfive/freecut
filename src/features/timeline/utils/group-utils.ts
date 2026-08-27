@@ -11,20 +11,86 @@ export function getVisibleTrackIds(tracks: TimelineTrack[]): Set<string> {
   )
 }
 
+interface TrackHierarchyIndex {
+  tracksById: Map<string, TimelineTrack[]>
+  trackById: Map<string, TimelineTrack>
+  duplicateTrackIds: Set<string>
+}
+
+function indexTrackHierarchy(tracks: TimelineTrack[]): TrackHierarchyIndex {
+  const tracksById = new Map<string, TimelineTrack[]>()
+  const trackById = new Map<string, TimelineTrack>()
+  const duplicateTrackIds = new Set<string>()
+
+  for (const track of tracks) {
+    const definitions = tracksById.get(track.id)
+    if (definitions) {
+      definitions.push(track)
+      duplicateTrackIds.add(track.id)
+    } else {
+      tracksById.set(track.id, [track])
+      trackById.set(track.id, track)
+    }
+  }
+
+  return { tracksById, trackById, duplicateTrackIds }
+}
+
+function collectRetainedGroupRootIds(
+  tracks: TimelineTrack[],
+  hierarchy: TrackHierarchyIndex,
+): Set<string> {
+  const retainedGroupIds = new Set(hierarchy.duplicateTrackIds)
+  for (const track of tracks) {
+    if (!track.isGroup && track.parentTrackId) retainedGroupIds.add(track.parentTrackId)
+  }
+  return retainedGroupIds
+}
+
+function retainGroupParent(
+  track: TimelineTrack,
+  retainedGroupIds: Set<string>,
+  pendingGroupIds: string[],
+): void {
+  const parentId = track.isGroup ? track.parentTrackId : undefined
+  if (!parentId || retainedGroupIds.has(parentId)) return
+  retainedGroupIds.add(parentId)
+  pendingGroupIds.push(parentId)
+}
+
+function collectRetainedGroupIds(
+  tracks: TimelineTrack[],
+  hierarchy: TrackHierarchyIndex,
+): Set<string> {
+  const retainedGroupIds = collectRetainedGroupRootIds(tracks, hierarchy)
+  const pendingGroupIds = [...retainedGroupIds]
+
+  for (let index = 0; index < pendingGroupIds.length; index += 1) {
+    const definitions = hierarchy.tracksById.get(pendingGroupIds[index]!) ?? []
+    for (const track of definitions) {
+      retainGroupParent(track, retainedGroupIds, pendingGroupIds)
+    }
+  }
+
+  return retainedGroupIds
+}
+
 /**
- * Remove layer-group containers that no longer own any child tracks.
+ * Remove layer-group containers that no longer own a descendant lane.
  *
  * A layer group is an organizational timeline container, not an item lane of
- * its own, so retaining an empty container only leaves an orphaned UI row.
+ * its own, so retaining a branch with no lane only leaves orphaned UI rows.
+ * Starting from every non-group lane makes the traversal independent of input
+ * order and retains its complete group ancestry. Missing parents terminate a
+ * branch, while visited IDs make self/multi-node cycles finite. Every duplicate
+ * ID is also a root: group/group and mixed group/lane definitions, plus every
+ * possible group ancestor, remain in place so normalization cannot sanitize an
+ * ambiguous topology into unlocked authorization. Lane/lane duplicates already
+ * survive because pruning never removes ordinary lanes.
  */
 export function pruneEmptyLayerGroups(tracks: TimelineTrack[]): TimelineTrack[] {
-  const populatedGroupIds = new Set(
-    tracks
-      .filter((track) => !track.isGroup && track.parentTrackId)
-      .map((track) => track.parentTrackId as string),
-  )
-
-  const nextTracks = tracks.filter((track) => !track.isGroup || populatedGroupIds.has(track.id))
+  const retainedGroupIds = collectRetainedGroupIds(tracks, indexTrackHierarchy(tracks))
+  const nextTracks = tracks.filter((track) => !track.isGroup || retainedGroupIds.has(track.id))
   return nextTracks.length === tracks.length ? tracks : nextTracks
 }
 
@@ -37,37 +103,137 @@ export function pruneEmptyLayerGroupHierarchy(
   tracks: TimelineTrack[],
   items: ReadonlyArray<Pick<TimelineItem, 'trackId'>>,
 ): TimelineTrack[] {
+  const hierarchy = indexTrackHierarchy(tracks)
   const populatedTrackIds = new Set(items.map((item) => item.trackId))
   const tracksWithPopulatedGroupChildren = tracks.filter(
-    (track) => track.isGroup || !track.parentTrackId || populatedTrackIds.has(track.id),
+    (track) =>
+      track.isGroup ||
+      hierarchy.duplicateTrackIds.has(track.id) ||
+      !track.parentTrackId ||
+      populatedTrackIds.has(track.id),
   )
 
   return pruneEmptyLayerGroups(tracksWithPopulatedGroupChildren)
 }
 
+type EffectiveTrackState = Pick<TimelineTrack, 'locked' | 'muted' | 'visible' | 'solo'> & {
+  valid: boolean
+}
+
+const ROOT_TRACK_STATE: EffectiveTrackState = {
+  locked: false,
+  muted: false,
+  visible: true,
+  solo: false,
+  valid: true,
+}
+
+const MALFORMED_TRACK_STATE: EffectiveTrackState = {
+  locked: true,
+  muted: true,
+  visible: false,
+  solo: false,
+  valid: false,
+}
+
+function inheritTrackState(
+  track: TimelineTrack,
+  inheritedState: EffectiveTrackState,
+): EffectiveTrackState {
+  if (!inheritedState.valid) return MALFORMED_TRACK_STATE
+  return {
+    locked: track.locked || inheritedState.locked,
+    muted: track.muted || inheritedState.muted,
+    visible: track.visible !== false && inheritedState.visible,
+    solo: track.solo || inheritedState.solo,
+    valid: true,
+  }
+}
+
+function collectTrackResolutionPath(params: {
+  track: TimelineTrack
+  hierarchy: TrackHierarchyIndex
+  stateById: Map<string, EffectiveTrackState>
+}): { path: TimelineTrack[]; inheritedState: EffectiveTrackState } {
+  const path: TimelineTrack[] = []
+  const pathIds = new Set<string>()
+  let cursor: TimelineTrack | undefined = params.track
+
+  while (cursor) {
+    const cached = params.stateById.get(cursor.id)
+    if (cached) return { path, inheritedState: cached }
+    if (params.hierarchy.duplicateTrackIds.has(cursor.id)) {
+      return { path, inheritedState: MALFORMED_TRACK_STATE }
+    }
+    if (pathIds.has(cursor.id)) return { path, inheritedState: MALFORMED_TRACK_STATE }
+
+    pathIds.add(cursor.id)
+    path.push(cursor)
+    if (!cursor.parentTrackId) return { path, inheritedState: ROOT_TRACK_STATE }
+
+    const parent = params.hierarchy.trackById.get(cursor.parentTrackId)
+    if (!parent?.isGroup) return { path, inheritedState: MALFORMED_TRACK_STATE }
+    cursor = parent
+  }
+
+  return { path, inheritedState: MALFORMED_TRACK_STATE }
+}
+
+function resolveTrackState(params: {
+  track: TimelineTrack
+  hierarchy: TrackHierarchyIndex
+  stateById: Map<string, EffectiveTrackState>
+}): EffectiveTrackState {
+  const cached = params.stateById.get(params.track.id)
+  if (cached) return cached
+  if (params.hierarchy.duplicateTrackIds.has(params.track.id)) return MALFORMED_TRACK_STATE
+
+  const { path, inheritedState } = collectTrackResolutionPath(params)
+  let state = inheritedState
+  for (let index = path.length - 1; index >= 0; index -= 1) {
+    const pathTrack = path[index]!
+    state = inheritTrackState(pathTrack, state)
+    params.stateById.set(pathTrack.id, state)
+  }
+  return params.stateById.get(params.track.id) ?? MALFORMED_TRACK_STATE
+}
+
 /**
- * Return active timeline lanes with inherited Layer Group state and without
- * the organizational container rows themselves.
+ * Return active timeline lanes with inherited state from their complete
+ * Layer Group ancestry and without the organizational container rows.
+ *
+ * Lock, mute, and solo are enabled by any ancestor; visibility must remain
+ * enabled at every level. Malformed ancestry (a missing parent or a cycle) is
+ * resolved fail-closed so every consumer sees the lane as locked, muted, and
+ * hidden rather than making a different partial guess. Solo is disabled for
+ * malformed ancestry because promoting an invalid lane into the solo set
+ * would make it more audible/visible, not less. Duplicate IDs of every shape,
+ * missing parents, non-group parents, self-parenting, and longer cycles are all
+ * malformed. Only a unique chain of Layer Group parents may authorize a lane.
  */
 export function resolveEffectiveTrackStates(tracks: TimelineTrack[]): TimelineTrack[] {
-  const groupsById = new Map(
-    tracks.filter((track) => track.isGroup).map((track) => [track.id, track] as const),
-  )
+  const hierarchy = indexTrackHierarchy(tracks)
+  const stateById = new Map<string, EffectiveTrackState>()
 
   return tracks
     .filter((track) => !track.isGroup)
     .map((track) => {
-      const parentGroup = track.parentTrackId ? groupsById.get(track.parentTrackId) : undefined
-      if (!parentGroup) {
+      const state = resolveTrackState({ track, hierarchy, stateById })
+      if (
+        state.locked === track.locked &&
+        state.muted === track.muted &&
+        state.visible === track.visible &&
+        state.solo === track.solo
+      ) {
         return track
       }
 
       return {
         ...track,
-        locked: track.locked || parentGroup.locked,
-        muted: track.muted || parentGroup.muted,
-        visible: track.visible !== false && parentGroup.visible !== false,
-        solo: track.solo || parentGroup.solo,
+        locked: state.locked,
+        muted: state.muted,
+        visible: state.visible,
+        solo: state.solo,
       }
     })
 }

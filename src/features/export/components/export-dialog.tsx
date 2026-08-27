@@ -394,8 +394,7 @@ export function ExportDialog({ open, onClose, onOpenRenderQueue }: ExportDialogP
     const reversedClipIds = new Set(
       items
         .filter(
-          (item) =>
-            (item.type === 'video' || item.type === 'audio') && item.isReversed === true,
+          (item) => (item.type === 'video' || item.type === 'audio') && item.isReversed === true,
         )
         .map((item) => item.id),
     )
@@ -643,8 +642,9 @@ export function ExportDialog({ open, onClose, onOpenRenderQueue }: ExportDialogP
 
   // Start export
   const handleStartExport = async () => {
+    const seq = captureSelection()
     setView('progress')
-    await startExport(buildExtendedSettings())
+    await startExport(buildExtendedSettings(), seq)
   }
 
   // The active render range for a sequence (whole timeline unless in/out set).
@@ -1574,8 +1574,7 @@ export function ExportDialog({ open, onClose, onOpenRenderQueue }: ExportDialogP
                 </div>
                 <div className="flex items-center justify-between text-sm gap-2">
                   <span className="text-muted-foreground truncate">
-                    {status === 'preparing' &&
-                      (progressMessage ?? t('export.progress.preparing'))}
+                    {status === 'preparing' && (progressMessage ?? t('export.progress.preparing'))}
                     {status === 'rendering' && t('export.progress.rendering')}
                     {status === 'encoding' && t('export.progress.encoding')}
                     {status === 'finalizing' && t('export.progress.finalizing')}

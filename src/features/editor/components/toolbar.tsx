@@ -10,6 +10,7 @@ import {
   Github,
   Keyboard,
   ListVideo,
+  MoreHorizontal,
   Save,
   Settings,
   Sparkles,
@@ -22,6 +23,7 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuLabel,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
@@ -60,6 +62,14 @@ function formatProjectDuration(seconds: number): string {
   return remainingSeconds > 0 ? `${minutes}m ${remainingSeconds}s` : `${minutes}m`
 }
 
+function projectDurationSeconds(maxItemEndFrame: number, fps: number): number {
+  return fps > 0 ? maxItemEndFrame / fps : 0
+}
+
+function LocalInferenceToolbarStatus({ hostMode }: { hostMode: boolean }) {
+  return hostMode ? null : <LocalInferenceStatusPill />
+}
+
 interface ToolbarProps {
   projectId: string
   project: {
@@ -76,6 +86,208 @@ interface ToolbarProps {
   onOpenRenderQueue?: () => void
   /** Number of queued + rendering jobs, shown as a badge on the queue button. */
   renderQueueCount?: number
+  compact?: boolean
+}
+
+interface MobileToolbarProps extends ToolbarProps {
+  hostMode: boolean
+  showUnsavedDialog: boolean
+  showShortcutsDialog: boolean
+  showSettingsDialog: boolean
+  showWhatsNewDialog: boolean
+  isSaveAnimating: boolean
+  saveAnimationKey: number
+  handleBackClick(): void
+  handleSave(): Promise<void>
+  openWhatsNew(): void
+  setShowUnsavedDialog(open: boolean): void
+  setShowShortcutsDialog(open: boolean): void
+  setShowSettingsDialog(open: boolean): void
+  setShowWhatsNewDialog(open: boolean): void
+}
+
+// The compact toolbar keeps the four essential actions visible while gathering
+// host/local utility branches into one tested overflow surface. Its standalone
+// and host variants are covered by tests/browser/responsive-editor.spec.ts.
+// fallow-ignore-next-line complexity
+function MobileToolbar({
+  project,
+  onBack,
+  onSave,
+  onExport,
+  onExportBundle,
+  onOpenRenderQueue,
+  renderQueueCount = 0,
+  hostMode,
+  showUnsavedDialog,
+  showShortcutsDialog,
+  showSettingsDialog,
+  showWhatsNewDialog,
+  isSaveAnimating,
+  saveAnimationKey,
+  handleBackClick,
+  handleSave,
+  openWhatsNew,
+  setShowUnsavedDialog,
+  setShowShortcutsDialog,
+  setShowSettingsDialog,
+  setShowWhatsNewDialog,
+}: MobileToolbarProps) {
+  const { t } = useTranslation()
+
+  return (
+    <div
+      className="panel-header flex min-w-0 flex-shrink-0 items-center gap-1 overflow-hidden border-b border-border px-1.5"
+      style={{ height: EDITOR_LAYOUT_CSS_VALUES.toolbarHeight }}
+      role="toolbar"
+      aria-label={t('toolbar.ariaLabel')}
+      data-mobile-toolbar
+    >
+      <Button
+        variant="ghost"
+        size="icon"
+        className="h-8 w-8 shrink-0"
+        onClick={handleBackClick}
+        disabled={!onBack}
+        aria-label={t('toolbar.backToProjectsAria')}
+      >
+        <ArrowLeft className="h-4 w-4" />
+      </Button>
+
+      {onSave && onBack && (
+        <UnsavedChangesDialog
+          open={showUnsavedDialog}
+          onOpenChange={setShowUnsavedDialog}
+          onSave={handleSave}
+          onNavigateBack={onBack}
+          projectName={project.name}
+        />
+      )}
+
+      <div className="flex min-w-0 flex-1 items-center justify-center overflow-hidden">
+        <WorkspaceSwitcher compact />
+      </div>
+
+      {onSave && (
+        <Button
+          variant="outline"
+          size="icon"
+          className="relative h-8 w-8 shrink-0"
+          onClick={handleSave}
+          aria-label={t('toolbar.saveAria')}
+        >
+          {isSaveAnimating ? (
+            <SaveAnimationIcon key={saveAnimationKey} className="h-5 w-5" />
+          ) : (
+            <Save className="h-4 w-4" />
+          )}
+          <SaveDirtyIndicator />
+        </Button>
+      )}
+
+      {(onExport || onExportBundle) && (
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button size="icon" className="h-8 w-8 shrink-0" aria-label={t('toolbar.export')}>
+              <Download className="h-4 w-4" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            <DropdownMenuItem onClick={onExport} disabled={!onExport} className="gap-2">
+              <Video className="h-4 w-4" />
+              {t('toolbar.exportVideo')}
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={onExportBundle} disabled={!onExportBundle} className="gap-2">
+              <FolderArchive className="h-4 w-4" />
+              {t('toolbar.downloadProjectZip')}
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      )}
+
+      <ShortcutsDialog open={showShortcutsDialog} onOpenChange={setShowShortcutsDialog} />
+      {!hostMode && (
+        <SettingsDialog open={showSettingsDialog} onOpenChange={setShowSettingsDialog} />
+      )}
+      <WhatsNewDialog open={showWhatsNewDialog} onOpenChange={setShowWhatsNewDialog} />
+
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button
+            variant="outline"
+            size="icon"
+            className="h-8 w-8 shrink-0"
+            aria-label="More actions"
+          >
+            <MoreHorizontal className="h-4 w-4" />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="w-56">
+          <DropdownMenuLabel className="truncate">{project.name}</DropdownMenuLabel>
+          {onOpenRenderQueue && (
+            <DropdownMenuItem onSelect={onOpenRenderQueue}>
+              <ListVideo className="h-4 w-4" />
+              {t('toolbar.renderQueue')}
+              {renderQueueCount > 0 && <span className="ml-auto">{renderQueueCount}</span>}
+            </DropdownMenuItem>
+          )}
+          <DropdownMenuItem onSelect={openWhatsNew}>
+            <Sparkles className="h-4 w-4" />
+            {t('toolbar.whatsNew')}
+          </DropdownMenuItem>
+          <DropdownMenuItem onSelect={() => setShowSettingsDialog(true)} disabled={hostMode}>
+            <Settings className="h-4 w-4" />
+            {t('toolbar.settings')}
+          </DropdownMenuItem>
+          <DropdownMenuItem onSelect={() => setShowShortcutsDialog(true)}>
+            <Keyboard className="h-4 w-4" />
+            {t('toolbar.keyboardShortcuts')}
+          </DropdownMenuItem>
+          <DropdownMenuItem asChild>
+            <a href="/docs" target="_blank" rel="noopener noreferrer">
+              <BookOpen className="h-4 w-4" />
+              User Guide
+            </a>
+          </DropdownMenuItem>
+          <DropdownMenuItem asChild>
+            <a
+              href="https://github.com/walterlow/freecut"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              <Github className="h-4 w-4" />
+              GitHub
+            </a>
+          </DropdownMenuItem>
+          <DropdownMenuItem asChild>
+            <a href={DISCORD_INVITE_URL} target="_blank" rel="noopener noreferrer">
+              <DiscordIcon className="h-4 w-4" />
+              Discord
+            </a>
+          </DropdownMenuItem>
+          <div className="border-t border-border p-1">
+            <LanguageSwitcher size="sm" align="end" side="left" />
+          </div>
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </div>
+  )
+}
+
+function requestToolbarBack({
+  onSave,
+  onBack,
+  showUnsavedDialog,
+}: {
+  onSave?: () => Promise<void>
+  onBack?: () => void
+  showUnsavedDialog: () => void
+}) {
+  if (!useTimelineStore.getState().isDirty) {
+    onBack?.()
+    return
+  }
+  if (onSave && onBack) showUnsavedDialog()
 }
 
 export const Toolbar = memo(function Toolbar({
@@ -87,6 +299,7 @@ export const Toolbar = memo(function Toolbar({
   onExportBundle,
   onOpenRenderQueue,
   renderQueueCount = 0,
+  compact = false,
 }: ToolbarProps) {
   const { t } = useTranslation()
   const hostMode = useEditorHostMode()
@@ -105,7 +318,7 @@ export const Toolbar = memo(function Toolbar({
   const projectSummary = useMemo(() => {
     const projectMediaIds = new Set(mediaDependencyIds)
     return {
-      durationSeconds: project.fps > 0 ? maxItemEndFrame / project.fps : 0,
+      durationSeconds: projectDurationSeconds(maxItemEndFrame, project.fps),
       clipCount: itemCount,
       mediaCount: mediaDependencyIds.length,
       brokenMediaCount: brokenMediaIds.filter((mediaId) => projectMediaIds.has(mediaId)).length,
@@ -130,11 +343,11 @@ export const Toolbar = memo(function Toolbar({
   }
 
   const handleBackClick = () => {
-    if (useTimelineStore.getState().isDirty) {
-      if (onSave && onBack) setShowUnsavedDialog(true)
-      return
-    }
-    onBack?.()
+    requestToolbarBack({
+      onSave,
+      onBack,
+      showUnsavedDialog: () => setShowUnsavedDialog(true),
+    })
   }
 
   const handleSave = async () => {
@@ -164,6 +377,35 @@ export const Toolbar = memo(function Toolbar({
     } else {
       finishSaveAnimation()
     }
+  }
+
+  if (compact) {
+    return (
+      <MobileToolbar
+        projectId={projectId}
+        project={project}
+        onBack={onBack}
+        onSave={onSave}
+        onExport={onExport}
+        onExportBundle={onExportBundle}
+        onOpenRenderQueue={onOpenRenderQueue}
+        renderQueueCount={renderQueueCount}
+        hostMode={hostMode}
+        showUnsavedDialog={showUnsavedDialog}
+        showShortcutsDialog={showShortcutsDialog}
+        showSettingsDialog={showSettingsDialog}
+        showWhatsNewDialog={showWhatsNewDialog}
+        isSaveAnimating={isSaveAnimating}
+        saveAnimationKey={saveAnimationKey}
+        handleBackClick={handleBackClick}
+        handleSave={handleSave}
+        openWhatsNew={openWhatsNew}
+        setShowUnsavedDialog={setShowUnsavedDialog}
+        setShowShortcutsDialog={setShowShortcutsDialog}
+        setShowSettingsDialog={setShowSettingsDialog}
+        setShowWhatsNewDialog={setShowWhatsNewDialog}
+      />
+    )
   }
 
   return (
@@ -221,7 +463,7 @@ export const Toolbar = memo(function Toolbar({
         <WorkspaceSwitcher />
       </div>
 
-      {!hostMode && <LocalInferenceStatusPill />}
+      <LocalInferenceToolbarStatus hostMode={hostMode} />
 
       <ShortcutsDialog open={showShortcutsDialog} onOpenChange={setShowShortcutsDialog} />
 

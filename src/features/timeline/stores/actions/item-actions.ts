@@ -52,9 +52,70 @@ import {
   wouldCreateTransformParentCycle,
 } from '@/shared/utils/transform-parenting'
 import { createDefaultControllerItem } from '../../utils/generated-layer-items'
+import {
+  isTimelineTrackLocked,
+  partitionItemMutationIdsByLock,
+} from '../../utils/track-lock-invariants'
+
+const LOCK_PROTECTED_ITEM_FIELDS = new Set([
+  'from',
+  'durationInFrames',
+  'trackId',
+  'trimStart',
+  'trimEnd',
+  'sourceStart',
+  'sourceEnd',
+  'sourceDuration',
+  'sourceFps',
+  'speed',
+  'offset',
+  'isReversed',
+  'reverseConformLocalStart',
+  'reversed',
+  'segmentStart',
+  'segmentEnd',
+])
 
 function isLinkedSelectionEnabled(): boolean {
   return useEditorStore.getState().linkedSelectionEnabled
+}
+
+function changesLockedItemPlacement(item: TimelineItem, updates: Partial<TimelineItem>): boolean {
+  const updateRecord = updates as Record<string, unknown>
+  const itemRecord = item as unknown as Record<string, unknown>
+  return Object.keys(updateRecord).some(
+    (key) => LOCK_PROTECTED_ITEM_FIELDS.has(key) && updateRecord[key] !== itemRecord[key],
+  )
+}
+
+function changesItem(item: TimelineItem, updates: Partial<TimelineItem>): boolean {
+  const updateRecord = updates as Record<string, unknown>
+  const itemRecord = item as unknown as Record<string, unknown>
+  return Object.keys(updateRecord).some((key) => updateRecord[key] !== itemRecord[key])
+}
+
+function areItemMutationsUnlocked(itemIds: Iterable<string>): boolean {
+  const { items, tracks } = useItemsStore.getState()
+  return partitionItemMutationIdsByLock({ items, tracks, itemIds }).blockedIds.length === 0
+}
+
+function areMoveUpdatesUnlocked(
+  updates: Array<{ id: string; from: number; trackId?: string }>,
+  destinationTracks: TimelineTrack[] = useItemsStore.getState().tracks,
+): boolean {
+  if (updates.length === 0) return false
+
+  const { items, tracks } = useItemsStore.getState()
+  const partition = partitionItemMutationIdsByLock({
+    items,
+    tracks,
+    itemIds: updates.map((update) => update.id),
+  })
+  if (partition.blockedIds.length > 0) return false
+
+  return updates.every(
+    (update) => !update.trackId || !isTimelineTrackLocked(destinationTracks, update.trackId),
+  )
 }
 
 function pruneLayerGroupsAfterItemRemoval(): void {
@@ -106,18 +167,18 @@ function isInvalidTransformParentUpdate(
   if (!child || !canParticipateInTransformHierarchy(child)) return true
   return Boolean(
     context.parentItemId &&
-      (wouldCreateTransformParentCycle(
-          childItemId,
-          context.parentItemId,
-          context.getItem,
-          context.getKeyframes,
-        ) ||
-        hasRedundantTransformParentLink(
-          childItemId,
-          context.parentItemId,
-          context.getItem,
-          context.getKeyframes,
-        )),
+    (wouldCreateTransformParentCycle(
+      childItemId,
+      context.parentItemId,
+      context.getItem,
+      context.getKeyframes,
+    ) ||
+      hasRedundantTransformParentLink(
+        childItemId,
+        context.parentItemId,
+        context.getItem,
+        context.getKeyframes,
+      )),
   )
 }
 
@@ -715,6 +776,18 @@ export function addItemsOnNewTracks(items: TimelineItem[], tracks: TimelineTrack
 }
 
 export function updateItem(id: string, updates: Partial<TimelineItem>): void {
+  const item = useItemsStore.getState().itemById[id]
+  if (!item) return
+  if (!changesItem(item, updates)) return
+  if (changesLockedItemPlacement(item, updates) && !areItemMutationsUnlocked([id])) return
+  if (
+    updates.trackId &&
+    updates.trackId !== item.trackId &&
+    isTimelineTrackLocked(useItemsStore.getState().tracks, updates.trackId)
+  ) {
+    return
+  }
+
   execute(
     'UPDATE_ITEM',
     () => {
@@ -745,6 +818,7 @@ export function unlinkItems(ids: string[]): void {
 
   const linkedItems = items.filter((item) => unlinkIds.has(item.id) && item.linkedGroupId)
   if (linkedItems.length === 0) return
+  if (!areItemMutationsUnlocked(linkedItems.map((item) => item.id))) return
 
   // Detect video items that have a linked audio companion — their embedded audio
   // should be muted after unlinking so it doesn't start playing when the audio is deleted.
@@ -785,6 +859,7 @@ export function linkItems(ids: string[]): boolean {
   if (!canLinkSelection(items, ids) || selectedItems.length < 2) {
     return false
   }
+  if (!areItemMutationsUnlocked(selectedItems.map((item) => item.id))) return false
 
   const linkedGroupId = crypto.randomUUID()
   execute(
@@ -829,6 +904,7 @@ export function reverseItems(ids: string[]): void {
     )
 
   if (reversibleItems.length === 0) return
+  if (!areItemMutationsUnlocked(reversibleItems.map((item) => item.id))) return
   const shouldReverse = !reversibleItems.every((item) => item.isReversed === true)
   if (shouldReverse) {
     const videoItems = reversibleItems.filter((item) => item.type === 'video')
@@ -875,6 +951,7 @@ export function commitPreparedReverseItems(
   results: ReverseConformResult[],
 ): void {
   if (items.length === 0) return
+  if (!areItemMutationsUnlocked(items.map((item) => item.id))) return
   const resultByItemId = new Map(results.map((result) => [result.itemId, result]))
 
   execute(
@@ -913,159 +990,231 @@ export function commitPreparedReverseItems(
 }
 
 export function removeItems(ids: string[]): void {
-  const expandedIds = expandIdsWithLinkedItems(
-    useItemsStore.getState().items,
-    ids,
-    isLinkedSelectionEnabled(),
-  )
-  if (expandedIds.length === 0) return
+  const { items, tracks } = useItemsStore.getState()
+  const expandedIds = expandIdsWithLinkedItems(items, ids, isLinkedSelectionEnabled())
+  const partition = partitionItemMutationIdsByLock({
+    items,
+    tracks,
+    itemIds: expandedIds,
+  })
+  if (partition.allowedIds.length === 0 || partition.blockedIds.length > 0) return
+  const removalIds = partition.allowedIds
 
   execute(
     'REMOVE_ITEMS',
     () => {
       // Remove items
-      useItemsStore.getState()._removeItems(expandedIds)
+      useItemsStore.getState()._removeItems(removalIds)
 
       // Cascade: Remove transitions referencing deleted items
-      useTransitionsStore.getState()._removeTransitionsForItems(expandedIds)
+      useTransitionsStore.getState()._removeTransitionsForItems(removalIds)
 
       // Cascade: Remove keyframes for deleted items
-      useKeyframesStore.getState()._removeKeyframesForItems(expandedIds)
+      useKeyframesStore.getState()._removeKeyframesForItems(removalIds)
 
       pruneLayerGroupsAfterItemRemoval()
 
       useTimelineSettingsStore.getState().markDirty()
     },
-    { ids: expandedIds },
+    { ids: removalIds },
   )
 
   emitUiSound('delete')
 }
 
-export function rippleDeleteItems(ids: string[]): void {
-  const items = useItemsStore.getState().items
-  const linkedSelectionEnabled = isLinkedSelectionEnabled()
-  const expandedIds = expandIdsWithLinkedItems(items, ids, linkedSelectionEnabled)
-  if (expandedIds.length === 0) return
+type RippleMoveUpdate = { id: string; from: number }
 
-  const idsToDelete = new Set(expandedIds)
-  const remainingItems = items.filter((item) => !idsToDelete.has(item.id))
+interface RippleDeletePlan {
+  allRemoveIds: string[]
+  editedTrackIds: Set<string>
+  filteredUpdates: RippleMoveUpdate[]
+  removedIntervals: Array<{ start: number; end: number }>
+  updates: RippleMoveUpdate[]
+}
+
+function buildBaseRippleShifts(
+  remainingItems: TimelineItem[],
+  deletedItems: TimelineItem[],
+): Map<string, number> {
   const baseShiftByItemId = new Map<string, number>()
-  const editedTrackIds = new Set(
-    items.filter((item) => idsToDelete.has(item.id)).map((item) => item.trackId),
-  )
-  const removedIntervals = items
-    .filter((item) => idsToDelete.has(item.id))
-    .map((item) => ({
-      start: item.from,
-      end: item.from + item.durationInFrames,
-    }))
 
-  // Per-track: shift downstream items on the same track as each deleted item.
-  // Linked counterparts and attached captions on tracks that won't be handled
-  // by sync-lock ripple get shifted manually. Solo clips on unrelated tracks
-  // are left in place.
   for (const item of remainingItems) {
-    const shiftAmount = items
-      .filter((candidate) => idsToDelete.has(candidate.id))
-      .filter(
-        (deletedItem) =>
-          deletedItem.trackId === item.trackId &&
-          deletedItem.from + deletedItem.durationInFrames <= item.from,
-      )
-      .reduce((sum, deletedItem) => sum + deletedItem.durationInFrames, 0)
-
-    if (shiftAmount > 0) {
-      baseShiftByItemId.set(item.id, shiftAmount)
+    let shiftAmount = 0
+    for (const deletedItem of deletedItems) {
+      if (
+        deletedItem.trackId === item.trackId &&
+        deletedItem.from + deletedItem.durationInFrames <= item.from
+      ) {
+        shiftAmount += deletedItem.durationInFrames
+      }
     }
+    if (shiftAmount > 0) baseShiftByItemId.set(item.id, shiftAmount)
   }
 
-  const trackById = new Map(useItemsStore.getState().tracks.map((track) => [track.id, track]))
-  const itemById = new Map(remainingItems.map((item) => [item.id, item]))
+  return baseShiftByItemId
+}
+
+function buildRippleMoveUpdates(params: {
+  remainingItems: TimelineItem[]
+  tracks: TimelineTrack[]
+  editedTrackIds: Set<string>
+  baseShiftByItemId: ReadonlyMap<string, number>
+  linkedSelectionEnabled: boolean
+}): RippleMoveUpdate[] {
+  const trackById = new Map(params.tracks.map((track) => [track.id, track]))
+  const itemById = new Map(params.remainingItems.map((item) => [item.id, item]))
   const shiftByItemId = new Map<string, number>()
 
-  for (const [itemId, shiftAmount] of baseShiftByItemId) {
-    if (shiftAmount <= 0) continue
-
-    const relatedIds = expandIdsWithLinkedItems(remainingItems, [itemId], linkedSelectionEnabled)
+  for (const [itemId, shiftAmount] of params.baseShiftByItemId) {
+    const relatedIds = expandIdsWithLinkedItems(
+      params.remainingItems,
+      [itemId],
+      params.linkedSelectionEnabled,
+    )
     for (const relatedId of relatedIds) {
       const relatedItem = itemById.get(relatedId)
       if (!relatedItem) continue
 
       const handledBySyncLock =
-        !editedTrackIds.has(relatedItem.trackId) &&
+        !params.editedTrackIds.has(relatedItem.trackId) &&
         isTrackSyncLockEnabled(trackById.get(relatedItem.trackId))
-      if (handledBySyncLock) {
-        continue
-      }
+      if (handledBySyncLock) continue
 
       shiftByItemId.set(relatedId, Math.max(shiftByItemId.get(relatedId) ?? 0, shiftAmount))
     }
   }
 
-  const updates = remainingItems.flatMap((item) => {
+  return params.remainingItems.flatMap((item) => {
     const shiftAmount = shiftByItemId.get(item.id) ?? 0
     return shiftAmount > 0 ? [{ id: item.id, from: item.from - shiftAmount }] : []
   })
+}
 
-  // Detect non-shifted items that would be overlapped by shifted items.
-  // These get deleted rather than creating overlaps.
-  const shiftedById = new Map(updates.map((u) => [u.id, u.from]))
+function findItemsCoveredByRippleMove(
+  remainingItems: TimelineItem[],
+  updates: RippleMoveUpdate[],
+): string[] {
+  const shiftedById = new Map(updates.map((update) => [update.id, update.from]))
   const coveredIds: string[] = []
+
   for (const item of remainingItems) {
-    if (shiftedById.has(item.id) || idsToDelete.has(item.id)) continue
+    if (shiftedById.has(item.id)) continue
     const itemEnd = item.from + item.durationInFrames
-    // Check if any shifted item on the same track would overlap this item
-    for (const other of remainingItems) {
+
+    const isCovered = remainingItems.some((other) => {
       const newFrom = shiftedById.get(other.id)
-      if (newFrom === undefined || other.trackId !== item.trackId) continue
-      const newEnd = newFrom + other.durationInFrames
-      if (newFrom < itemEnd && newEnd > item.from) {
-        coveredIds.push(item.id)
-        break
-      }
-    }
+      if (newFrom === undefined || other.trackId !== item.trackId) return false
+      return newFrom < itemEnd && newFrom + other.durationInFrames > item.from
+    })
+    if (isCovered) coveredIds.push(item.id)
   }
 
-  // Expand covered IDs with linked companions so we don't orphan them
+  return coveredIds
+}
+
+function buildRippleDeletePlan(params: {
+  items: TimelineItem[]
+  tracks: TimelineTrack[]
+  deletionIds: string[]
+  linkedSelectionEnabled: boolean
+}): RippleDeletePlan | null {
+  const idsToDelete = new Set(params.deletionIds)
+  const deletedItems = params.items.filter((item) => idsToDelete.has(item.id))
+  const remainingItems = params.items.filter((item) => !idsToDelete.has(item.id))
+  const editedTrackIds = new Set(deletedItems.map((item) => item.trackId))
+  const removedIntervals = deletedItems.map((item) => ({
+    start: item.from,
+    end: item.from + item.durationInFrames,
+  }))
+  const baseShiftByItemId = buildBaseRippleShifts(remainingItems, deletedItems)
+  const updates = buildRippleMoveUpdates({
+    remainingItems,
+    tracks: params.tracks,
+    editedTrackIds,
+    baseShiftByItemId,
+    linkedSelectionEnabled: params.linkedSelectionEnabled,
+  })
+
+  const updatePartition = partitionItemMutationIdsByLock({
+    items: remainingItems,
+    tracks: params.tracks,
+    itemIds: updates.map((update) => update.id),
+  })
+  if (updatePartition.blockedIds.length > 0) return null
+
+  const coveredIds = findItemsCoveredByRippleMove(remainingItems, updates)
   const expandedCoveredIds = expandIdsWithLinkedItems(
     remainingItems,
     coveredIds,
-    linkedSelectionEnabled,
+    params.linkedSelectionEnabled,
   )
-  const allRemoveIds = [...expandedIds, ...expandedCoveredIds]
+  const coveredPartition = partitionItemMutationIdsByLock({
+    items: remainingItems,
+    tracks: params.tracks,
+    itemIds: expandedCoveredIds,
+  })
+  if (coveredPartition.blockedIds.length > 0) return null
 
-  // Filter out updates for items that were removed as covered (including their linked companions)
-  const coveredSet = new Set(expandedCoveredIds)
-  const filteredUpdates =
-    coveredSet.size > 0 ? updates.filter((u) => !coveredSet.has(u.id)) : updates
+  const coveredSet = new Set(coveredPartition.allowedIds)
+  return {
+    allRemoveIds: Array.from(new Set([...params.deletionIds, ...coveredSet])),
+    editedTrackIds,
+    filteredUpdates: updates.filter((update) => !coveredSet.has(update.id)),
+    removedIntervals,
+    updates,
+  }
+}
+
+export function rippleDeleteItems(ids: string[]): void {
+  const { items, tracks } = useItemsStore.getState()
+  const linkedSelectionEnabled = isLinkedSelectionEnabled()
+  const expandedIds = expandIdsWithLinkedItems(items, ids, linkedSelectionEnabled)
+  const deletionPartition = partitionItemMutationIdsByLock({
+    items,
+    tracks,
+    itemIds: expandedIds,
+  })
+  if (deletionPartition.allowedIds.length === 0 || deletionPartition.blockedIds.length > 0) return
+  const plan = buildRippleDeletePlan({
+    items,
+    tracks,
+    deletionIds: deletionPartition.allowedIds,
+    linkedSelectionEnabled,
+  })
+  if (!plan) return
 
   execute(
     'RIPPLE_DELETE_ITEMS',
     () => {
-      useItemsStore.getState()._removeItems(allRemoveIds)
-      if (filteredUpdates.length > 0) {
-        useItemsStore.getState()._moveItems(filteredUpdates)
+      useItemsStore.getState()._removeItems(plan.allRemoveIds)
+      if (plan.filteredUpdates.length > 0) {
+        useItemsStore.getState()._moveItems(plan.filteredUpdates)
       }
 
       const syncLockResult = propagateRemovedIntervalsToSyncLockedTracks({
-        editedTrackIds,
-        intervals: removedIntervals,
+        editedTrackIds: plan.editedTrackIds,
+        intervals: plan.removedIntervals,
+        additionalAffectedIds: new Set([
+          ...plan.allRemoveIds,
+          ...plan.filteredUpdates.map((update) => update.id),
+        ]),
       })
 
       // Cascade: Remove transitions and keyframes
-      const cascadedRemoveIds = Array.from(new Set([...allRemoveIds, ...syncLockResult.removedIds]))
+      const cascadedRemoveIds = Array.from(
+        new Set([...plan.allRemoveIds, ...syncLockResult.removedIds]),
+      )
       useTransitionsStore.getState()._removeTransitionsForItems(cascadedRemoveIds)
       useKeyframesStore.getState()._removeKeyframesForItems(cascadedRemoveIds)
 
       // Repair transitions on moved clips (they may now overlap or gap differently)
-      if (filteredUpdates.length > 0) {
-        applyTransitionRepairs(filteredUpdates.map((u) => u.id))
+      if (plan.filteredUpdates.length > 0) {
+        applyTransitionRepairs(plan.filteredUpdates.map((update) => update.id))
       }
 
       // Repair transitions for surviving clips that were shifted
       const repairedClipIds = Array.from(
-        new Set([...updates.map((update) => update.id), ...syncLockResult.affectedIds]),
+        new Set([...plan.updates.map((update) => update.id), ...syncLockResult.affectedIds]),
       )
       if (repairedClipIds.length > 0) {
         applyTransitionRepairs(repairedClipIds, new Set(cascadedRemoveIds))
@@ -1075,12 +1224,14 @@ export function rippleDeleteItems(ids: string[]): void {
 
       useTimelineSettingsStore.getState().markDirty()
     },
-    { ids: allRemoveIds },
+    { ids: plan.allRemoveIds },
   )
 }
 
 export function closeGapAtPosition(trackId: string, frame: number): void {
-  const items = useItemsStore.getState().items
+  const { items, tracks } = useItemsStore.getState()
+  if (isTimelineTrackLocked(tracks, trackId)) return
+
   const targetFrame = Math.max(0, Math.round(frame))
   const trackItems = items
     .filter((item) => item.trackId === trackId)
@@ -1106,6 +1257,7 @@ export function closeGapAtPosition(trackId: string, frame: number): void {
     .filter((item) => item.trackId === trackId && item.from >= gapEnd)
     .map((item) => ({ id: item.id, from: item.from - gapSize }))
   if (updates.length === 0) return
+  if (!areMoveUpdatesUnlocked(updates)) return
 
   execute(
     'CLOSE_GAP',
@@ -1114,6 +1266,7 @@ export function closeGapAtPosition(trackId: string, frame: number): void {
       const syncLockResult = propagateRemovedIntervalsToSyncLockedTracks({
         editedTrackIds: new Set([trackId]),
         intervals: [{ start: gapStart, end: gapEnd }],
+        additionalAffectedIds: new Set(updates.map((update) => update.id)),
       })
 
       const removedIds = syncLockResult.removedIds
@@ -1134,7 +1287,9 @@ export function closeGapAtPosition(trackId: string, frame: number): void {
 }
 
 export function closeAllGapsOnTrack(trackId: string): void {
-  const items = useItemsStore.getState().items
+  const { items, tracks } = useItemsStore.getState()
+  if (isTimelineTrackLocked(tracks, trackId)) return
+
   const trackItems = items
     .filter((item) => item.trackId === trackId)
     .sort((left, right) => left.from - right.from)
@@ -1154,6 +1309,7 @@ export function closeAllGapsOnTrack(trackId: string): void {
 
   const updates = buildLinkedLeftShiftUpdates(items, baseShiftByItemId, isLinkedSelectionEnabled())
   if (updates.length === 0) return
+  if (!areMoveUpdatesUnlocked(updates)) return
 
   execute(
     'CLOSE_ALL_GAPS',
@@ -1175,16 +1331,26 @@ export function closeAllGapsOnTrack(trackId: string): void {
 export function trackPushItems(anchorId: string, delta: number): void {
   if (delta === 0) return
 
-  const items = useItemsStore.getState().items
+  const { items, tracks } = useItemsStore.getState()
   const anchor = items.find((i) => i.id === anchorId)
   if (!anchor) return
+  if (!areItemMutationsUnlocked([anchor.id])) return
 
   const cutFrame = anchor.from
 
   // Every item whose start is at or after the cut frame gets shifted
+  const candidateIds = items.filter((item) => item.from >= cutFrame).map((item) => item.id)
+  const mutationPartition = partitionItemMutationIdsByLock({
+    items,
+    tracks,
+    itemIds: candidateIds,
+  })
+  if (mutationPartition.blockedByLockedLinkedCohort) return
+
+  const eligibleIds = new Set(mutationPartition.allowedIds)
   const updates: Array<{ id: string; from: number }> = []
   for (const ti of items) {
-    if (ti.from >= cutFrame) {
+    if (eligibleIds.has(ti.id)) {
       updates.push({ id: ti.id, from: Math.max(0, ti.from + delta) })
     }
   }
@@ -1203,6 +1369,10 @@ export function trackPushItems(anchorId: string, delta: number): void {
 }
 
 export function moveItem(id: string, newFrom: number, newTrackId?: string): void {
+  const item = useItemsStore.getState().itemById[id]
+  if (!item) return
+  if (!areMoveUpdatesUnlocked([{ id, from: newFrom, trackId: newTrackId }])) return
+
   execute(
     'MOVE_ITEM',
     () => {
@@ -1219,6 +1389,8 @@ export function moveItem(id: string, newFrom: number, newTrackId?: string): void
 }
 
 export function moveItems(updates: Array<{ id: string; from: number; trackId?: string }>): void {
+  if (!areMoveUpdatesUnlocked(updates)) return
+
   execute(
     'MOVE_ITEMS',
     () => {
@@ -1260,6 +1432,8 @@ export function moveItemsWithTrackChanges(
   tracks: TimelineTrack[],
   updates: Array<{ id: string; from: number; trackId?: string }>,
 ): void {
+  if (!areMoveUpdatesUnlocked(updates, tracks)) return
+
   execute(
     'MOVE_ITEMS_WITH_TRACKS',
     () => {

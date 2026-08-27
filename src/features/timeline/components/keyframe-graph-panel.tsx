@@ -17,7 +17,7 @@ import {
 } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { TFunction } from 'i18next'
-import { useHotkeys } from 'react-hotkeys-hook'
+import { useCommandHotkey } from '@/hooks/use-hotkey-registration'
 import { Maximize2, Minimize2, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { useShallow } from 'zustand/react/shallow'
@@ -96,7 +96,6 @@ import {
   updateTextMotionLive,
 } from '../stores/actions/text-motion-actions'
 import { HOTKEY_OPTIONS } from '@/config/hotkeys'
-import { useResolvedHotkeys } from '@/features/timeline/deps/settings'
 import { getDirectPropertyLinks, isTransformAnimatableProperty } from '@/types/keyframe'
 import { buildEffectPropertyResetPlan } from '@/features/timeline/utils/effect-property-reset'
 import { VectorSpeedGraph } from './vector-speed-graph'
@@ -1228,7 +1227,6 @@ export const KeyframeGraphPanel = memo(function KeyframeGraphPanel({
       })),
     [t],
   )
-  const hotkeys = useResolvedHotkeys()
   // Ref to measure container width
   const containerRef = useRef<HTMLDivElement>(null)
   const panelRef = useRef<HTMLDivElement>(null)
@@ -2748,8 +2746,8 @@ export const KeyframeGraphPanel = memo(function KeyframeGraphPanel({
 
   // The view-mode toggle is always visible now, so the hotkeys map to it in
   // every context (including the Animate workspace's split-capable toggle).
-  useHotkeys(
-    hotkeys.KEYFRAME_EDITOR_GRAPH,
+  useCommandHotkey(
+    'KEYFRAME_EDITOR_GRAPH',
     (event) => {
       event.preventDefault()
       setEditorMode('graph')
@@ -2761,8 +2759,8 @@ export const KeyframeGraphPanel = memo(function KeyframeGraphPanel({
     [isFocusWithinEditor, isOpen, isPointerWithinEditor],
   )
 
-  useHotkeys(
-    hotkeys.KEYFRAME_EDITOR_DOPESHEET,
+  useCommandHotkey(
+    'KEYFRAME_EDITOR_DOPESHEET',
     (event) => {
       event.preventDefault()
       setEditorMode('dopesheet')
@@ -2774,8 +2772,8 @@ export const KeyframeGraphPanel = memo(function KeyframeGraphPanel({
     [isFocusWithinEditor, isOpen, isPointerWithinEditor],
   )
 
-  useHotkeys(
-    hotkeys.KEYFRAME_EDITOR_SPLIT,
+  useCommandHotkey(
+    'KEYFRAME_EDITOR_SPLIT',
     (event) => {
       event.preventDefault()
       setEditorMode('split')
@@ -2787,8 +2785,8 @@ export const KeyframeGraphPanel = memo(function KeyframeGraphPanel({
     [isFocusWithinEditor, isOpen, isPointerWithinEditor, splitView],
   )
 
-  useHotkeys(
-    hotkeys.COPY,
+  useCommandHotkey(
+    'COPY',
     (event) => {
       event.preventDefault()
       handleCopyKeyframes()
@@ -2800,8 +2798,8 @@ export const KeyframeGraphPanel = memo(function KeyframeGraphPanel({
     [handleCopyKeyframes, isOpen, selectedEditorKeyframes.length],
   )
 
-  useHotkeys(
-    hotkeys.CUT,
+  useCommandHotkey(
+    'CUT',
     (event) => {
       event.preventDefault()
       handleCutKeyframes()
@@ -2813,8 +2811,8 @@ export const KeyframeGraphPanel = memo(function KeyframeGraphPanel({
     [handleCutKeyframes, isOpen, selectedEditorKeyframes.length],
   )
 
-  useHotkeys(
-    hotkeys.PASTE,
+  useCommandHotkey(
+    'PASTE',
     (event) => {
       event.preventDefault()
       handlePasteKeyframes()
@@ -3690,13 +3688,6 @@ export const KeyframeGraphPanel = memo(function KeyframeGraphPanel({
                   propertyColumnWidth={propertyColumnWidth}
                   shortcutsEnabled={isPointerWithinEditor || isFocusWithinEditor}
                   addKeyframeShortcutEnabled={surface === 'edit'}
-                  shortcuts={{
-                    addKeyframe: surface === 'edit' ? hotkeys.EDIT_KEYFRAME_ADD : '',
-                    previousKeyframe: hotkeys.KEYFRAME_PREVIOUS,
-                    nextKeyframe: hotkeys.KEYFRAME_NEXT,
-                    toggleAutoKey: hotkeys.KEYFRAME_TOGGLE_AUTO,
-                    fitKeyframes: hotkeys.KEYFRAME_FIT,
-                  }}
                 />
               </ErrorBoundary>
             </>

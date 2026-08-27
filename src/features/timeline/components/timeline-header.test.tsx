@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vite-plus/test'
 import { ZOOM_MAX, ZOOM_MIN } from '../constants'
 import { useZoomStore } from '../stores/zoom-store'
 import { useSelectionStore } from '@/shared/state/selection'
+import { useSettingsStore } from '@/features/timeline/deps/settings'
 import { TimelineHeader } from './timeline-header'
 
 const { micRenderSpy, sliderRenderSpy, sliderInput } = vi.hoisted(() => ({
@@ -91,6 +92,7 @@ describe('TimelineHeader zoom slider', () => {
     micRenderSpy.mockClear()
     sliderRenderSpy.mockClear()
     sliderInput.value = 0.75
+    useSettingsStore.getState().resetHotkeys()
     useZoomStore.getState().setZoomLevelSynchronized(1)
     useSelectionStore.setState({
       selectedItemIds: [],
@@ -325,6 +327,39 @@ describe('TimelineHeader zoom slider', () => {
     expect(screen.getByRole('button', { name: 'Hide keyframe panel' })).toHaveAttribute(
       'aria-pressed',
       'true',
+    )
+  })
+
+  it('shows resolved tool, split, ripple-trim, and rolling-trim shortcuts', () => {
+    useSettingsStore.getState().replaceHotkeyOverrides({
+      SELECTION_TOOL: 'q',
+      TRIM_EDIT_TOOL: 'w',
+      RAZOR_TOOL: 'e',
+      SPLIT_AT_PLAYHEAD: 'shift+x',
+      RATE_STRETCH_TOOL: 'd',
+    })
+
+    render(<TimelineHeader />)
+
+    expect(screen.getByRole('button', { name: 'Select Tool (Q)' })).toHaveAttribute(
+      'data-tooltip',
+      'Select Tool (Q)',
+    )
+    expect(
+      screen.getByRole('button', {
+        name: 'Trim Edit Tool (W) · Ripple: Shift-drag · Roll: Alt-drag',
+      }),
+    ).toHaveAttribute('data-tooltip', 'Trim Edit Tool (W) · Ripple: Shift-drag · Roll: Alt-drag')
+    const razor = screen.getByRole('button', {
+      name: /Razor Tool \(E\).*Shift \+ X.*Alt \+ C/,
+    })
+    expect(razor).toHaveAttribute(
+      'data-tooltip',
+      expect.stringMatching(/Razor Tool \(E\).*Shift \+ X.*Alt \+ C/),
+    )
+    expect(screen.getByRole('button', { name: 'Rate Stretch Tool (D)' })).toHaveAttribute(
+      'data-tooltip',
+      'Rate Stretch Tool (D)',
     )
   })
 })

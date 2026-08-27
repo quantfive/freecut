@@ -210,7 +210,7 @@ export function getPreviewVideoSourceCandidates({
   useProxyMedia: boolean
 }): Array<string | null | undefined> {
   if (useProxyMedia) {
-    return [proxySource, itemSource, registeredSource, cachedSource]
+    return [proxySource, cachedSource, registeredSource, itemSource]
   }
 
   // blobUrlManager owns the current original-media URL and is also what the
@@ -305,12 +305,15 @@ function selectComparisonVideoSource(
   registeredSource: string | undefined,
   useProxyMedia: boolean,
 ): string | null {
-  return selectFirstMediaSource([
-    registeredSource,
-    useProxyMedia && item.mediaId ? resolveProxyUrl(item.mediaId) : null,
-    item.src,
-    item.mediaId ? blobUrlManager.get(item.mediaId) : null,
-  ])
+  return selectFirstMediaSource(
+    getPreviewVideoSourceCandidates({
+      itemSource: item.src,
+      proxySource: item.mediaId ? resolveProxyUrl(item.mediaId) : null,
+      registeredSource,
+      cachedSource: item.mediaId ? blobUrlManager.get(item.mediaId) : null,
+      useProxyMedia,
+    }),
+  )
 }
 
 function selectExportVideoSource(
@@ -385,20 +388,26 @@ function waitForFallbackVideoReady(options: {
   })
 }
 
+function resolveRendererProxySource(
+  item: VideoItem | ImageItem | LottieItem,
+  useProxyMedia: boolean,
+): string | null {
+  if (!useProxyMedia || item.type !== 'video' || !item.mediaId) return null
+  return resolveProxyUrl(item.mediaId)
+}
+
 async function resolveRendererMediaSource(
   item: VideoItem | ImageItem | LottieItem,
   useProxyMedia: boolean,
   signal?: AbortSignal,
 ): Promise<string | null> {
   throwIfAborted(signal)
-  if (useProxyMedia && item.type === 'video' && item.mediaId) {
-    const proxyUrl = resolveProxyUrl(item.mediaId)
-    if (proxyUrl) return proxyUrl
-  }
-  if (item.src) return item.src
-  if (!item.mediaId) return null
+  const proxyUrl = resolveRendererProxySource(item, useProxyMedia)
+  if (proxyUrl) return proxyUrl
+  if (!item.mediaId) return item.src ?? null
   const cachedUrl = blobUrlManager.get(item.mediaId)
   if (cachedUrl) return cachedUrl
+  if (item.src) return item.src
   const resolvedUrl = await resolveMediaUrl(item.mediaId)
   throwIfAborted(signal)
   return resolvedUrl || null

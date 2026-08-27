@@ -7,6 +7,8 @@ export type { EditorHostContextValue } from './context'
 export type { EditorHostProviderProps } from './context-provider'
 export {
   DEFAULT_HOST_CAPABILITIES,
+  HOST_SHORTCUTS_SCHEMA,
+  HOST_SHORTCUTS_VERSION,
   MAX_TRANSCRIPT_CURSOR_LENGTH,
   MAX_TRANSCRIPT_COMMAND_TEXT_BYTES,
   MAX_TRANSCRIPT_DURATION_US,
@@ -16,6 +18,7 @@ export {
   MAX_TRANSCRIPT_SELECTIONS,
   SUPPORTED_HOST_COMMANDS,
   capabilityForCommand,
+  createHostShortcutSettings,
   createLocalEditorHost,
   isHostCapabilityEnabled,
 } from './contract'
@@ -24,6 +27,7 @@ export type {
   EditorCapabilityMap,
   EditorHost,
   EditorHostNavigation,
+  EditorShortcutPort,
   EmbeddedEditorAsset,
   EmbeddedEditorProject,
   EmbeddedEditorSnapshot,
@@ -35,6 +39,7 @@ export type {
   HostEditResult,
   HostMediaKind,
   HostNotice,
+  HostShortcutSettings,
   HostTranscriptCommandAction,
   HostTranscriptCommandPreview,
   HostTranscriptCommandPreviewRequest,

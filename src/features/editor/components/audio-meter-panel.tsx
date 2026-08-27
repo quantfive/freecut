@@ -20,7 +20,7 @@ import {
 } from '@/features/editor/deps/timeline-store'
 import { importWaveformCache } from '@/features/editor/deps/timeline-cache'
 import { useGizmoStore, useThrottledFrame } from '@/features/editor/deps/preview'
-import { importMediaLibraryService } from '@/features/editor/deps/media-library'
+import { resolveMediaUrl } from '@/features/editor/deps/media-library'
 import { getResolvedPlaybackFrame, usePlaybackStore } from '@/shared/state/playback'
 import {
   getAudioSkimMeterLevel,
@@ -196,7 +196,11 @@ const AudioEqPanelSurface = memo(function AudioEqPanelSurface({
   )
 })
 
-export const AudioMeterPanel = memo(function AudioMeterPanel() {
+export const AudioMeterPanel = memo(function AudioMeterPanel({
+  mobileDrawer = false,
+}: {
+  mobileDrawer?: boolean
+}) {
   const { t } = useTranslation()
   const [panelMode, setPanelMode] = useState<PanelMode>('meter')
   const [eqPanelTarget, setEqPanelTarget] = useState<EqPanelTarget | null>(null)
@@ -215,8 +219,7 @@ export const AudioMeterPanel = memo(function AudioMeterPanel() {
   const audioGraphItems = useItemsStore(
     useShallow((state) =>
       state.items.filter(
-        (item) =>
-          item.type === 'audio' || item.type === 'video' || item.type === 'composition',
+        (item) => item.type === 'audio' || item.type === 'video' || item.type === 'composition',
       ),
     ),
   )
@@ -397,62 +400,52 @@ export const AudioMeterPanel = memo(function AudioMeterPanel() {
     let cancelled = false
     const unsubscribeFns: Array<() => void> = []
 
-    void Promise.all([importWaveformCache(), importMediaLibraryService()]).then(
-      ([waveformModule, mediaLibraryModule]) => {
-        if (cancelled) {
-          return
-        }
+    void importWaveformCache().then((waveformModule) => {
+      if (cancelled) {
+        return
+      }
 
-        const { waveformCache } = waveformModule
-        const { mediaLibraryService } = mediaLibraryModule
-
-        setWaveformsByMediaId(() => {
-          const next = new Map<string, AudioMeterWaveform | null>()
-          for (const mediaId of stableActiveMediaIds) {
-            next.set(mediaId, toWaveformSnapshot(waveformCache.getFromMemoryCacheSync(mediaId)))
-          }
-          return next
-        })
-
+      const { waveformCache } = waveformModule
+      setWaveformsByMediaId(() => {
+        const next = new Map<string, AudioMeterWaveform | null>()
         for (const mediaId of stableActiveMediaIds) {
-          unsubscribeFns.push(
-            waveformCache.subscribe(mediaId, (updated) => {
-              if (cancelled) {
-                return
-              }
-
-              setWaveformsByMediaId((previous) => {
-                const next = new Map(previous)
-                next.set(mediaId, toWaveformSnapshot(updated))
-                return next
-              })
-            }),
-          )
-
-          const cached = waveformCache.getFromMemoryCacheSync(mediaId)
-          if (cached?.isComplete) {
-            continue
-          }
-
-          void mediaLibraryService
-            .getMediaBlobUrl(mediaId)
-            .then(async (blobUrl) => {
-              if (!blobUrl) {
-                return
-              }
-
-              try {
-                await waveformCache.getWaveform(mediaId, blobUrl)
-              } finally {
-                URL.revokeObjectURL(blobUrl)
-              }
-            })
-            .catch(() => {
-              // Best-effort meter loading only.
-            })
+          next.set(mediaId, toWaveformSnapshot(waveformCache.getFromMemoryCacheSync(mediaId)))
         }
-      },
-    )
+        return next
+      })
+
+      for (const mediaId of stableActiveMediaIds) {
+        unsubscribeFns.push(
+          waveformCache.subscribe(mediaId, (updated) => {
+            if (cancelled) {
+              return
+            }
+
+            setWaveformsByMediaId((previous) => {
+              const next = new Map(previous)
+              next.set(mediaId, toWaveformSnapshot(updated))
+              return next
+            })
+          }),
+        )
+
+        const cached = waveformCache.getFromMemoryCacheSync(mediaId)
+        if (cached?.isComplete) {
+          continue
+        }
+
+        void resolveMediaUrl(mediaId)
+          .then(async (blobUrl) => {
+            if (cancelled || !blobUrl) {
+              return
+            }
+            await waveformCache.getWaveform(mediaId, blobUrl)
+          })
+          .catch(() => {
+            // Best-effort meter loading only.
+          })
+      }
+    })
 
     return () => {
       cancelled = true
@@ -1112,8 +1105,9 @@ export const AudioMeterPanel = memo(function AudioMeterPanel() {
       {floatingMixer}
       <aside
         className="panel-bg border-l border-border flex h-full flex-col overflow-hidden"
-        style={{ width: EDITOR_LAYOUT_CSS_VALUES.timelineMeterWidth }}
+        style={{ width: mobileDrawer ? '100%' : EDITOR_LAYOUT_CSS_VALUES.timelineMeterWidth }}
         aria-label={t('editor.audioMeters.audioMeter')}
+        data-audio-meter-panel={mobileDrawer ? 'drawer' : 'inline'}
       >
         <div
           className="flex min-w-0 items-center justify-between gap-1 border-b border-border bg-secondary/20 px-1.5"

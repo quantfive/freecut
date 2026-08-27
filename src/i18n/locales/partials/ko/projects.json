@@ -447,6 +447,9 @@
         },
         "items": {
           "playPause": "재생/일시정지",
+          "shuttleReverse": "역방향 셔틀",
+          "shuttlePause": "전송 일시 정지",
+          "shuttleForward": "정방향 셔틀",
           "previousFrame": "이전 프레임",
           "nextFrame": "다음 프레임",
           "goToStart": "처음으로 이동",

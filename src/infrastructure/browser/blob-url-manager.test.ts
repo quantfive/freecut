@@ -96,8 +96,12 @@ describe('BlobUrlManager', () => {
     })
 
     it('is a no-op for unknown mediaId', () => {
+      const epoch = blobUrlManager.getEpoch('unknown')
+      const version = blobUrlManager.getSnapshot()
       blobUrlManager.invalidate('unknown')
       expect(blobUrlManager.size).toBe(0)
+      expect(blobUrlManager.getEpoch('unknown')).not.toBe(epoch)
+      expect(blobUrlManager.getSnapshot()).toBeGreaterThan(version)
     })
 
     it('allows re-acquiring after invalidation', () => {
@@ -152,6 +156,16 @@ describe('BlobUrlManager', () => {
       expect(blobUrlManager.size).toBe(0)
       expect(revokedUrls.has(url1)).toBe(true)
       expect(revokedUrls.has(url2)).toBe(true)
+    })
+
+    it('retires pending generations for every media id', () => {
+      const firstEpoch = blobUrlManager.getEpoch('media-1')
+      const secondEpoch = blobUrlManager.getEpoch('media-2')
+
+      blobUrlManager.releaseAll()
+
+      expect(blobUrlManager.getEpoch('media-1')).not.toBe(firstEpoch)
+      expect(blobUrlManager.getEpoch('media-2')).not.toBe(secondEpoch)
     })
   })
 })

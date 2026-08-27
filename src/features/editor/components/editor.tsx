@@ -14,6 +14,12 @@ import { MotionPreviewArea, MotionTimelineDock } from './compose-workspace/compo
 import { InteractionLockRegion } from './interaction-lock-region'
 import { AudioMeterPanel } from './audio-meter-panel'
 import {
+  MobileEditorDrawer,
+  MobileEditorPanelBar,
+  type MobileEditorPanel,
+} from './mobile-editor-layout'
+import { MOBILE_EDITOR_MAX_WIDTH, useCompactEditorLayout } from '../hooks/use-compact-editor-layout'
+import {
   importTimeline,
   importBentoLayoutDialog,
   importFillerRemovalDialog,
@@ -465,11 +471,17 @@ export const LoadedEditor = memo(function LoadedEditor({
   const syncSidebarLayout = useEditorStore((s) => s.syncSidebarLayout)
   const propertiesFullColumn = useEditorStore((s) => s.propertiesFullColumn)
   const mediaFullColumn = useEditorStore((s) => s.mediaFullColumn)
+  const sourcePreviewMediaId = useEditorStore((s) => s.sourcePreviewMediaId)
   const workspace = useEditorStore((s) => s.workspace)
   const isMaskEditingActive = useMaskEditorStore((s) => s.isEditing)
   const hasRefreshedMigrationStateRef = useRef(false)
   const localRefreshMigrationRef = useRef<(() => Promise<void>) | null>(null)
   const timelinePanelRef = useRef<ImperativePanelHandle>(null)
+  const editorRootRef = useRef<HTMLDivElement>(null)
+  const compact = useCompactEditorLayout(editorRootRef)
+  const [mobilePanel, setMobilePanel] = useState<MobileEditorPanel | null>(null)
+  const mobilePanelTriggerRef = useRef<HTMLElement | null>(null)
+  const previousSourcePreviewMediaIdRef = useRef(sourcePreviewMediaId)
   const previousWorkspaceRef = useRef(workspace)
 
   // Guard against concurrent saves (e.g., spamming Ctrl+S)
@@ -620,8 +632,34 @@ export const LoadedEditor = memo(function LoadedEditor({
   ])
 
   useEffect(() => {
+    const measuredWidth = editorRootRef.current?.getBoundingClientRect().width
+    if (compact || (measuredWidth !== undefined && measuredWidth <= MOBILE_EDITOR_MAX_WIDTH)) return
     syncSidebarLayout(editorLayout)
-  }, [editorLayout, syncSidebarLayout])
+  }, [compact, editorLayout, syncSidebarLayout])
+
+  useEffect(() => {
+    const previousSource = previousSourcePreviewMediaIdRef.current
+    previousSourcePreviewMediaIdRef.current = sourcePreviewMediaId
+    if (compact && sourcePreviewMediaId && sourcePreviewMediaId !== previousSource) {
+      setMobilePanel('source')
+    } else if (!sourcePreviewMediaId && mobilePanel === 'source') {
+      setMobilePanel(null)
+    }
+  }, [compact, mobilePanel, sourcePreviewMediaId])
+
+  useEffect(() => {
+    if (!compact) setMobilePanel(null)
+  }, [compact])
+
+  const openMobilePanel = useCallback((panel: MobileEditorPanel) => {
+    mobilePanelTriggerRef.current =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null
+    setMobilePanel(panel)
+  }, [])
+
+  const closeMobilePanel = useCallback(() => {
+    setMobilePanel(null)
+  }, [])
 
   // Apply the per-workspace timeline split when switching workspaces:
   // snapshot the outgoing workspace's split, then restore the incoming
@@ -751,14 +789,16 @@ export const LoadedEditor = memo(function LoadedEditor({
 
   return (
     <div
+      ref={editorRootRef}
       // Fills whatever box the entry point gives it. The standalone entry (`Editor`)
       // supplies the viewport; an embedded host supplies its own container. Keeping
       // the viewport out of here is what lets the surface sit under host chrome
       // without overflowing it.
-      className="h-full bg-background flex flex-col overflow-hidden"
+      className="relative isolate h-full min-w-0 max-w-full bg-background flex flex-col overflow-hidden"
       style={editorLayoutCssVars as import('react').CSSProperties}
       role="application"
       aria-label={t('editor.editor.appLabel')}
+      data-editor-layout={compact ? 'mobile' : 'desktop'}
     >
       {!hostRuntime && <AutoSaveController onSave={handleSave} />}
       {!hostRuntime && <TimelineShortcutsController />}
@@ -778,13 +818,21 @@ export const LoadedEditor = memo(function LoadedEditor({
           onExportBundle={hostRuntime ? undefined : handleExportBundle}
           onOpenRenderQueue={hostRuntime ? undefined : handleOpenRenderQueue}
           renderQueueCount={hostRuntime ? 0 : renderQueueActiveCount}
+          compact={compact}
         />
       </InteractionLockRegion>
+
+      {compact && (
+        <MobileEditorPanelBar
+          sourceAvailable={sourcePreviewMediaId !== null}
+          onOpen={openMobilePanel}
+        />
+      )}
 
       {/* Main Layout: Full-height sidebar + vertical split */}
       <div className="flex-1 flex overflow-hidden">
         {/* Left Sidebar - Media Library (full column mode) */}
-        {mediaFullColumn && !hidesDefaultSidebars && (
+        {!compact && mediaFullColumn && !hidesDefaultSidebars && (
           <InteractionLockRegion locked={isMaskEditingActive}>
             <ErrorBoundary level="feature">
               <MediaSidebar />
@@ -797,7 +845,7 @@ export const LoadedEditor = memo(function LoadedEditor({
           <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
             <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
               <ErrorBoundary level="feature">
-                <PreviewArea project={project} />
+                <PreviewArea project={project} compact={compact} />
               </ErrorBoundary>
             </div>
             <Suspense fallback={null}>
@@ -828,7 +876,7 @@ export const LoadedEditor = memo(function LoadedEditor({
             >
               <div className="h-full flex overflow-hidden relative">
                 {/* Left Sidebar - Media Library (inline with preview) */}
-                {!mediaFullColumn && (
+                {!compact && !mediaFullColumn && (
                   <InteractionLockRegion locked={isMaskEditingActive}>
                     <ErrorBoundary level="feature">
                       <MediaSidebar />
@@ -841,12 +889,12 @@ export const LoadedEditor = memo(function LoadedEditor({
                   {isMotionWorkspace ? (
                     <MotionPreviewArea project={project} />
                   ) : (
-                    <PreviewArea project={project} />
+                    <PreviewArea project={project} compact={compact} />
                   )}
                 </ErrorBoundary>
 
                 {/* Right Sidebar - Properties (inline with preview) */}
-                {!propertiesFullColumn && (
+                {!compact && !propertiesFullColumn && (
                   <InteractionLockRegion locked={isMaskEditingActive}>
                     <ErrorBoundary level="feature">
                       <PropertiesSidebar />
@@ -876,11 +924,11 @@ export const LoadedEditor = memo(function LoadedEditor({
                         <MotionTimelineDock project={project} />
                       ) : (
                         <Suspense fallback={null}>
-                          <LazyTimeline duration={timelineDuration} />
+                          <LazyTimeline duration={timelineDuration} compact={compact} />
                         </Suspense>
                       )}
                     </div>
-                    <AudioMeterPanel />
+                    {!compact && <AudioMeterPanel />}
                   </div>
                 </ErrorBoundary>
               </InteractionLockRegion>
@@ -889,7 +937,7 @@ export const LoadedEditor = memo(function LoadedEditor({
         )}
 
         {/* Right Sidebar - Properties (full column mode) */}
-        {propertiesFullColumn && !hidesDefaultSidebars && (
+        {!compact && propertiesFullColumn && !hidesDefaultSidebars && (
           <InteractionLockRegion locked={isMaskEditingActive}>
             <ErrorBoundary level="feature">
               <PropertiesSidebar />
@@ -897,6 +945,20 @@ export const LoadedEditor = memo(function LoadedEditor({
           </InteractionLockRegion>
         )}
       </div>
+
+      {compact && (
+        <MobileEditorDrawer
+          panel={mobilePanel}
+          container={editorRootRef.current}
+          sourceMediaId={sourcePreviewMediaId}
+          restoreFocusTo={mobilePanelTriggerRef.current}
+          onClose={closeMobilePanel}
+          onCloseSource={() => {
+            useEditorStore.getState().setSourcePreviewMediaId(null)
+            closeMobilePanel()
+          }}
+        />
+      )}
 
       {!hostRuntime && (
         <Suspense fallback={null}>

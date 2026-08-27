@@ -4,6 +4,7 @@
     "src/index.{ts,tsx,js,jsx}",
     "src/main.{ts,tsx,js,jsx}",
     "src/test/setup.ts",
+    "tests/browser/host-responsive.tsx",
     "headless/probe.mjs",
     "headless/smoke.mjs",
     "headless/media-smoke.mjs"

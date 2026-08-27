@@ -61,6 +61,164 @@ describe('group-utils', () => {
     })
   })
 
+  it('propagates every effective state through a nested grandparent group', () => {
+    const [effectiveChild] = resolveEffectiveTrackStates([
+      makeTrack({
+        id: 'grandparent',
+        isGroup: true,
+        locked: true,
+        visible: false,
+      }),
+      makeTrack({
+        id: 'parent',
+        isGroup: true,
+        parentTrackId: 'grandparent',
+        muted: true,
+        solo: true,
+      }),
+      makeTrack({ id: 'child', parentTrackId: 'parent' }),
+    ])
+
+    expect(effectiveChild).toMatchObject({
+      id: 'child',
+      locked: true,
+      muted: true,
+      visible: false,
+      solo: true,
+    })
+  })
+
+  it('resolves a deep tree without depending on input order', () => {
+    const depth = 1_000
+    const groups = Array.from({ length: depth }, (_, index) =>
+      makeTrack({
+        id: `group-${index}`,
+        isGroup: true,
+        parentTrackId: index === 0 ? undefined : `group-${index - 1}`,
+        locked: index === 17,
+        muted: index === 217,
+        visible: index !== 617,
+        solo: index === 917,
+      }),
+    )
+    const child = makeTrack({ id: 'deep-child', parentTrackId: `group-${depth - 1}` })
+
+    const [effectiveChild] = resolveEffectiveTrackStates([child, ...groups.toReversed()])
+
+    expect(effectiveChild).toMatchObject({
+      id: 'deep-child',
+      locked: true,
+      muted: true,
+      visible: false,
+      solo: true,
+    })
+  })
+
+  it('fails closed when a parent track is missing', () => {
+    const [effectiveChild] = resolveEffectiveTrackStates([
+      makeTrack({
+        id: 'orphan',
+        parentTrackId: 'missing-parent',
+        solo: true,
+      }),
+    ])
+
+    expect(effectiveChild).toMatchObject({
+      locked: true,
+      muted: true,
+      visible: false,
+      solo: false,
+    })
+  })
+
+  it('fails closed for a self-parent cycle', () => {
+    const [effectiveChild] = resolveEffectiveTrackStates([
+      makeTrack({ id: 'self-cycle', parentTrackId: 'self-cycle', solo: true }),
+    ])
+
+    expect(effectiveChild).toMatchObject({
+      locked: true,
+      muted: true,
+      visible: false,
+      solo: false,
+    })
+  })
+
+  it('fails closed for every lane whose ancestry reaches a multi-node cycle', () => {
+    const effectiveTracks = resolveEffectiveTrackStates([
+      makeTrack({ id: 'group-a', isGroup: true, parentTrackId: 'group-b' }),
+      makeTrack({ id: 'group-b', isGroup: true, parentTrackId: 'group-a' }),
+      makeTrack({ id: 'child-a', parentTrackId: 'group-a', solo: true }),
+      makeTrack({ id: 'child-b', parentTrackId: 'group-b' }),
+    ])
+
+    expect(effectiveTracks).toHaveLength(2)
+    for (const effectiveTrack of effectiveTracks) {
+      expect(effectiveTrack).toMatchObject({
+        locked: true,
+        muted: true,
+        visible: false,
+        solo: false,
+      })
+    }
+  })
+
+  it('fails closed when a lane reaches a duplicate track id', () => {
+    const [effectiveTrack] = resolveEffectiveTrackStates([
+      makeTrack({ id: 'duplicate-parent', isGroup: true }),
+      makeTrack({ id: 'duplicate-parent', isGroup: true, locked: false }),
+      makeTrack({ id: 'child', parentTrackId: 'duplicate-parent', solo: true }),
+    ])
+
+    expect(effectiveTrack).toMatchObject({
+      id: 'child',
+      locked: true,
+      muted: true,
+      visible: false,
+      solo: false,
+    })
+  })
+
+  it('fails closed for every duplicate lane definition', () => {
+    const effectiveTracks = resolveEffectiveTrackStates([
+      makeTrack({ id: 'duplicate-lane', name: 'Duplicate lane A', order: 0 }),
+      makeTrack({ id: 'duplicate-lane', name: 'Duplicate lane B', order: 1 }),
+    ])
+
+    expect(effectiveTracks).toHaveLength(2)
+    for (const effectiveTrack of effectiveTracks) {
+      expect(effectiveTrack).toMatchObject({
+        id: 'duplicate-lane',
+        locked: true,
+        muted: true,
+        visible: false,
+        solo: false,
+      })
+    }
+  })
+
+  it('fails only the child closed when its parent id resolves to an ordinary lane', () => {
+    const [ordinaryParent, malformedChild] = resolveEffectiveTrackStates([
+      makeTrack({ id: 'ordinary-parent', order: 0 }),
+      makeTrack({ id: 'child', order: 1, parentTrackId: 'ordinary-parent', solo: true }),
+    ])
+
+    expect(ordinaryParent).toMatchObject({
+      id: 'ordinary-parent',
+      locked: false,
+      muted: false,
+      visible: true,
+      solo: false,
+    })
+    expect(malformedChild).toMatchObject({
+      id: 'child',
+      locked: true,
+      muted: true,
+      visible: false,
+      solo: false,
+    })
+  })
+
   it('uses propagated visibility when collecting visible track ids', () => {
     const visibleTrackIds = getVisibleTrackIds([
       makeTrack({ id: 'group-1', isGroup: true, visible: false }),
@@ -80,6 +238,94 @@ describe('group-utils', () => {
       populatedGroup,
       child,
     ])
+  })
+
+  it('retains every transitive group ancestor in input order and prunes empty branches', () => {
+    const outer = makeTrack({ id: 'outer', isGroup: true })
+    const inner = makeTrack({ id: 'inner', isGroup: true, parentTrackId: outer.id })
+    const emptySibling = makeTrack({
+      id: 'empty-sibling',
+      isGroup: true,
+      parentTrackId: outer.id,
+    })
+    const child = makeTrack({ id: 'child', parentTrackId: inner.id })
+
+    expect(pruneEmptyLayerGroups([child, emptySibling, inner, outer])).toEqual([
+      child,
+      inner,
+      outer,
+    ])
+  })
+
+  it('retains malformed group ancestry only when a lane reaches it', () => {
+    const cycleA = makeTrack({ id: 'cycle-a', isGroup: true, parentTrackId: 'cycle-b' })
+    const cycleB = makeTrack({ id: 'cycle-b', isGroup: true, parentTrackId: 'cycle-a' })
+    const unreferencedCycle = makeTrack({
+      id: 'unreferenced-cycle',
+      isGroup: true,
+      parentTrackId: 'unreferenced-cycle',
+    })
+    const child = makeTrack({ id: 'child', parentTrackId: cycleA.id })
+
+    expect(pruneEmptyLayerGroups([cycleA, cycleB, unreferencedCycle, child])).toEqual([
+      cycleA,
+      cycleB,
+      child,
+    ])
+  })
+
+  it('retains duplicate definitions and their possible ancestors without reordering lanes', () => {
+    const ancestor = makeTrack({ id: 'ancestor', isGroup: true })
+    const mixedGroup = makeTrack({ id: 'mixed', isGroup: true, parentTrackId: ancestor.id })
+    const mixedLane = makeTrack({ id: 'mixed', order: 2 })
+    const duplicateGroupA = makeTrack({ id: 'duplicate-group', isGroup: true, order: 3 })
+    const duplicateGroupB = makeTrack({ id: 'duplicate-group', isGroup: true, order: 4 })
+    const duplicateLaneA = makeTrack({ id: 'duplicate-lane', order: 5 })
+    const emptyGroup = makeTrack({ id: 'empty-group', isGroup: true, order: 6 })
+    const unrelatedLane = makeTrack({ id: 'unrelated-lane', order: 7 })
+    const duplicateLaneB = makeTrack({ id: 'duplicate-lane', order: 8 })
+
+    expect(
+      pruneEmptyLayerGroups([
+        mixedLane,
+        emptyGroup,
+        ancestor,
+        duplicateGroupA,
+        unrelatedLane,
+        mixedGroup,
+        duplicateLaneA,
+        duplicateGroupB,
+        duplicateLaneB,
+      ]),
+    ).toEqual([
+      mixedLane,
+      ancestor,
+      duplicateGroupA,
+      unrelatedLane,
+      mixedGroup,
+      duplicateLaneA,
+      duplicateGroupB,
+      duplicateLaneB,
+    ])
+  })
+
+  it('does not erase an empty duplicate lane before pruning its mixed-id hierarchy', () => {
+    const outer = makeTrack({ id: 'outer', isGroup: true, order: 0 })
+    const mixedGroup = makeTrack({
+      id: 'mixed',
+      isGroup: true,
+      order: 1,
+      parentTrackId: outer.id,
+    })
+    const emptyMixedLane = makeTrack({ id: 'mixed', order: 2, parentTrackId: outer.id })
+    const populatedChild = makeTrack({ id: 'child', order: 3, parentTrackId: mixedGroup.id })
+
+    expect(
+      pruneEmptyLayerGroupHierarchy(
+        [outer, mixedGroup, emptyMixedLane, populatedChild],
+        [{ trackId: populatedChild.id }],
+      ),
+    ).toEqual([outer, mixedGroup, emptyMixedLane, populatedChild])
   })
 
   it('prunes empty child lanes without removing empty top-level classic tracks', () => {

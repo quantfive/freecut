@@ -3,6 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vite-plus/test'
 import type { CompositionItem, TextItem, VideoItem } from '@/types/timeline'
 import { useSelectionStore } from '@/shared/state/selection'
 import { useEditorStore } from '@/shared/state/editor'
+import { usePlaybackStore } from '@/shared/state/playback'
+import { useMicRecordingStore } from '@/shared/state/mic-recording-store'
 import { useSourcePlayerStore } from '@/shared/state/source-player'
 import { useTimelineStore } from '../../stores/timeline-store'
 import { useCompositionNavigationStore } from '../../stores/composition-navigation-store'
@@ -89,7 +91,6 @@ function makeInput(
     activeToolRef: { current: activeTool },
     smartTrimIntentRef: { current: null },
     smartBodyIntent: null,
-    dragWasActiveRef: { current: false },
     isTrimming: false,
     isStretching: false,
     isSlipSlideActive: false,
@@ -114,6 +115,13 @@ describe('useTimelineItemPointerHandlers', () => {
     vi.clearAllMocks()
     // Deterministic single-item selection (linked selection expands target ids)
     useEditorStore.getState().setLinkedSelectionEnabled(false)
+    usePlaybackStore.setState({
+      currentFrame: 0,
+      previewFrame: null,
+      previewItemId: null,
+      isPlaying: false,
+    })
+    useMicRecordingStore.setState({ status: 'idle' })
   })
 
   afterEach(() => {
@@ -139,6 +147,37 @@ describe('useTimelineItemPointerHandlers', () => {
       handlers.handleClick(makeMouseEvent())
 
       expect(selectItems).toHaveBeenCalledWith(['item-1'])
+    })
+
+    it('seeks from click geometry when the hover preview is stale at the next boundary', () => {
+      usePlaybackStore.setState({
+        currentFrame: 0,
+        previewFrame: 50,
+        previewItemId: 'item-1',
+        isPlaying: true,
+      })
+      const handlers = renderHandlers(makeInput({ activeTool: 'select' }))
+
+      handlers.handleClick(makeMouseEvent({ clientX: 2 }))
+
+      expect(usePlaybackStore.getState().currentFrame).toBe(20)
+      expect(usePlaybackStore.getState().previewFrame).toBeNull()
+      expect(usePlaybackStore.getState().isPlaying).toBe(false)
+    })
+
+    it('selects without seeking or pausing while a microphone take is active', () => {
+      usePlaybackStore.setState({ currentFrame: 12, previewFrame: 34, isPlaying: true })
+      useMicRecordingStore.setState({ status: 'recording' })
+      const handlers = renderHandlers(makeInput({ activeTool: 'select' }))
+
+      handlers.handleClick(makeMouseEvent())
+
+      expect(useSelectionStore.getState().selectedItemIds).toEqual(['item-1'])
+      expect(usePlaybackStore.getState()).toMatchObject({
+        currentFrame: 12,
+        previewFrame: 34,
+        isPlaying: true,
+      })
     })
 
     it('splits the item at the cursor with the razor tool', () => {
@@ -239,5 +278,21 @@ describe('useTimelineItemPointerHandlers', () => {
       )
       expect(input.handleSlipSlideStart).not.toHaveBeenCalled()
     })
+  })
+
+  it('preserves smart edge trim routing', () => {
+    const input = makeInput({
+      smartTrimIntentRef: { current: 'ripple-start' },
+    })
+    const handlers = renderHandlers(input)
+    const event = makeMouseEvent()
+
+    handlers.handleSmartTrimStart(event, 'start')
+
+    expect(input.handleTrimStart).toHaveBeenCalledWith(event, 'start', {
+      forcedMode: 'ripple',
+      destroyTransitionAtHandle: false,
+    })
+    expect(input.handleDragStart).not.toHaveBeenCalled()
   })
 })

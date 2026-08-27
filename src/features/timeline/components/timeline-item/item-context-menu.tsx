@@ -395,6 +395,7 @@ function GradeActions({ t }: { t: ReturnType<typeof useTranslation>['t'] }) {
 
 function JoinActions({
   t,
+  hotkeys,
   canJoinSelected,
   hasJoinableLeft,
   hasJoinableRight,
@@ -414,19 +415,19 @@ function JoinActions({
       {showJoinLeft && (
         <ContextMenuItem onClick={onJoinLeft}>
           {t('timeline.contextMenu.joinWithPrevious')}
-          <ContextMenuShortcut>J</ContextMenuShortcut>
+          <ContextMenuShortcut>{formatHotkeyBinding(hotkeys.JOIN_ITEMS)}</ContextMenuShortcut>
         </ContextMenuItem>
       )}
       {showJoinRight && (
         <ContextMenuItem onClick={onJoinRight}>
           {t('timeline.contextMenu.joinWithNext')}
-          <ContextMenuShortcut>J</ContextMenuShortcut>
+          <ContextMenuShortcut>{formatHotkeyBinding(hotkeys.JOIN_ITEMS)}</ContextMenuShortcut>
         </ContextMenuItem>
       )}
       {canJoinSelected && (
         <ContextMenuItem onClick={onJoinSelected}>
           {t('timeline.contextMenu.joinSelected')}
-          <ContextMenuShortcut>J</ContextMenuShortcut>
+          <ContextMenuShortcut>{formatHotkeyBinding(hotkeys.JOIN_ITEMS)}</ContextMenuShortcut>
         </ContextMenuItem>
       )}
       <ContextMenuSeparator />
@@ -513,6 +514,7 @@ function LayoutActions({ t, selectedCount, onBentoLayout }: LayoutActionsProps) 
 
 function MediaActions({
   t,
+  hotkeys,
   canReverse,
   isReversed,
   isVideoItem,
@@ -542,7 +544,7 @@ function MediaActions({
         <>
           <ContextMenuItem onClick={onFreezeFrame}>
             {t('timeline.contextMenu.insertFreezeFrame')}
-            <ContextMenuShortcut>Shift+F</ContextMenuShortcut>
+            <ContextMenuShortcut>{formatHotkeyBinding(hotkeys.FREEZE_FRAME)}</ContextMenuShortcut>
           </ContextMenuItem>
           <ContextMenuSeparator />
         </>
@@ -705,6 +707,7 @@ function CompositionActions({
 
 function DestructiveActions({
   t,
+  hotkeys,
   isSelected,
   canRippleDelete = true,
   canDelete = true,
@@ -720,7 +723,7 @@ function DestructiveActions({
           className="text-destructive focus:text-destructive"
         >
           {t('timeline.contextMenu.rippleDelete')}
-          <ContextMenuShortcut>Ctrl+Del</ContextMenuShortcut>
+          <ContextMenuShortcut>{formatHotkeyBinding(hotkeys.RIPPLE_DELETE)}</ContextMenuShortcut>
         </ContextMenuItem>
       )}
       {canDelete && (
@@ -730,7 +733,7 @@ function DestructiveActions({
           className="text-destructive focus:text-destructive"
         >
           {t('common.delete')}
-          <ContextMenuShortcut>Del</ContextMenuShortcut>
+          <ContextMenuShortcut>{formatHotkeyBinding(hotkeys.DELETE_SELECTED)}</ContextMenuShortcut>
         </ContextMenuItem>
       )}
     </>

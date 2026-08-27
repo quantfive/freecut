@@ -904,7 +904,6 @@ class WaveformCacheService {
       }
 
       const handleError = (event: ErrorEvent) => {
-        logger.error('Waveform worker error:', event.message)
         rejectOnce(new Error(event.message || 'Worker error'))
       }
 
@@ -1164,6 +1163,19 @@ class WaveformCacheService {
     requestId: string,
     onProgress?: (progress: number) => void,
   ): Promise<CachedWaveform> {
+    const registeredBlob = getObjectUrlBlob(blobUrl)
+    const directFileMetadata = getObjectUrlDirectFileMetadata(blobUrl)
+    const requiresMainThreadBlobAccess =
+      blobUrl.startsWith('blob:') && !registeredBlob && !directFileMetadata
+
+    if (requiresMainThreadBlobAccess) {
+      logger.debug('Using main-thread waveform decode for page-owned blob source', {
+        mediaId,
+        reason: 'blob-source-not-registered',
+      })
+      return this.generateWaveformOnMainThread(mediaId, blobUrl, requestId, onProgress)
+    }
+
     try {
       return await this.generateWaveformWithWorker(mediaId, blobUrl, requestId, onProgress)
     } catch (err) {
@@ -1171,27 +1183,33 @@ class WaveformCacheService {
         throw err
       }
       logger.warn(`Waveform worker failed for ${mediaId}, falling back to AudioContext`, err)
-      // Worker may fail in some environments - fallback to AudioContext
-      const controller = new AbortController()
-      // Fallback stores an abort trigger (not a direct Promise rejector): callers may invoke
-      // `workerRejectors.get(requestId)?.(new AbortError())`, but that argument is ignored and
-      // we abort via signal instead. `generateWaveformFallback` observes `controller.signal`
-      // (fetch/decode) and throws AbortError from there. This differs from the worker path,
-      // where the stored rejector directly rejects the pending Promise.
-      const fallbackRejector = () => controller.abort()
-      this.fallbackAbortControllers.set(requestId, controller)
-      this.workerRejectors.set(requestId, fallbackRejector)
-      try {
-        return await this.generateWaveformFallback(mediaId, blobUrl, onProgress, controller.signal)
-      } finally {
-        const activeRejector = this.workerRejectors.get(requestId)
-        if (activeRejector === fallbackRejector) {
-          this.workerRejectors.delete(requestId)
-        }
-        const activeController = this.fallbackAbortControllers.get(requestId)
-        if (activeController === controller) {
-          this.fallbackAbortControllers.delete(requestId)
-        }
+      return this.generateWaveformOnMainThread(mediaId, blobUrl, requestId, onProgress)
+    }
+  }
+
+  private async generateWaveformOnMainThread(
+    mediaId: string,
+    blobUrl: string,
+    requestId: string,
+    onProgress?: (progress: number) => void,
+  ): Promise<CachedWaveform> {
+    const controller = new AbortController()
+    // Main-thread fallback stores an abort trigger (not a direct Promise rejector).
+    // `generateWaveformFallback` observes the signal through fetch/decode and
+    // normalizes cancellation to this service's AbortError.
+    const fallbackRejector = () => controller.abort()
+    this.fallbackAbortControllers.set(requestId, controller)
+    this.workerRejectors.set(requestId, fallbackRejector)
+    try {
+      return await this.generateWaveformFallback(mediaId, blobUrl, onProgress, controller.signal)
+    } finally {
+      const activeRejector = this.workerRejectors.get(requestId)
+      if (activeRejector === fallbackRejector) {
+        this.workerRejectors.delete(requestId)
+      }
+      const activeController = this.fallbackAbortControllers.get(requestId)
+      if (activeController === controller) {
+        this.fallbackAbortControllers.delete(requestId)
       }
     }
   }

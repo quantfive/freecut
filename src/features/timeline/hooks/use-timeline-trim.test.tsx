@@ -454,7 +454,7 @@ describe('useTimelineTrim', () => {
       expect(getItem('video-near').durationInFrames).toBe(60)
     })
 
-    it('leaves a vertically aligned selected companion unchanged on a locked track', () => {
+    it('rejects a vertically aligned trim cohort containing a locked linked companion', () => {
       const text: TextItem = {
         id: 'text-1',
         type: 'text',
@@ -480,6 +480,7 @@ describe('useTimelineTrim', () => {
       ])
       useItemsStore.getState().setItems([text, video, audio])
       useSelectionStore.getState().selectItems(['text-1', 'video-1', 'audio-1'])
+      const undoDepthBefore = useTimelineCommandStore.getState().undoStack.length
       const { result } = renderTrimHook(text)
 
       startTrim(result, 'end')
@@ -491,9 +492,11 @@ describe('useTimelineTrim', () => {
 
       releaseMouse()
 
-      expect(getItem('text-1').durationInFrames).toBe(50)
-      expect(getItem('video-1').durationInFrames).toBe(50)
+      expect(getItem('text-1').durationInFrames).toBe(60)
+      expect(getItem('video-1').durationInFrames).toBe(60)
       expect(getItem('audio-1').durationInFrames).toBe(60)
+      expect(useTimelineCommandStore.getState().undoStack).toHaveLength(undoDepthBefore)
+      expect(useTimelineSettingsStore.getState().isDirty).toBe(false)
     })
 
     it('uses the tightest neighbor clamp across the vertical trim group', () => {

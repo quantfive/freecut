@@ -1,7 +1,7 @@
 // @vitest-environment node
 
 import { beforeEach, describe, expect, it } from 'vite-plus/test'
-import type { AudioItem, VideoItem } from '@/types/timeline'
+import type { AudioItem, TimelineTrack, VideoItem } from '@/types/timeline'
 import { useItemsStore } from '../items-store'
 import { useTimelineCommandStore } from '../timeline-command-store'
 import { useTimelineSettingsStore } from '../timeline-settings-store'
@@ -32,6 +32,22 @@ function makeAudioItem(overrides: Partial<AudioItem> = {}): AudioItem {
     label: 'clip.mp4',
     src: 'blob:audio',
     mediaId: 'media-1',
+    ...overrides,
+  }
+}
+
+function makeTrack(
+  overrides: Partial<TimelineTrack> & Pick<TimelineTrack, 'id' | 'name' | 'order' | 'kind'>,
+): TimelineTrack {
+  return {
+    height: 80,
+    locked: false,
+    syncLock: true,
+    visible: true,
+    muted: false,
+    solo: false,
+    volume: 0,
+    items: [],
     ...overrides,
   }
 }
@@ -111,5 +127,45 @@ describe('trackPushItems', () => {
     expect(reverted.find((i) => i.id === 'v1')).toMatchObject({ from: 50 })
     expect(reverted.find((i) => i.id === 'v2')).toMatchObject({ from: 100 })
     expect(reverted.find((i) => i.id === 'a1')).toMatchObject({ from: 50 })
+  })
+
+  it('pushes eligible unlocked tracks while leaving standalone locked-track items fixed', () => {
+    useItemsStore
+      .getState()
+      .setTracks([
+        makeTrack({ id: 'video-track', name: 'V1', order: 0, kind: 'video' }),
+        makeTrack({ id: 'audio-track', name: 'A1', order: 1, kind: 'audio', locked: true }),
+      ])
+    const video = makeVideoItem({ id: 'v1', from: 50, durationInFrames: 30 })
+    const lockedAudio = makeAudioItem({ id: 'a1', from: 50, durationInFrames: 30 })
+    useItemsStore.getState().setItems([video, lockedAudio])
+
+    trackPushItems(video.id, 20)
+
+    expect(useItemsStore.getState().itemById[video.id]).toMatchObject({ from: 70 })
+    expect(useItemsStore.getState().itemById[lockedAudio.id]).toEqual(lockedAudio)
+    expect(useTimelineCommandStore.getState().undoStack).toHaveLength(1)
+
+    useTimelineCommandStore.getState().undo()
+    expect(useItemsStore.getState().itemById[video.id]).toMatchObject({ from: 50 })
+    expect(useItemsStore.getState().itemById[lockedAudio.id]).toEqual(lockedAudio)
+  })
+
+  it('rejects a push atomically when the anchor has a locked linked companion', () => {
+    useItemsStore
+      .getState()
+      .setTracks([
+        makeTrack({ id: 'video-track', name: 'V1', order: 0, kind: 'video' }),
+        makeTrack({ id: 'audio-track', name: 'A1', order: 1, kind: 'audio', locked: true }),
+      ])
+    const video = makeVideoItem({ id: 'v1', from: 50, linkedGroupId: 'linked-av' })
+    const audio = makeAudioItem({ id: 'a1', from: 50, linkedGroupId: 'linked-av' })
+    useItemsStore.getState().setItems([video, audio])
+
+    trackPushItems(video.id, 20)
+
+    expect(useItemsStore.getState().items).toEqual([video, audio])
+    expect(useTimelineCommandStore.getState().undoStack).toHaveLength(0)
+    expect(useTimelineSettingsStore.getState().isDirty).toBe(false)
   })
 })

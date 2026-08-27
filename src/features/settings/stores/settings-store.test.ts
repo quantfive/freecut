@@ -104,7 +104,7 @@ describe('settings-store', () => {
       } as never)
 
       expect(useSettingsStore.getState().hotkeyOverrides).toEqual({
-        EXPORT: 'mod+e',
+        EXPORT: 'ctrl+e',
         DELETE_SELECTED: '',
       })
     })
@@ -123,6 +123,16 @@ describe('settings-store', () => {
       })
 
       expect(useSettingsStore.getState()).toBe(previousState)
+    })
+
+    it('retains the last valid UI settings when an alias collision is attempted', () => {
+      useSettingsStore.getState().setHotkeyBinding('MARK_IN', 'meta+j')
+      const previousState = useSettingsStore.getState()
+
+      useSettingsStore.getState().setHotkeyBinding('JOIN_ITEMS', 'mod+shift+j')
+
+      expect(useSettingsStore.getState()).toBe(previousState)
+      expect(useSettingsStore.getState().hotkeyOverrides).toEqual({ MARK_IN: 'meta+j' })
     })
   })
 })

@@ -147,7 +147,15 @@ function getClipHeader(items: HeaderItem[]) {
  * Shows TransitionPanel when a transition is selected, MarkerPanel when a marker
  * is selected, ClipPanel when clips are selected, CanvasPanel otherwise.
  */
-export const PropertiesSidebar = memo(function PropertiesSidebar() {
+interface PropertiesSidebarProps {
+  mobileDrawer?: boolean
+  onRequestClose?: () => void
+}
+
+export const PropertiesSidebar = memo(function PropertiesSidebar({
+  mobileDrawer = false,
+  onRequestClose,
+}: PropertiesSidebarProps) {
   const { t } = useTranslation()
   const hostMode = useEditorHostMode()
   const editorDensity = useSettingsStore((s) => s.editorDensity)
@@ -161,6 +169,8 @@ export const PropertiesSidebar = memo(function PropertiesSidebar() {
   const togglePropertiesFullColumn = useEditorStore((s) => s.togglePropertiesFullColumn)
   const workspace = useEditorStore((s) => s.workspace)
   const clipInspectorTab = useEditorStore((s) => s.clipInspectorTab)
+  const panelOpen = mobileDrawer || rightSidebarOpen
+  const panelWidth = mobileDrawer ? editorLayout.rightSidebarDefaultWidth : rightSidebarWidth
   const selectedItemIds = useSelectionStore((s) => s.selectedItemIds)
   const selectedMarkerId = useSelectionStore((s) => s.selectedMarkerId)
   const selectedTransitionId = useSelectionStore((s) => s.selectedTransitionId)
@@ -218,10 +228,10 @@ export const PropertiesSidebar = memo(function PropertiesSidebar() {
   // Keep the panel content mounted + visible while the collapse animation plays
   // so it slides out smoothly instead of blinking away. Only switch Activity to
   // `hidden` (the perf win) once the close animation has actually settled.
-  const [contentVisible, setContentVisible] = useState(rightSidebarOpen)
+  const [contentVisible, setContentVisible] = useState(panelOpen)
   useEffect(() => {
-    if (rightSidebarOpen) setContentVisible(true)
-  }, [rightSidebarOpen])
+    if (panelOpen) setContentVisible(true)
+  }, [panelOpen])
 
   // Resize handle logic
   const isResizingRef = useRef(false)
@@ -278,53 +288,56 @@ export const PropertiesSidebar = memo(function PropertiesSidebar() {
           tracks the pointer instead of easing behind it. */}
       <motion.div
         className="panel-bg border-l border-border shrink-0 relative h-full overflow-hidden"
+        data-properties-sidebar={mobileDrawer ? 'drawer' : 'inline'}
         initial={false}
-        animate={{ width: rightSidebarOpen ? rightSidebarWidth : 0 }}
+        animate={{ width: panelOpen ? panelWidth : 0 }}
         transition={
           isResizingRef.current || prefersReducedMotion
             ? { duration: 0 }
-            : { type: 'tween', duration: rightSidebarOpen ? 0.26 : 0.2, ease: [0.32, 0.72, 0, 1] }
+            : { type: 'tween', duration: panelOpen ? 0.26 : 0.2, ease: [0.32, 0.72, 0, 1] }
         }
         onAnimationComplete={() => {
-          if (!rightSidebarOpen) setContentVisible(false)
+          if (!panelOpen) setContentVisible(false)
         }}
       >
         {/* Use Activity for React 19 performance optimization */}
         <Activity mode={contentVisible ? 'visible' : 'hidden'}>
-          <div className="h-full flex flex-col" style={{ width: rightSidebarWidth }}>
+          <div className="h-full flex flex-col" style={{ width: panelWidth }}>
             {/* Sidebar Header */}
             <div
               className="flex items-center justify-between px-3 border-b border-border flex-shrink-0"
               style={{ height: EDITOR_LAYOUT_CSS_VALUES.sidebarHeaderHeight }}
             >
               <div className="min-w-0 flex items-center gap-1">
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="shrink-0"
-                  style={{
-                    width: EDITOR_LAYOUT_CSS_VALUES.sidebarHeaderButtonSize,
-                    height: EDITOR_LAYOUT_CSS_VALUES.sidebarHeaderButtonSize,
-                  }}
-                  onClick={togglePropertiesFullColumn}
-                  aria-label={
-                    propertiesFullColumn
-                      ? t('editor.propertiesSidebar.dockToPreview')
-                      : t('editor.propertiesSidebar.expandFullColumn')
-                  }
-                  data-tooltip={
-                    propertiesFullColumn
-                      ? t('editor.propertiesSidebar.dockToPreview')
-                      : t('editor.propertiesSidebar.expandFullColumn')
-                  }
-                  data-tooltip-side="bottom"
-                >
-                  {propertiesFullColumn ? (
-                    <ChevronUp className="w-3 h-3" />
-                  ) : (
-                    <ChevronDown className="w-3 h-3" />
-                  )}
-                </Button>
+                {!mobileDrawer && (
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="shrink-0"
+                    style={{
+                      width: EDITOR_LAYOUT_CSS_VALUES.sidebarHeaderButtonSize,
+                      height: EDITOR_LAYOUT_CSS_VALUES.sidebarHeaderButtonSize,
+                    }}
+                    onClick={togglePropertiesFullColumn}
+                    aria-label={
+                      propertiesFullColumn
+                        ? t('editor.propertiesSidebar.dockToPreview')
+                        : t('editor.propertiesSidebar.expandFullColumn')
+                    }
+                    data-tooltip={
+                      propertiesFullColumn
+                        ? t('editor.propertiesSidebar.dockToPreview')
+                        : t('editor.propertiesSidebar.expandFullColumn')
+                    }
+                    data-tooltip-side="bottom"
+                  >
+                    {propertiesFullColumn ? (
+                      <ChevronUp className="w-3 h-3" />
+                    ) : (
+                      <ChevronDown className="w-3 h-3" />
+                    )}
+                  </Button>
+                )}
                 <Settings2 className="w-3 h-3 shrink-0 text-muted-foreground" />
                 <h2 className="min-w-0 flex items-center gap-1.5 text-xs font-semibold text-muted-foreground">
                   <span className="shrink-0 uppercase tracking-wide">{headerLabel}</span>
@@ -345,7 +358,7 @@ export const PropertiesSidebar = memo(function PropertiesSidebar() {
                   width: EDITOR_LAYOUT_CSS_VALUES.sidebarHeaderButtonSize,
                   height: EDITOR_LAYOUT_CSS_VALUES.sidebarHeaderButtonSize,
                 }}
-                onClick={toggleRightSidebar}
+                onClick={mobileDrawer ? onRequestClose : toggleRightSidebar}
                 aria-label={t('editor.mediaSidebar.collapsePanel')}
               >
                 <ChevronRight className="w-3.5 h-3.5" />
@@ -401,7 +414,7 @@ export const PropertiesSidebar = memo(function PropertiesSidebar() {
           </div>
         </Activity>
         {/* Resize Handle */}
-        {rightSidebarOpen && (
+        {rightSidebarOpen && !mobileDrawer && (
           <div
             onMouseDown={handleResizeStart}
             className="absolute top-0 left-0 w-1 h-full cursor-col-resize hover:bg-primary/50 active:bg-primary/50 transition-colors z-10"
@@ -413,7 +426,7 @@ export const PropertiesSidebar = memo(function PropertiesSidebar() {
           size, chevron, and top alignment so the arrow stays in the same place
           and size when toggling (mirrors the always-present arrow on the left
           sidebar rail). Edge-attached rounded tab keeps it discoverable. */}
-      {!rightSidebarOpen && (
+      {!rightSidebarOpen && !mobileDrawer && (
         <button
           onClick={toggleRightSidebar}
           className="absolute right-0 top-2 z-10 flex items-center justify-center rounded-l-md border border-r-0 border-border bg-secondary/50 hover:bg-secondary transition-colors"

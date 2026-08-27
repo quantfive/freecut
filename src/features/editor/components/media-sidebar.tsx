@@ -52,6 +52,7 @@ import {
 } from '@/features/editor/deps/timeline-utils'
 import { addAdjustmentLayer } from '../utils/add-adjustment-layer'
 import type { TextItem, ShapeItem, ShapeType } from '@/types/timeline'
+import type { EditorSidebarTab } from '@/config/editor-workspaces'
 import { useMaskEditorStore } from '@/features/editor/deps/preview'
 import type { VisualEffect, GpuEffect } from '@/types/effects'
 import { EFFECT_PRESETS } from '@/types/effects'
@@ -288,7 +289,127 @@ const TEXT_TEMPLATE_GROUPS: ReadonlyArray<{
 const DEFAULT_TEXT_TEMPLATE_LABEL = 'Text'
 const ADD_TEXT_TEMPLATE_LABEL = 'Add Text'
 
-export const MediaSidebar = memo(function MediaSidebar() {
+interface MediaSidebarProps {
+  mobileDrawer?: boolean
+  onRequestClose?: () => void
+}
+
+function resolveMediaSidebarPresentation({
+  mobileDrawer,
+  leftSidebarOpen,
+  sidebarWidth,
+  drawerWidth,
+  onRequestClose,
+  toggleLeftSidebar,
+}: {
+  mobileDrawer: boolean
+  leftSidebarOpen: boolean
+  sidebarWidth: number
+  drawerWidth: number
+  onRequestClose?: () => void
+  toggleLeftSidebar: () => void
+}) {
+  if (mobileDrawer) {
+    return {
+      panelOpen: true,
+      panelWidth: drawerWidth,
+      mode: 'drawer' as const,
+      collapsePanel: onRequestClose ?? toggleLeftSidebar,
+    }
+  }
+  return {
+    panelOpen: leftSidebarOpen,
+    panelWidth: sidebarWidth,
+    mode: 'inline' as const,
+    collapsePanel: toggleLeftSidebar,
+  }
+}
+
+function selectMediaSidebarCategory({
+  id,
+  mobileDrawer,
+  activeTab,
+  leftSidebarOpen,
+  setActiveTab,
+  toggleLeftSidebar,
+  triggerPreviews,
+}: {
+  id: EditorSidebarTab
+  mobileDrawer: boolean
+  activeTab: EditorSidebarTab
+  leftSidebarOpen: boolean
+  setActiveTab: (tab: EditorSidebarTab) => void
+  toggleLeftSidebar: () => void
+  triggerPreviews: () => void
+}) {
+  if (mobileDrawer) {
+    setActiveTab(id)
+    if (id === 'effects') triggerPreviews()
+    return
+  }
+  if (activeTab === id && leftSidebarOpen) {
+    toggleLeftSidebar()
+    return
+  }
+  setActiveTab(id)
+  if (!leftSidebarOpen) toggleLeftSidebar()
+  if (id === 'effects') triggerPreviews()
+}
+
+function MediaSidebarDockButton({
+  mobileDrawer,
+  mediaFullColumn,
+  toggleMediaFullColumn,
+}: {
+  mobileDrawer: boolean
+  mediaFullColumn: boolean
+  toggleMediaFullColumn: () => void
+}) {
+  const { t } = useTranslation()
+  if (mobileDrawer) return null
+  const label = mediaFullColumn
+    ? t('editor.propertiesSidebar.dockToPreview')
+    : t('editor.propertiesSidebar.expandFullColumn')
+  return (
+    <Button
+      variant="ghost"
+      size="icon"
+      className="shrink-0"
+      style={{
+        width: EDITOR_LAYOUT_CSS_VALUES.sidebarHeaderButtonSize,
+        height: EDITOR_LAYOUT_CSS_VALUES.sidebarHeaderButtonSize,
+      }}
+      onClick={toggleMediaFullColumn}
+      aria-label={label}
+      data-tooltip={label}
+      data-tooltip-side="bottom"
+    >
+      {mediaFullColumn ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+    </Button>
+  )
+}
+
+function MediaSidebarResizeHandle({
+  visible,
+  onMouseDown,
+}: {
+  visible: boolean
+  onMouseDown: (event: React.MouseEvent) => void
+}) {
+  if (!visible) return null
+  return (
+    <div
+      data-resize-handle
+      onMouseDown={onMouseDown}
+      className="absolute top-0 right-0 w-1 h-full cursor-col-resize hover:bg-primary/50 active:bg-primary/50 transition-colors z-10"
+    />
+  )
+}
+
+export const MediaSidebar = memo(function MediaSidebar({
+  mobileDrawer = false,
+  onRequestClose,
+}: MediaSidebarProps) {
   const { t } = useTranslation()
   const hostMode = useEditorHostMode()
   const { host } = useEditorHostContext()
@@ -306,6 +427,14 @@ export const MediaSidebar = memo(function MediaSidebar() {
   const sidebarWidth = useEditorStore((s) => s.sidebarWidth)
   const setSidebarWidth = useEditorStore((s) => s.setSidebarWidth)
   const prefersReducedMotion = useReducedMotion()
+  const { panelOpen, panelWidth, mode, collapsePanel } = resolveMediaSidebarPresentation({
+    mobileDrawer,
+    leftSidebarOpen,
+    sidebarWidth,
+    drawerWidth: editorLayout.leftSidebarDefaultWidth,
+    onRequestClose,
+    toggleLeftSidebar,
+  })
 
   const [aiTabActivated, setAiTabActivated] = useState(activeTab === 'ai')
   // The Lottie panel hits an external API on mount, so keep it unmounted until
@@ -322,10 +451,10 @@ export const MediaSidebar = memo(function MediaSidebar() {
   // order without yanking focus mid-animation; clear it immediately on open so
   // the panel is interactive as it slides in. Mirrors the right sidebar's
   // contentVisible/onAnimationComplete handoff.
-  const [contentInert, setContentInert] = useState(!leftSidebarOpen)
+  const [contentInert, setContentInert] = useState(!panelOpen)
   useEffect(() => {
-    if (leftSidebarOpen) setContentInert(false)
-  }, [leftSidebarOpen])
+    if (panelOpen) setContentInert(false)
+  }, [panelOpen])
 
   // NOTE: the heavy media-library subtree is deliberately NOT gated behind
   // Activity `hidden` when collapsed. React defers the hidden→visible reveal, so
@@ -608,7 +737,7 @@ export const MediaSidebar = memo(function MediaSidebar() {
   }, [])
 
   return (
-    <div className="flex h-full flex-shrink-0">
+    <div className="flex h-full flex-shrink-0" data-media-sidebar={mode}>
       {/* Vertical Category Bar */}
       <div
         className="panel-header border-r border-border flex flex-col items-center flex-shrink-0"
@@ -620,20 +749,20 @@ export const MediaSidebar = memo(function MediaSidebar() {
           style={{ height: EDITOR_LAYOUT_CSS_VALUES.sidebarHeaderHeight }}
         >
           <button
-            onClick={toggleLeftSidebar}
+            onClick={collapsePanel}
             className="rounded-lg flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-secondary/50 transition-colors"
             style={{
               width: EDITOR_LAYOUT_CSS_VALUES.sidebarHeaderButtonSize,
               height: EDITOR_LAYOUT_CSS_VALUES.sidebarHeaderButtonSize,
             }}
             data-tooltip={
-              leftSidebarOpen
+              panelOpen
                 ? t('editor.mediaSidebar.collapsePanel')
                 : t('editor.mediaSidebar.expandPanel')
             }
             data-tooltip-side="right"
           >
-            {leftSidebarOpen ? (
+            {panelOpen ? (
               <ChevronLeft className="w-3.5 h-3.5" />
             ) : (
               <ChevronRight className="w-3.5 h-3.5" />
@@ -646,19 +775,21 @@ export const MediaSidebar = memo(function MediaSidebar() {
           {visibleCategories.map(({ id, icon: Icon, label }) => (
             <button
               key={id}
-              onClick={() => {
-                if (activeTab === id && leftSidebarOpen) {
-                  toggleLeftSidebar()
-                } else {
-                  setActiveTab(id)
-                  if (!leftSidebarOpen) toggleLeftSidebar()
-                  if (id === 'effects') triggerPreviews()
-                }
-              }}
+              onClick={() =>
+                selectMediaSidebarCategory({
+                  id,
+                  mobileDrawer,
+                  activeTab,
+                  leftSidebarOpen,
+                  setActiveTab,
+                  toggleLeftSidebar,
+                  triggerPreviews,
+                })
+              }
               className={`
                 w-9 h-9 rounded-lg flex items-center justify-center transition-[transform,background-color,color] duration-150 active:scale-95
                 ${
-                  activeTab === id && leftSidebarOpen
+                  activeTab === id && panelOpen
                     ? 'bg-primary text-primary-foreground hover:bg-primary/90'
                     : 'text-muted-foreground hover:text-foreground hover:bg-secondary/50'
                 }
@@ -682,15 +813,16 @@ export const MediaSidebar = memo(function MediaSidebar() {
           (duration 0) so width tracks the pointer instead of easing behind it. */}
       <motion.div
         className="panel-bg border-r border-border overflow-hidden relative"
+        data-media-sidebar-panel
         initial={false}
-        animate={{ width: leftSidebarOpen ? sidebarWidth : 0 }}
+        animate={{ width: panelOpen ? panelWidth : 0 }}
         transition={
           isResizingRef.current || prefersReducedMotion
             ? { duration: 0 }
-            : { type: 'tween', duration: leftSidebarOpen ? 0.26 : 0.2, ease: [0.32, 0.72, 0, 1] }
+            : { type: 'tween', duration: panelOpen ? 0.26 : 0.2, ease: [0.32, 0.72, 0, 1] }
         }
         onAnimationComplete={() => {
-          if (!leftSidebarOpen) setContentInert(true)
+          if (!panelOpen) setContentInert(true)
         }}
       >
         {/* Promote the content to its own GPU layer so the panel's width/clip
@@ -699,7 +831,7 @@ export const MediaSidebar = memo(function MediaSidebar() {
             establishes is harmless. */}
         <div
           className="h-full min-h-0 flex flex-col"
-          style={{ width: sidebarWidth, transform: 'translateZ(0)' }}
+          style={{ width: panelWidth, transform: 'translateZ(0)' }}
           inert={contentInert}
         >
           <>
@@ -711,33 +843,11 @@ export const MediaSidebar = memo(function MediaSidebar() {
               <span className="text-sm font-medium text-foreground">
                 {categories.find((c) => c.id === activeTab)?.label}
               </span>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="shrink-0"
-                style={{
-                  width: EDITOR_LAYOUT_CSS_VALUES.sidebarHeaderButtonSize,
-                  height: EDITOR_LAYOUT_CSS_VALUES.sidebarHeaderButtonSize,
-                }}
-                onClick={toggleMediaFullColumn}
-                aria-label={
-                  mediaFullColumn
-                    ? t('editor.propertiesSidebar.dockToPreview')
-                    : t('editor.propertiesSidebar.expandFullColumn')
-                }
-                data-tooltip={
-                  mediaFullColumn
-                    ? t('editor.propertiesSidebar.dockToPreview')
-                    : t('editor.propertiesSidebar.expandFullColumn')
-                }
-                data-tooltip-side="bottom"
-              >
-                {mediaFullColumn ? (
-                  <ChevronUp className="w-3 h-3" />
-                ) : (
-                  <ChevronDown className="w-3 h-3" />
-                )}
-              </Button>
+              <MediaSidebarDockButton
+                mobileDrawer={mobileDrawer}
+                mediaFullColumn={mediaFullColumn}
+                toggleMediaFullColumn={toggleMediaFullColumn}
+              />
             </div>
 
             {/* Media Tab - Full Media Library */}
@@ -1195,13 +1305,10 @@ export const MediaSidebar = memo(function MediaSidebar() {
           </>
         </div>
         {/* Resize Handle */}
-        {leftSidebarOpen && (
-          <div
-            data-resize-handle
-            onMouseDown={handleResizeStart}
-            className="absolute top-0 right-0 w-1 h-full cursor-col-resize hover:bg-primary/50 active:bg-primary/50 transition-colors z-10"
-          />
-        )}
+        <MediaSidebarResizeHandle
+          visible={leftSidebarOpen && !mobileDrawer}
+          onMouseDown={handleResizeStart}
+        />
       </motion.div>
     </div>
   )

@@ -6,6 +6,7 @@ import {
   renameTrackForKind,
   type TrackKind,
 } from './classic-tracks'
+import { isTimelineTrackLocked } from './track-lock-invariants'
 
 interface EnsureTrackForKindParams {
   tracks: TimelineTrack[]
@@ -28,7 +29,12 @@ function findFirstUnlockedTrackByKind(
 ): TimelineTrack | null {
   return (
     [...tracks]
-      .filter((track) => !track.locked && !track.isGroup && getTrackKind(track) === kind)
+      .filter(
+        (track) =>
+          !track.isGroup &&
+          !isTimelineTrackLocked(tracks, track.id) &&
+          getTrackKind(track) === kind,
+      )
       .sort((a, b) => a.order - b.order)[0] ?? null
   )
 }
@@ -39,11 +45,15 @@ function findUnlockedTrackById(
 ): TimelineTrack | null {
   if (!trackId) return null
   const track = tracks.find((candidate) => candidate.id === trackId)
-  return track && !track.locked && !track.isGroup ? track : null
+  return track && !track.isGroup && !isTimelineTrackLocked(tracks, track.id) ? track : null
 }
 
-function canUseTrackForKind(track: TimelineTrack | null, kind: TrackKind): track is TimelineTrack {
-  if (!track || track.locked || track.isGroup) {
+function canUseTrackForKind(
+  tracks: TimelineTrack[],
+  track: TimelineTrack | null,
+  kind: TrackKind,
+): track is TimelineTrack {
+  if (!track || track.isGroup || isTimelineTrackLocked(tracks, track.id)) {
     return false
   }
 
@@ -93,7 +103,7 @@ function resolveTargetTrackForKind(params: {
   } = params
 
   const preferredTrack = findUnlockedTrackById(tracks, preferredTrackId)
-  if (canUseTrackForKind(preferredTrack, kind)) {
+  if (canUseTrackForKind(tracks, preferredTrack, kind)) {
     return ensureTrackForKind({
       tracks,
       targetTrack: preferredTrack,
@@ -104,7 +114,7 @@ function resolveTargetTrackForKind(params: {
     })
   }
 
-  if (canUseTrackForKind(fallbackTrack, kind)) {
+  if (canUseTrackForKind(tracks, fallbackTrack, kind)) {
     return ensureTrackForKind({
       tracks,
       targetTrack: fallbackTrack,
@@ -145,7 +155,10 @@ function findNearestUnlockedTrackByKind(
   direction: 'above' | 'below',
 ): TimelineTrack | null {
   const candidates = tracks
-    .filter((track) => !track.locked && !track.isGroup && getTrackKind(track) === kind)
+    .filter(
+      (track) =>
+        !track.isGroup && !isTimelineTrackLocked(tracks, track.id) && getTrackKind(track) === kind,
+    )
     .filter((track) =>
       direction === 'above' ? track.order < targetTrack.order : track.order > targetTrack.order,
     )
@@ -167,7 +180,7 @@ function ensureTrackForKind(params: EnsureTrackForKindParams): {
     preferTarget = false,
   } = params
 
-  if (targetTrack.locked) {
+  if (isTimelineTrackLocked(tracks, targetTrack.id)) {
     const existingTrack = findNearestUnlockedTrackByKind(
       tracks,
       targetTrack,

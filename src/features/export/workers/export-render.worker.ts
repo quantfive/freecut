@@ -86,6 +86,18 @@ function compositionHasAudio(
 self.onmessage = async (event: MessageEvent<ExportRenderWorkerRequest>) => {
   const message = event.data
 
+  if (message.type === 'probe') {
+    const capabilities: ExportRenderWorkerResponse = {
+      type: 'capabilities',
+      requestId: message.requestId,
+      capabilities: {
+        offlineAudioContext: typeof OfflineAudioContext !== 'undefined',
+      },
+    }
+    self.postMessage(capabilities)
+    return
+  }
+
   if (message.type === 'cancel') {
     const controller = activeRequests.get(message.requestId)
     if (controller) {
@@ -156,9 +168,14 @@ self.onmessage = async (event: MessageEvent<ExportRenderWorkerRequest>) => {
 
     const messageText = error instanceof Error ? error.message : String(error)
     const stack = error instanceof Error ? error.stack : undefined
-    // Surface the stack: bare mediabunny asserts report only "Assertion failed",
-    // so without the stack the failing call site is invisible on the main thread.
-    log.error('Export worker failed', { requestId, error: messageText, stack })
+    const isExpectedMainThreadRequirement = messageText.startsWith('WORKER_REQUIRES_MAIN_THREAD:')
+    if (isExpectedMainThreadRequirement) {
+      log.debug('Export worker capability fallback', { requestId, reason: messageText })
+    } else {
+      // Surface the stack: bare mediabunny asserts report only "Assertion failed",
+      // so without the stack the failing call site is invisible on the main thread.
+      log.error('Export worker failed', { requestId, error: messageText, stack })
+    }
     // A DOM global reaching worker code is a bug in that code, not something the
     // user can act on — and it used to fail the whole export. Report it as a
     // main-thread fallback instead: the render still completes, and the reason

@@ -15,6 +15,7 @@ import { EditorHostProvider } from './context-provider'
 import { HostCaptionEditorProvider } from './caption-editor-context'
 import { HostTranscriptEditorProvider } from './transcript-editor-context'
 import { EmbeddedEditorHostRuntime } from './runtime'
+import { mountHostShortcutSettings } from './shortcut-settings'
 import '@/index.css'
 
 interface HostSurfaceState {
@@ -40,27 +41,53 @@ export function FreeCutEditorSurface({ host }: { host: EditorHost }) {
   useEffect(() => {
     let cancelled = false
     let unsubscribe: (() => void) | undefined
+    let unmountShortcutSettings: (() => void) | undefined
+    const shortcutSettingsAbortController = new AbortController()
     setState(null)
     setError(null)
-    void Promise.all([Promise.resolve(host.load()), i18nReady])
-      .then(([snapshot]) => {
-        if (cancelled) return
+
+    const initialize = async () => {
+      unmountShortcutSettings = await mountHostShortcutSettings(
+        host,
+        shortcutSettingsAbortController.signal,
+      )
+      if (cancelled) {
+        unmountShortcutSettings()
+        unmountShortcutSettings = undefined
+        return
+      }
+
+      const [snapshot] = await Promise.all([Promise.resolve(host.load()), i18nReady])
+      if (!cancelled) {
         const runtime = new EmbeddedEditorHostRuntime(host, snapshot)
-        // An out-of-band host revision enters through the same controller the
-        // result of a submitted edit does, so the surface adopts it in place
-        // rather than being remounted with a new `host`.
+        // Host-pushed snapshots and submitted edits share one authoritative
+        // controller, while shortcut settings retain their independent port.
         unsubscribe = host.subscribe?.((next) =>
           runtime.controller.replaceAuthoritativeSnapshot(next),
         )
         setState({ snapshot, runtime })
-      })
+      }
+    }
+
+    void initialize()
+      .then(() => undefined)
       .catch((caught) => {
-        if (!cancelled) setError(caught instanceof Error ? caught : new Error(String(caught)))
+        unsubscribe?.()
+        unsubscribe = undefined
+        shortcutSettingsAbortController.abort()
+        unmountShortcutSettings?.()
+        unmountShortcutSettings = undefined
+        if (cancelled) return
+        setError(caught instanceof Error ? caught : new Error(String(caught)))
       })
+
     return () => {
       cancelled = true
       unsubscribe?.()
       unsubscribe = undefined
+      shortcutSettingsAbortController.abort()
+      unmountShortcutSettings?.()
+      unmountShortcutSettings = undefined
     }
   }, [host])
 

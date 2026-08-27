@@ -375,6 +375,7 @@ export function useTrackDrag(track: TimelineTrack): UseTrackDragReturn {
         }
       } else {
         const updates = buildTrackContentMoveUpdates({
+          tracks: allTracks,
           sectionTrackIds: dragState.sectionTrackIds,
           draggedTrackIds: draggedIds,
           items: itemsRef.current,

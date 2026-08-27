@@ -32,6 +32,13 @@ export interface WorkspaceMarker {
   migratedFromLegacyAt?: number
 }
 
+function throwIfAborted(signal?: AbortSignal): void {
+  if (!signal?.aborted) return
+  throw signal.reason instanceof Error
+    ? signal.reason
+    : new DOMException('Workspace activation aborted', 'AbortError')
+}
+
 /**
  * Recursively remove stranded `*.tmp` files.
  *
@@ -170,7 +177,12 @@ async function stripProxyKeyPrefixes(root: FileSystemDirectoryHandle): Promise<n
   return renamed
 }
 
-export async function bootstrapWorkspace(root: FileSystemDirectoryHandle): Promise<void> {
+export async function bootstrapWorkspace(
+  root: FileSystemDirectoryHandle,
+  options: { signal?: AbortSignal } = {},
+): Promise<void> {
+  const { signal } = options
+  throwIfAborted(signal)
   // README: only write when missing — never overwrite user edits.
   if (!(await exists(root, [README_FILENAME]))) {
     try {
@@ -179,6 +191,7 @@ export async function bootstrapWorkspace(root: FileSystemDirectoryHandle): Promi
       logger.warn('Failed to write README.md', error)
     }
   }
+  throwIfAborted(signal)
 
   // Marker: write on first bootstrap so we can detect "this is a real
   // FreeCut workspace" and attach a schema version for future migrations.
@@ -216,6 +229,7 @@ export async function bootstrapWorkspace(root: FileSystemDirectoryHandle): Promi
       logger.warn('Workspace migration failed', error)
     }
   }
+  throwIfAborted(signal)
 
   // One-off cleanup: proxy folders historically carried an `h-`/`o-`/`f-`
   // source-type tag. The tag carries no information the format's shape
@@ -229,6 +243,7 @@ export async function bootstrapWorkspace(root: FileSystemDirectoryHandle): Promi
   } catch (error) {
     logger.warn('stripProxyKeyPrefixes failed', error)
   }
+  throwIfAborted(signal)
 
   // Clean up any `.tmp` files stranded by a prior crash.
   try {
@@ -239,4 +254,5 @@ export async function bootstrapWorkspace(root: FileSystemDirectoryHandle): Promi
   } catch (error) {
     logger.warn('sweepStrandedTmpFiles failed', error)
   }
+  throwIfAborted(signal)
 }
