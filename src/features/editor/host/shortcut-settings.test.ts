@@ -59,6 +59,16 @@ function createShortcutHost(initial: HostShortcutSettings) {
   }
 }
 
+function createDeferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise
+    reject = rejectPromise
+  })
+  return { promise, resolve, reject }
+}
+
 describe('host shortcut settings round trip', () => {
   beforeEach(() => {
     useSettingsStore.getState().resetHotkeys()
@@ -222,6 +232,97 @@ describe('host shortcut settings round trip', () => {
     unmount()
   })
 
+  it('reconciles newer subscribed state after an older write finishes last', async () => {
+    const host = createShortcutHost(createHostShortcutSettings({ SHUTTLE_PAUSE: 'p' }))
+    const firstWrite = createDeferred<void>()
+    host.setSettings.mockReturnValueOnce(firstWrite.promise)
+    const unmount = await mountHostShortcutSettings(host.host)
+
+    useSettingsStore.getState().setHotkeyBinding('SHUTTLE_PAUSE', 'x')
+    await waitFor(() => expect(host.setSettings).toHaveBeenCalledTimes(1))
+
+    host.emit(createHostShortcutSettings({ SHUTTLE_PAUSE: 'w' }))
+    firstWrite.resolve()
+
+    await waitFor(() =>
+      expect(host.setSettings).toHaveBeenLastCalledWith(
+        createHostShortcutSettings({ SHUTTLE_PAUSE: 'w' }),
+      ),
+    )
+    expect(host.setSettings).toHaveBeenCalledTimes(2)
+    unmount()
+  })
+
+  it('retries the newest subscribed state after an older write rejects', async () => {
+    const host = createShortcutHost(createHostShortcutSettings({ SHUTTLE_PAUSE: 'p' }))
+    const firstWrite = createDeferred<void>()
+    host.setSettings.mockReturnValueOnce(firstWrite.promise)
+    const unmount = await mountHostShortcutSettings(host.host)
+
+    useSettingsStore.getState().setHotkeyBinding('SHUTTLE_PAUSE', 'x')
+    await waitFor(() => expect(host.setSettings).toHaveBeenCalledTimes(1))
+    host.emit(createHostShortcutSettings({ SHUTTLE_PAUSE: 'w' }))
+    firstWrite.reject(new Error('old write failed'))
+
+    await waitFor(() =>
+      expect(host.setSettings).toHaveBeenLastCalledWith(
+        createHostShortcutSettings({ SHUTTLE_PAUSE: 'w' }),
+      ),
+    )
+    expect(host.notify).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'error', message: expect.stringContaining('save') }),
+    )
+    unmount()
+  })
+
+  it('fences in-flight host A work when host B replaces it', async () => {
+    const hostA = createShortcutHost(createHostShortcutSettings({ SHUTTLE_PAUSE: 'a' }))
+    const firstWrite = createDeferred<void>()
+    hostA.setSettings.mockReturnValueOnce(firstWrite.promise)
+    const unmountA = await mountHostShortcutSettings(hostA.host)
+    useSettingsStore.getState().setHotkeyBinding('SHUTTLE_PAUSE', 'x')
+    await waitFor(() => expect(hostA.setSettings).toHaveBeenCalledTimes(1))
+
+    const hostB = createShortcutHost(createHostShortcutSettings({ SHUTTLE_PAUSE: 'b' }))
+    const unmountB = await mountHostShortcutSettings(hostB.host)
+    expect(hostA.listenerCount()).toBe(0)
+    expect(hostB.listenerCount()).toBe(1)
+
+    hostA.emit(createHostShortcutSettings({ SHUTTLE_PAUSE: 'z' }))
+    firstWrite.resolve()
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(hostA.setSettings).toHaveBeenCalledTimes(1)
+    expect(useSettingsStore.getState().hotkeyOverrides).toEqual({ SHUTTLE_PAUSE: 'b' })
+    useSettingsStore.getState().setHotkeyBinding('SHUTTLE_PAUSE', 'y')
+    await waitFor(() => expect(hostB.setSettings).toHaveBeenCalledTimes(1))
+
+    unmountA()
+    expect(hostB.listenerCount()).toBe(1)
+    unmountB()
+    expect(hostB.listenerCount()).toBe(0)
+  })
+
+  it('suppresses equal subscription echoes without a redundant write loop', async () => {
+    const host = createShortcutHost(createHostShortcutSettings({ SHUTTLE_PAUSE: 'p' }))
+    const write = createDeferred<void>()
+    host.setSettings.mockReturnValueOnce(write.promise)
+    const unmount = await mountHostShortcutSettings(host.host)
+
+    useSettingsStore.getState().setHotkeyBinding('SHUTTLE_PAUSE', 'x')
+    await waitFor(() => expect(host.setSettings).toHaveBeenCalledTimes(1))
+    host.emit(createHostShortcutSettings({ SHUTTLE_PAUSE: 'x' }))
+    write.resolve()
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(host.setSettings).toHaveBeenCalledTimes(1)
+    expect(host.listenerCount()).toBe(1)
+    unmount()
+    expect(host.listenerCount()).toBe(0)
+  })
+
   it('removes the host subscriber on unmount', async () => {
     const host = createShortcutHost(createHostShortcutSettings({ SHUTTLE_PAUSE: 'p' }))
     const unmount = await mountHostShortcutSettings(host.host)
@@ -250,6 +351,26 @@ describe('host shortcut settings round trip', () => {
     expect(addKeyframe).toHaveBeenCalledTimes(1)
     expect(harness.notify).toHaveBeenCalledWith(expect.objectContaining({ kind: 'conflict' }))
 
+    unmount()
+  })
+
+  it('retains the last valid settings and reports derived host conflict metadata', async () => {
+    useSettingsStore.getState().replaceHotkeyOverrides({ PLAY_PAUSE: 'shift+space' })
+    const harness = createShortcutHost(
+      createHostShortcutSettings({
+        MARK_IN: 'j',
+        SHUTTLE_REVERSE: 'i',
+      }),
+    )
+
+    const unmount = await mountHostShortcutSettings(harness.host)
+
+    expect(useSettingsStore.getState().hotkeyOverrides).toEqual({ PLAY_PAUSE: 'shift+space' })
+    expect(harness.notify).toHaveBeenCalledWith({
+      kind: 'conflict',
+      message: expect.stringMatching(/shift\+j.*MARK_IN.*JOIN_ITEMS.*last valid/i),
+    })
+    expect(harness.setSettings).not.toHaveBeenCalled()
     unmount()
   })
 })

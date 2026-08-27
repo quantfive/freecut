@@ -149,6 +149,12 @@ describe('findHotkeyConflicts', () => {
 
     expect(findHotkeyConflicts(bindings, 'c', 'SELECTION_TOOL')).toEqual(['RAZOR_TOOL'])
   })
+
+  it('exposes derived preview variants that collide with runtime commands', () => {
+    const bindings = resolveHotkeys()
+
+    expect(findHotkeyConflicts(bindings, 'j', 'MARK_IN')).toContain('JOIN_ITEMS')
+  })
 })
 
 describe('resolveHotkeyConfiguration', () => {
@@ -193,6 +199,44 @@ describe('resolveHotkeyConfiguration', () => {
     expect(result.bindings.PLAY_PAUSE).toBe('k')
     expect(result.bindings.SHUTTLE_PAUSE).toBe('space')
     expect(result.overrides).toEqual({ PLAY_PAUSE: 'k', SHUTTLE_PAUSE: 'space' })
+    expect(result.warnings).toEqual([])
+  })
+
+  it('rejects a MARK_IN and shuttle reverse swap that derives the JOIN_ITEMS chord', () => {
+    const result = resolveHotkeyConfiguration({
+      MARK_IN: 'j',
+      SHUTTLE_REVERSE: 'i',
+    })
+
+    expect(result.bindings.MARK_IN).toBe('i')
+    expect(result.bindings.SHUTTLE_REVERSE).toBe('j')
+    expect(result.bindings.JOIN_ITEMS).toBe('shift+j')
+    expect(result.overrides).toEqual({})
+    expect(result.warnings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          command: 'MARK_IN',
+          binding: 'shift+j',
+          conflictingCommand: 'JOIN_ITEMS',
+          resolution: 'fallback',
+        }),
+        expect.objectContaining({
+          command: 'SHUTTLE_REVERSE',
+          binding: 'i',
+          conflictingCommand: 'MARK_IN',
+          resolution: 'fallback',
+        }),
+      ]),
+    )
+  })
+
+  it('keeps ordinary remaps whose direct and derived runtime chords are unique', () => {
+    const result = resolveHotkeyConfiguration({
+      MARK_IN: 'q',
+      SHUTTLE_REVERSE: 'g',
+    })
+
+    expect(result.overrides).toEqual({ MARK_IN: 'q', SHUTTLE_REVERSE: 'g' })
     expect(result.warnings).toEqual([])
   })
 })

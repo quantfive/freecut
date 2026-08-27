@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { createElement } from 'react'
+import { createElement, type ReactNode } from 'react'
 import { render, screen } from '@testing-library/react'
 import { useHotkeys } from 'react-hotkeys-hook'
 import { afterEach, describe, expect, it, vi } from 'vite-plus/test'
@@ -16,6 +16,19 @@ function CaptureHotkeyHarness({ onHotkey }: { onHotkey: () => void }) {
     { role: 'dialog' },
     createElement('button', { type: 'button' }, 'Pause'),
   )
+}
+
+function GlobalCaptureHarness({
+  onHotkey,
+  children,
+}: {
+  onHotkey: () => void
+  children?: ReactNode
+}) {
+  useHotkeys('k', onHotkey, { ...HOTKEY_OPTIONS, eventListenerOptions: { capture: true } }, [
+    onHotkey,
+  ])
+  return children ?? null
 }
 
 describe('global shortcut DOM guards', () => {
@@ -58,6 +71,50 @@ describe('global shortcut DOM guards', () => {
     )
 
     expect(result).toEqual({ captureSawEvent: true, defaultPrevented: false })
+  })
+
+  it.each([
+    ['native button', '<button id="control">Run</button>'],
+    ['native link', '<a href="/project" id="control">Project</a>'],
+    ['summary', '<details><summary id="control">Details</summary></details>'],
+    ['button role', '<div role="button" tabindex="0" id="control">Run</div>'],
+    ['menuitem role', '<div role="menuitem" tabindex="0" id="control">Open</div>'],
+  ])('guards an interactive %s outside dialogs', (_name, markup) => {
+    expect(dispatchFrom(markup, '#control', 'k')).toEqual({
+      captureSawEvent: true,
+      defaultPrevented: false,
+    })
+  })
+
+  it('guards every dialog descendant, even when the target is a plain span', () => {
+    expect(
+      dispatchFrom('<div role="dialog"><span id="control">Message</span></div>', '#control', 'j'),
+    ).toEqual({ captureSawEvent: true, defaultPrevented: false })
+  })
+
+  it('uses the nearest contenteditable value for inherited editing and false islands', () => {
+    expect(
+      dispatchFrom(
+        '<div contenteditable="true"><span id="editable">text</span></div>',
+        '#editable',
+        'j',
+      ),
+    ).toEqual({ captureSawEvent: true, defaultPrevented: false })
+
+    expect(
+      dispatchFrom(
+        '<div contenteditable="true"><div contenteditable="false"><span id="island">clip</span></div></div>',
+        '#island',
+        'j',
+      ),
+    ).toEqual({ captureSawEvent: true, defaultPrevented: true })
+  })
+
+  it('keeps ordinary canvas targets eligible for editor shortcuts', () => {
+    expect(dispatchFrom('<canvas id="timeline"></canvas>', '#timeline', 'k')).toEqual({
+      captureSawEvent: true,
+      defaultPrevented: true,
+    })
   })
 
   it('allows an explicitly opted-in dialog control', () => {
@@ -125,5 +182,57 @@ describe('global shortcut DOM guards', () => {
     expect(onHotkey).not.toHaveBeenCalled()
     expect(event.defaultPrevented).toBe(false)
     expect(bubble).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps the real capture listener inert on a native button without swallowing bubbling', () => {
+    const onHotkey = vi.fn()
+    const rendered = render(
+      createElement(
+        GlobalCaptureHarness,
+        { onHotkey },
+        createElement('button', { type: 'button' }, 'Run'),
+      ),
+    )
+    const target = screen.getByRole('button', { name: 'Run' })
+    const bubble = vi.fn()
+    document.body.addEventListener('keydown', bubble)
+    const event = new KeyboardEvent('keydown', {
+      key: 'k',
+      code: 'KeyK',
+      bubbles: true,
+      cancelable: true,
+    })
+
+    target.dispatchEvent(event)
+
+    document.body.removeEventListener('keydown', bubble)
+    rendered.unmount()
+    expect(onHotkey).not.toHaveBeenCalled()
+    expect(event.defaultPrevented).toBe(false)
+    expect(bubble).toHaveBeenCalledTimes(1)
+  })
+
+  it('executes one real capture handler once on an ordinary canvas', () => {
+    const onHotkey = vi.fn()
+    const rendered = render(
+      createElement(
+        GlobalCaptureHarness,
+        { onHotkey },
+        createElement('canvas', { 'aria-label': 'Timeline canvas' }),
+      ),
+    )
+    const target = screen.getByLabelText('Timeline canvas')
+    const event = new KeyboardEvent('keydown', {
+      key: 'k',
+      code: 'KeyK',
+      bubbles: true,
+      cancelable: true,
+    })
+
+    target.dispatchEvent(event)
+
+    rendered.unmount()
+    expect(onHotkey).toHaveBeenCalledTimes(1)
+    expect(event.defaultPrevented).toBe(true)
   })
 })

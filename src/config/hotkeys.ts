@@ -156,6 +156,14 @@ export interface HotkeyResolution {
   warnings: HotkeyConflictWarning[]
 }
 
+type RuntimeHotkeyVariant = 'primary' | 'preview'
+
+interface RuntimeHotkeyClaim {
+  command: HotkeyKey
+  binding: string
+  variant: RuntimeHotkeyVariant
+}
+
 export interface BrowserHostileHotkey {
   binding: string
   browserAction: string
@@ -432,7 +440,7 @@ export function resolveHotkeyConfiguration(overrides: unknown = {}): HotkeyResol
   // the participating custom binding(s) back to their unique canonical defaults.
   // Re-run because one fallback can expose a collision with another custom value.
   while (true) {
-    const conflicts = getDuplicateHotkeyCommandGroups(bindings)
+    const conflicts = getDuplicateRuntimeHotkeyGroups(bindings)
     if (conflicts.length === 0) break
 
     const passWarnings = createConflictFallbackWarnings(conflicts, requested, rejectedOverrides)
@@ -460,26 +468,30 @@ function createResolvedHotkeyBindings(
   ) as HotkeyBindingMap
 }
 
-function getDuplicateHotkeyCommandGroups(bindings: HotkeyBindingMap): HotkeyKey[][] {
-  return Object.values(getHotkeyConflictMap(bindings)).filter((commands) => commands.length > 1)
+function getDuplicateRuntimeHotkeyGroups(bindings: HotkeyBindingMap): RuntimeHotkeyClaim[][] {
+  return Object.values(getRuntimeHotkeyConflictGraph(bindings)).filter(
+    (claims) => new Set(claims.map((claim) => claim.command)).size > 1,
+  )
 }
 
 function createConflictFallbackWarnings(
-  conflicts: HotkeyKey[][],
+  conflicts: RuntimeHotkeyClaim[][],
   requested: HotkeyOverrideMap,
   rejected: Set<HotkeyKey>,
 ): HotkeyConflictWarning[] {
-  return conflicts.flatMap((commands) =>
-    commands
+  return conflicts.flatMap((claims) => {
+    const commands = [...new Set(claims.map((claim) => claim.command))]
+    const collisionBinding = claims[0]!.binding
+    return commands
       .filter((key) => !rejected.has(key) && key in requested && requested[key] !== HOTKEYS[key])
       .map((key) => ({
         code: 'duplicate_binding' as const,
         command: key,
-        binding: normalizeHotkeyBinding(requested[key]!),
+        binding: collisionBinding,
         resolution: 'fallback' as const,
         conflictingCommand: commands.find((command) => command !== key)!,
-      })),
-  )
+      }))
+  })
 }
 
 function getEffectiveHotkeyOverrides(bindings: HotkeyBindingMap): HotkeyOverrideMap {
@@ -750,20 +762,61 @@ export function getHotkeyBindingFromEventData(eventData: HotkeyEventData): strin
   return normalizeHotkeyBinding(tokens.join('+'))
 }
 
-function getHotkeyConflictMap(bindings: HotkeyBindingMap): Record<string, HotkeyKey[]> {
-  const conflicts: Record<string, HotkeyKey[]> = {}
+function addShiftModifier(binding: string): string {
+  const tokens = splitHotkeyBinding(binding)
+  if (tokens.includes('shift')) return normalizeHotkeyBinding(binding)
+  const key = tokens.pop()
+  if (!key) return ''
+  return normalizeHotkeyBinding([...tokens, 'shift', key].join('+'))
+}
+
+function getCommandRuntimeHotkeyClaims(command: HotkeyKey, binding: string): RuntimeHotkeyClaim[] {
+  const normalizedBinding = normalizeHotkeyBinding(binding)
+  if (!normalizedBinding || !hasHotkeyPrimaryToken(normalizedBinding)) return []
+
+  const claims: RuntimeHotkeyClaim[] = [{ command, binding: normalizedBinding, variant: 'primary' }]
+  if (command === 'MARK_IN' || command === 'MARK_OUT') {
+    const previewBinding = addShiftModifier(normalizedBinding)
+    if (previewBinding) {
+      claims.push({ command, binding: previewBinding, variant: 'preview' })
+    }
+  }
+  return claims
+}
+
+/**
+ * Canonical graph of every physical chord registered at runtime, including
+ * modifier-derived variants. Claim insertion order is the deterministic owner
+ * order when defensive runtime claiming sees an unresolved collision.
+ */
+function getRuntimeHotkeyConflictGraph(
+  bindings: HotkeyBindingMap,
+): Record<string, RuntimeHotkeyClaim[]> {
+  const conflicts: Record<string, RuntimeHotkeyClaim[]> = {}
 
   for (const [key, binding] of Object.entries(bindings) as [HotkeyKey, string][]) {
-    const normalizedBinding = normalizeHotkeyBinding(binding)
-    if (!normalizedBinding || !hasHotkeyPrimaryToken(normalizedBinding)) {
-      continue
+    for (const claim of getCommandRuntimeHotkeyClaims(key, binding)) {
+      const bindingClaims = conflicts[claim.binding] ?? []
+      bindingClaims.push(claim)
+      conflicts[claim.binding] = bindingClaims
     }
-
-    conflicts[normalizedBinding] ??= []
-    conflicts[normalizedBinding].push(key)
   }
 
   return conflicts
+}
+
+export function getRuntimeHotkeyBinding(
+  bindings: HotkeyBindingMap,
+  command: HotkeyKey,
+  variant: RuntimeHotkeyVariant = 'primary',
+): string | null {
+  const claim = getCommandRuntimeHotkeyClaims(command, bindings[command]).find(
+    (candidate) => candidate.variant === variant,
+  )
+  if (!claim) return null
+
+  const owner = getRuntimeHotkeyConflictGraph(bindings)[claim.binding]?.[0]
+  return owner?.command === command && owner.variant === variant ? claim.binding : null
 }
 
 export function findHotkeyConflicts(
@@ -776,9 +829,25 @@ export function findHotkeyConflicts(
     return []
   }
 
-  return (getHotkeyConflictMap(bindings)[normalizedBinding] ?? []).filter(
-    (key) => key !== currentKey,
-  )
+  if (!currentKey) {
+    return [
+      ...new Set(
+        (getRuntimeHotkeyConflictGraph(bindings)[normalizedBinding] ?? []).map(
+          (claim) => claim.command,
+        ),
+      ),
+    ]
+  }
+
+  const candidateBindings = { ...bindings, [currentKey]: normalizedBinding }
+  const graph = getRuntimeHotkeyConflictGraph(candidateBindings)
+  const conflicts = new Set<HotkeyKey>()
+  for (const claim of getCommandRuntimeHotkeyClaims(currentKey, normalizedBinding)) {
+    for (const candidate of graph[claim.binding] ?? []) {
+      if (candidate.command !== currentKey) conflicts.add(candidate.command)
+    }
+  }
+  return (Object.keys(HOTKEYS) as HotkeyKey[]).filter((key) => conflicts.has(key))
 }
 
 export function createHotkeyExportDocument(
@@ -989,11 +1058,43 @@ export function parseHotkeyImportDocument(source: unknown): HotkeyImportResult {
 
 const GLOBAL_HOTKEY_OPT_IN = '[data-global-hotkeys="allow"]'
 const DIALOG_SELECTOR = '[role="dialog"], dialog'
-const FORM_CONTROL_SELECTOR = 'input, textarea, select'
+const INTERACTIVE_CONTROL_SELECTOR = [
+  'button',
+  'a[href]',
+  'summary',
+  'input',
+  'textarea',
+  'select',
+  'option',
+  'audio[controls]',
+  'video[controls]',
+  '[role="button"]',
+  '[role="link"]',
+  '[role="menuitem"]',
+  '[role="menuitemcheckbox"]',
+  '[role="menuitemradio"]',
+  '[role="option"]',
+  '[role="checkbox"]',
+  '[role="radio"]',
+  '[role="switch"]',
+  '[role="tab"]',
+  '[role="treeitem"]',
+  '[role="slider"]',
+  '[role="spinbutton"]',
+  '[role="textbox"]',
+  '[role="searchbox"]',
+  '[role="combobox"]',
+  '[role="listbox"]',
+].join(', ')
 
 function isContentEditableTarget(target: Element): boolean {
-  const editable = target.closest('[contenteditable]')
-  return editable !== null && editable.getAttribute('contenteditable') !== 'false'
+  for (let current: Element | null = target; current; current = current.parentElement) {
+    if (!current.hasAttribute('contenteditable')) continue
+    const value = current.getAttribute('contenteditable')?.trim().toLowerCase() ?? ''
+    if (value === 'false') return false
+    if (value === '' || value === 'true' || value === 'plaintext-only') return true
+  }
+  return false
 }
 
 /**
@@ -1006,7 +1107,7 @@ export function shouldIgnoreGlobalHotkey(event: KeyboardEvent): boolean {
   if (typeof Element === 'undefined' || !(target instanceof Element)) return false
   if (target.closest(GLOBAL_HOTKEY_OPT_IN)) return false
   if (isContentEditableTarget(target)) return true
-  if (target.closest(FORM_CONTROL_SELECTOR)) return true
+  if (target.closest(INTERACTIVE_CONTROL_SELECTOR)) return true
   return target.closest(DIALOG_SELECTOR) !== null
 }
 
