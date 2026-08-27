@@ -7,11 +7,17 @@ import type { AudioItem, TextItem, TimelineItem, TimelineTrack, VideoItem } from
 import { useCompositionNavigationStore } from '../../stores/composition-navigation-store'
 import { useKeyframeSelectionStore } from '../../stores/keyframe-selection-store'
 import { useTimelineStore } from '../../stores/timeline-store'
+import { useTimelineCommandStore } from '../../stores/timeline-command-store'
 import { useClipboardShortcuts } from './use-clipboard-shortcuts'
 
 const { addItemsMock, playbackState, useHotkeysMock } = vi.hoisted(() => ({
   addItemsMock: vi.fn(),
-  playbackState: { currentFrame: 200 },
+  playbackState: {
+    currentFrame: 200,
+    setCurrentFrame: vi.fn(),
+    setBusAudioEq: vi.fn(),
+    setMasterBusDb: vi.fn(),
+  },
   useHotkeysMock: vi.fn(),
 }))
 
@@ -149,6 +155,7 @@ describe('useClipboardShortcuts paste placement', () => {
     useCompositionNavigationStore.setState({ activeCompositionId: null })
     useClipboardStore.setState({ itemsClipboard: null, transitionClipboard: null })
     playbackState.currentFrame = 200
+    useTimelineCommandStore.getState().clearHistory()
   })
 
   afterEach(() => {
@@ -182,7 +189,7 @@ describe('useClipboardShortcuts paste placement', () => {
       .copyItems(
         [
           makeVideoItem({ id: 'first', label: 'First', trackId: 'missing-v1', from: 40 }),
-          makeVideoItem({ id: 'second', label: 'Second', trackId: 'missing-v2', from: 45 }),
+          makeVideoItem({ id: 'second', label: 'Second', trackId: 'missing-v1', from: 45 }),
         ],
         0,
         'copy',
@@ -249,7 +256,7 @@ describe('useClipboardShortcuts paste placement', () => {
         makeAudioItem({ id: 'a1', trackId: 'source-a1', linkedGroupId: 'pair-1' }),
         makeVideoItem({ id: 'v2', trackId: 'source-v2', from: 20, linkedGroupId: 'pair-2' }),
         makeAudioItem({ id: 'a2', trackId: 'source-a2', from: 20, linkedGroupId: 'pair-2' }),
-        makeCaptionItem({ id: 'caption', trackId: 'source-caption', from: 20 }),
+        makeCaptionItem({ id: 'caption', trackId: 'source-v2', from: 20 }),
       ],
       0,
       'copy',
@@ -264,9 +271,9 @@ describe('useClipboardShortcuts paste placement', () => {
       AUDIO_TRACK.id,
       SECOND_VIDEO_TRACK.id,
       SECOND_AUDIO_TRACK.id,
-      TARGET_TRACK.id,
+      SECOND_VIDEO_TRACK.id,
     ])
-    expect(plannedItems.filter((item) => item.type === 'text')[0]?.trackId).toBe(TARGET_TRACK.id)
+    expect(plannedItems.filter((item) => item.type === 'text')[0]?.trackId).toBe(SECOND_VIDEO_TRACK.id)
   })
 
   it('uses surviving IDs while resolving missing linked members by kind', () => {
@@ -284,5 +291,48 @@ describe('useClipboardShortcuts paste placement', () => {
     act(() => getPasteCallback()({ preventDefault: vi.fn() }))
 
     expect(getPlannedItems().map((item) => item.trackId)).toEqual([TARGET_TRACK.id, AUDIO_TRACK.id])
+  })
+
+  it('splits malformed overlapping members of one linked group safely', () => {
+    useClipboardStore.getState().copyItems(
+      [
+        makeVideoItem({ id: 'overlap-1', trackId: 'same-source', linkedGroupId: 'bad-group' }),
+        makeVideoItem({ id: 'overlap-2', trackId: 'same-source', linkedGroupId: 'bad-group' }),
+      ],
+      0,
+      'copy',
+    )
+
+    render(<ShortcutHarness />)
+    act(() => getPasteCallback()({ preventDefault: vi.fn() }))
+
+    const plannedItems = getPlannedItems()
+    expect(plannedItems.map((item) => item.from)).toEqual([200, 210])
+    expect(plannedItems[0]!.from + plannedItems[0]!.durationInFrames).toBeLessThanOrEqual(
+      plannedItems[1]!.from,
+    )
+  })
+
+  it('creates deterministic compatible lanes and undoes tracks and items together', () => {
+    useClipboardStore.getState().copyItems(
+      [
+        makeVideoItem({ id: 'lane-1', trackId: 'missing-v1', from: 0 }),
+        makeVideoItem({ id: 'lane-2', trackId: 'missing-v2', from: 0 }),
+      ],
+      0,
+      'copy',
+    )
+
+    render(<ShortcutHarness />)
+    act(() => getPasteCallback()({ preventDefault: vi.fn() }))
+
+    expect(useTimelineStore.getState().tracks.map((track) => track.kind)).toEqual(['video', 'video'])
+    expect(useTimelineStore.getState().items).toHaveLength(2)
+    expect(useTimelineCommandStore.getState().undoStack).toHaveLength(1)
+
+    act(() => useTimelineCommandStore.getState().undo())
+    expect(useTimelineStore.getState().tracks).toHaveLength(1)
+    expect(useTimelineStore.getState().tracks[0]?.id).toBe(TARGET_TRACK.id)
+    expect(useTimelineStore.getState().items).toEqual([])
   })
 })
