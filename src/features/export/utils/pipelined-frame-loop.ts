@@ -7,10 +7,9 @@
  * previous encode has drained, so frames reach the encoder in order.
  *
  * Behavior must stay bit-identical to the original inline loop — this is the
- * export hot path. Known pre-existing hole kept on purpose: when the loop
- * exits via a non-abort error (renderFrame throw or pending error) while an
- * encode is in flight, that encode promise is never awaited; only the abort
- * path drains it.
+ * export hot path. Every exit drains an in-flight encode so its sample closes
+ * and its rejection is observed. A render or pending error remains the primary
+ * error when that drain also fails.
  */
 
 export interface CloseableSample {
@@ -65,56 +64,73 @@ export async function runPipelinedFrameLoop<S extends CloseableSample>(
 
   let pendingEncode: Promise<void> | null = null
 
-  for (let frame = 0; frame < totalFrames; frame++) {
-    const pendingError = getPendingError?.()
-    if (pendingError) throw pendingError
+  const drainPendingEncode = async () => {
+    if (!pendingEncode) return
+    const encode = pendingEncode
+    try {
+      await encode
+    } finally {
+      pendingEncode = null
+    }
+  }
 
-    // Check for abort — drain any in-flight encode first so the encoder
-    // is idle before we cancel the output. Discard encoder errors since
-    // we are aborting anyway and must always surface AbortError.
-    if (signal?.aborted) {
-      if (pendingEncode) {
+  try {
+    for (let frame = 0; frame < totalFrames; frame++) {
+      const pendingError = getPendingError?.()
+      if (pendingError) throw pendingError
+
+      // Check for abort — drain any in-flight encode first so the encoder
+      // is idle before we cancel the output. Discard encoder errors since
+      // we are aborting anyway and must always surface AbortError.
+      if (signal?.aborted) {
         try {
-          await pendingEncode
+          await drainPendingEncode()
         } catch {
           /* discarded — aborting */
         }
+        await onAbort()
+        throw new DOMException('Render cancelled', 'AbortError')
       }
-      await onAbort()
-      throw new DOMException('Render cancelled', 'AbortError')
+
+      // Render frame first — this overlaps with the previous frame's encode
+      // that is still in flight. The previous sample already copied its
+      // pixels, so writing to the capture surface here cannot corrupt it.
+      await renderFrame(frame)
+
+      // Now wait for the previous encode to finish before capturing a new
+      // sample. This ensures at most one encode is in flight and that frames
+      // are fed to the encoder in order.
+      await drainPendingEncode()
+
+      // Snapshot pixels into a sample. The capture copies pixel data
+      // immediately — the surface is free for the next render.
+      const sample = captureSample(frame)
+
+      // Kick off encoding in the background. NOT awaited here — it runs
+      // concurrently with the next iteration's renderFrame().
+      const isKeyFrame = frame === 0
+      pendingEncode = (async () => {
+        try {
+          await encodeSample(sample, isKeyFrame)
+        } finally {
+          // The encoder does NOT close samples. We must close to release the
+          // underlying frame's GPU memory, otherwise the browser throttles
+          // after ~8-16 outstanding frames.
+          sample.close()
+        }
+      })()
+
+      onFrameProgress(frame)
     }
 
-    // Render frame first — this overlaps with the previous frame's encode
-    // that is still in flight. The previous sample already copied its
-    // pixels, so writing to the capture surface here cannot corrupt it.
-    await renderFrame(frame)
-
-    // Now wait for the previous encode to finish before capturing a new
-    // sample. This ensures at most one encode is in flight and that frames
-    // are fed to the encoder in order.
-    if (pendingEncode) await pendingEncode
-
-    // Snapshot pixels into a sample. The capture copies pixel data
-    // immediately — the surface is free for the next render.
-    const sample = captureSample(frame)
-
-    // Kick off encoding in the background. NOT awaited here — it runs
-    // concurrently with the next iteration's renderFrame().
-    const isKeyFrame = frame === 0
-    pendingEncode = (async () => {
-      try {
-        await encodeSample(sample, isKeyFrame)
-      } finally {
-        // The encoder does NOT close samples. We must close to release the
-        // underlying frame's GPU memory, otherwise the browser throttles
-        // after ~8-16 outstanding frames.
-        sample.close()
-      }
-    })()
-
-    onFrameProgress(frame)
+    // Drain the final in-flight encode before finalizing
+    await drainPendingEncode()
+  } catch (primaryError) {
+    try {
+      await drainPendingEncode()
+    } catch {
+      // Preserve the error that selected this exit path.
+    }
+    throw primaryError
   }
-
-  // Drain the final in-flight encode before finalizing
-  if (pendingEncode) await pendingEncode
 }
