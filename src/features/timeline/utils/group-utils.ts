@@ -11,33 +11,64 @@ export function getVisibleTrackIds(tracks: TimelineTrack[]): Set<string> {
   )
 }
 
-function indexLayerGroups(tracks: TimelineTrack[]): Map<string, TimelineTrack[]> {
-  const groupsById = new Map<string, TimelineTrack[]>()
+interface TrackHierarchyIndex {
+  tracksById: Map<string, TimelineTrack[]>
+  trackById: Map<string, TimelineTrack>
+  duplicateTrackIds: Set<string>
+}
+
+function indexTrackHierarchy(tracks: TimelineTrack[]): TrackHierarchyIndex {
+  const tracksById = new Map<string, TimelineTrack[]>()
+  const trackById = new Map<string, TimelineTrack>()
+  const duplicateTrackIds = new Set<string>()
+
   for (const track of tracks) {
-    if (!track.isGroup) continue
-    const definitions = groupsById.get(track.id)
-    if (definitions) definitions.push(track)
-    else groupsById.set(track.id, [track])
+    const definitions = tracksById.get(track.id)
+    if (definitions) {
+      definitions.push(track)
+      duplicateTrackIds.add(track.id)
+    } else {
+      tracksById.set(track.id, [track])
+      trackById.set(track.id, track)
+    }
   }
-  return groupsById
+
+  return { tracksById, trackById, duplicateTrackIds }
+}
+
+function collectRetainedGroupRootIds(
+  tracks: TimelineTrack[],
+  hierarchy: TrackHierarchyIndex,
+): Set<string> {
+  const retainedGroupIds = new Set(hierarchy.duplicateTrackIds)
+  for (const track of tracks) {
+    if (!track.isGroup && track.parentTrackId) retainedGroupIds.add(track.parentTrackId)
+  }
+  return retainedGroupIds
+}
+
+function retainGroupParent(
+  track: TimelineTrack,
+  retainedGroupIds: Set<string>,
+  pendingGroupIds: string[],
+): void {
+  const parentId = track.isGroup ? track.parentTrackId : undefined
+  if (!parentId || retainedGroupIds.has(parentId)) return
+  retainedGroupIds.add(parentId)
+  pendingGroupIds.push(parentId)
 }
 
 function collectRetainedGroupIds(
   tracks: TimelineTrack[],
-  groupsById: Map<string, TimelineTrack[]>,
+  hierarchy: TrackHierarchyIndex,
 ): Set<string> {
-  const retainedGroupIds = new Set(
-    tracks.flatMap((track) => (!track.isGroup && track.parentTrackId ? [track.parentTrackId] : [])),
-  )
+  const retainedGroupIds = collectRetainedGroupRootIds(tracks, hierarchy)
   const pendingGroupIds = [...retainedGroupIds]
 
   for (let index = 0; index < pendingGroupIds.length; index += 1) {
-    const definitions = groupsById.get(pendingGroupIds[index]!) ?? []
-    for (const group of definitions) {
-      const parentId = group.parentTrackId
-      if (!parentId || retainedGroupIds.has(parentId)) continue
-      retainedGroupIds.add(parentId)
-      pendingGroupIds.push(parentId)
+    const definitions = hierarchy.tracksById.get(pendingGroupIds[index]!) ?? []
+    for (const track of definitions) {
+      retainGroupParent(track, retainedGroupIds, pendingGroupIds)
     }
   }
 
@@ -51,13 +82,14 @@ function collectRetainedGroupIds(
  * its own, so retaining a branch with no lane only leaves orphaned UI rows.
  * Starting from every non-group lane makes the traversal independent of input
  * order and retains its complete group ancestry. Missing parents terminate a
- * branch, while visited IDs make self/multi-node cycles finite. If an ID has
- * duplicate group definitions, all of them and all of their possible parents
- * are retained so normalization does not erase the ambiguity that effective
- * state resolution must handle fail-closed.
+ * branch, while visited IDs make self/multi-node cycles finite. Every duplicate
+ * ID is also a root: group/group and mixed group/lane definitions, plus every
+ * possible group ancestor, remain in place so normalization cannot sanitize an
+ * ambiguous topology into unlocked authorization. Lane/lane duplicates already
+ * survive because pruning never removes ordinary lanes.
  */
 export function pruneEmptyLayerGroups(tracks: TimelineTrack[]): TimelineTrack[] {
-  const retainedGroupIds = collectRetainedGroupIds(tracks, indexLayerGroups(tracks))
+  const retainedGroupIds = collectRetainedGroupIds(tracks, indexTrackHierarchy(tracks))
   const nextTracks = tracks.filter((track) => !track.isGroup || retainedGroupIds.has(track.id))
   return nextTracks.length === tracks.length ? tracks : nextTracks
 }
@@ -71,9 +103,14 @@ export function pruneEmptyLayerGroupHierarchy(
   tracks: TimelineTrack[],
   items: ReadonlyArray<Pick<TimelineItem, 'trackId'>>,
 ): TimelineTrack[] {
+  const hierarchy = indexTrackHierarchy(tracks)
   const populatedTrackIds = new Set(items.map((item) => item.trackId))
   const tracksWithPopulatedGroupChildren = tracks.filter(
-    (track) => track.isGroup || !track.parentTrackId || populatedTrackIds.has(track.id),
+    (track) =>
+      track.isGroup ||
+      hierarchy.duplicateTrackIds.has(track.id) ||
+      !track.parentTrackId ||
+      populatedTrackIds.has(track.id),
   )
 
   return pruneEmptyLayerGroups(tracksWithPopulatedGroupChildren)
@@ -115,8 +152,7 @@ function inheritTrackState(
 
 function collectTrackResolutionPath(params: {
   track: TimelineTrack
-  trackById: Map<string, TimelineTrack>
-  duplicateTrackIds: Set<string>
+  hierarchy: TrackHierarchyIndex
   stateById: Map<string, EffectiveTrackState>
 }): { path: TimelineTrack[]; inheritedState: EffectiveTrackState } {
   const path: TimelineTrack[] = []
@@ -126,7 +162,7 @@ function collectTrackResolutionPath(params: {
   while (cursor) {
     const cached = params.stateById.get(cursor.id)
     if (cached) return { path, inheritedState: cached }
-    if (params.duplicateTrackIds.has(cursor.id)) {
+    if (params.hierarchy.duplicateTrackIds.has(cursor.id)) {
       return { path, inheritedState: MALFORMED_TRACK_STATE }
     }
     if (pathIds.has(cursor.id)) return { path, inheritedState: MALFORMED_TRACK_STATE }
@@ -135,8 +171,9 @@ function collectTrackResolutionPath(params: {
     path.push(cursor)
     if (!cursor.parentTrackId) return { path, inheritedState: ROOT_TRACK_STATE }
 
-    cursor = params.trackById.get(cursor.parentTrackId)
-    if (!cursor) return { path, inheritedState: MALFORMED_TRACK_STATE }
+    const parent = params.hierarchy.trackById.get(cursor.parentTrackId)
+    if (!parent?.isGroup) return { path, inheritedState: MALFORMED_TRACK_STATE }
+    cursor = parent
   }
 
   return { path, inheritedState: MALFORMED_TRACK_STATE }
@@ -144,13 +181,12 @@ function collectTrackResolutionPath(params: {
 
 function resolveTrackState(params: {
   track: TimelineTrack
-  trackById: Map<string, TimelineTrack>
-  duplicateTrackIds: Set<string>
+  hierarchy: TrackHierarchyIndex
   stateById: Map<string, EffectiveTrackState>
 }): EffectiveTrackState {
   const cached = params.stateById.get(params.track.id)
   if (cached) return cached
-  if (params.duplicateTrackIds.has(params.track.id)) return MALFORMED_TRACK_STATE
+  if (params.hierarchy.duplicateTrackIds.has(params.track.id)) return MALFORMED_TRACK_STATE
 
   const { path, inheritedState } = collectTrackResolutionPath(params)
   let state = inheritedState
@@ -171,24 +207,18 @@ function resolveTrackState(params: {
  * resolved fail-closed so every consumer sees the lane as locked, muted, and
  * hidden rather than making a different partial guess. Solo is disabled for
  * malformed ancestry because promoting an invalid lane into the solo set
- * would make it more audible/visible, not less.
+ * would make it more audible/visible, not less. Duplicate IDs of every shape,
+ * missing parents, non-group parents, self-parenting, and longer cycles are all
+ * malformed. Only a unique chain of Layer Group parents may authorize a lane.
  */
 export function resolveEffectiveTrackStates(tracks: TimelineTrack[]): TimelineTrack[] {
-  const trackById = new Map<string, TimelineTrack>()
-  const duplicateTrackIds = new Set<string>()
-  for (const track of tracks) {
-    if (trackById.has(track.id)) {
-      duplicateTrackIds.add(track.id)
-    } else {
-      trackById.set(track.id, track)
-    }
-  }
+  const hierarchy = indexTrackHierarchy(tracks)
   const stateById = new Map<string, EffectiveTrackState>()
 
   return tracks
     .filter((track) => !track.isGroup)
     .map((track) => {
-      const state = resolveTrackState({ track, trackById, duplicateTrackIds, stateById })
+      const state = resolveTrackState({ track, hierarchy, stateById })
       if (
         state.locked === track.locked &&
         state.muted === track.muted &&

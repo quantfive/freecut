@@ -30,6 +30,7 @@ import {
   trimItemStart,
 } from './item-edit-actions'
 import { updateItem } from './item-actions'
+import { preflightTimelineMutation } from '../../utils/track-lock-invariants'
 
 function tracks(overrides: Partial<TimelineTrack> = {}): TimelineTrack[] {
   return [
@@ -140,6 +141,124 @@ describe('public item edit lock preflights', () => {
     const before = snapshot()
 
     trimItemBreakingTransition('middle', 'start', 10, ['transition-1'])
+
+    expectUnchanged(before)
+  })
+
+  it.each([
+    [
+      'mixed group/lane duplicate id',
+      [
+        makeTimelineTrack({
+          id: 'video-track',
+          name: 'Ambiguous group',
+          order: 0,
+          isGroup: true,
+        }),
+        makeTimelineTrack({
+          id: 'video-track',
+          name: 'Ambiguous lane',
+          kind: 'video',
+          order: 1,
+        }),
+      ],
+    ],
+    [
+      'duplicate groups',
+      [
+        makeTimelineTrack({ id: 'group', name: 'Group A', order: 0, isGroup: true }),
+        makeTimelineTrack({ id: 'group', name: 'Group B', order: 1, isGroup: true }),
+        makeTimelineTrack({
+          id: 'video-track',
+          name: 'Lane',
+          kind: 'video',
+          order: 2,
+          parentTrackId: 'group',
+        }),
+      ],
+    ],
+    [
+      'duplicate lanes',
+      [
+        makeTimelineTrack({ id: 'video-track', name: 'Lane A', kind: 'video', order: 0 }),
+        makeTimelineTrack({ id: 'video-track', name: 'Lane B', kind: 'video', order: 1 }),
+      ],
+    ],
+    [
+      'missing parent',
+      [
+        makeTimelineTrack({
+          id: 'video-track',
+          name: 'Lane',
+          kind: 'video',
+          order: 0,
+          parentTrackId: 'missing',
+        }),
+      ],
+    ],
+    [
+      'non-group parent',
+      [
+        makeTimelineTrack({ id: 'ordinary-parent', name: 'V1', kind: 'video', order: 0 }),
+        makeTimelineTrack({
+          id: 'video-track',
+          name: 'V2',
+          kind: 'video',
+          order: 1,
+          parentTrackId: 'ordinary-parent',
+        }),
+      ],
+    ],
+    [
+      'self-parent',
+      [
+        makeTimelineTrack({
+          id: 'video-track',
+          name: 'Lane',
+          kind: 'video',
+          order: 0,
+          parentTrackId: 'video-track',
+        }),
+      ],
+    ],
+    [
+      'multi-node cycle',
+      [
+        makeTimelineTrack({
+          id: 'group-a',
+          name: 'Group A',
+          order: 0,
+          isGroup: true,
+          parentTrackId: 'group-b',
+        }),
+        makeTimelineTrack({
+          id: 'group-b',
+          name: 'Group B',
+          order: 1,
+          isGroup: true,
+          parentTrackId: 'group-a',
+        }),
+        makeTimelineTrack({
+          id: 'video-track',
+          name: 'Lane',
+          kind: 'video',
+          order: 2,
+          parentTrackId: 'group-a',
+        }),
+      ],
+    ],
+  ] as const)('rejects trim atomically for malformed ancestry: %s', (_name, malformedTracks) => {
+    useItemsStore.getState().setTracks([...malformedTracks])
+    useItemsStore.getState().setItems([video()])
+    useSelectionStore.getState().selectItems(['middle'])
+    const before = snapshot()
+    const { items, tracks: storedTracks } = useItemsStore.getState()
+
+    expect(
+      preflightTimelineMutation({ items, tracks: storedTracks, itemIds: ['middle'] }),
+    ).toMatchObject({ allowed: false, allowedIds: [], blockedIds: ['middle'] })
+
+    trimItemStart('middle', 10)
 
     expectUnchanged(before)
   })
