@@ -10,9 +10,24 @@ import { usePreviewBridgeStore } from '@/shared/state/preview-bridge'
 import { useItemsStore } from '../../items-store'
 import { useTransitionsStore } from '../../transitions-store'
 import { calculateTransitionPortions } from '@/shared/timeline/transitions/transition-planner'
+import { preflightTimelineMutation } from '../../../utils/track-lock-invariants'
 
 export function isLinkedSelectionEnabled(): boolean {
   return useEditorStore.getState().linkedSelectionEnabled
+}
+
+/** Public compound actions call this after planning their complete cohort and before execute(). */
+export function canMutateTimelineItems(
+  itemIds: Iterable<string>,
+  destinationTrackIds: Iterable<string> = [],
+): boolean {
+  const { items, tracks } = useItemsStore.getState()
+  return preflightTimelineMutation({
+    items,
+    tracks,
+    itemIds,
+    destinationTrackIds,
+  }).allowed
 }
 
 const POST_EDIT_WARM_MAX_FRAMES = 32

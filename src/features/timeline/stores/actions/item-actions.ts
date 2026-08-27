@@ -71,6 +71,9 @@ const LOCK_PROTECTED_ITEM_FIELDS = new Set([
   'offset',
   'isReversed',
   'reverseConformLocalStart',
+  'reversed',
+  'segmentStart',
+  'segmentEnd',
 ])
 
 function isLinkedSelectionEnabled(): boolean {
@@ -83,6 +86,12 @@ function changesLockedItemPlacement(item: TimelineItem, updates: Partial<Timelin
   return Object.keys(updateRecord).some(
     (key) => LOCK_PROTECTED_ITEM_FIELDS.has(key) && updateRecord[key] !== itemRecord[key],
   )
+}
+
+function changesItem(item: TimelineItem, updates: Partial<TimelineItem>): boolean {
+  const updateRecord = updates as Record<string, unknown>
+  const itemRecord = item as unknown as Record<string, unknown>
+  return Object.keys(updateRecord).some((key) => updateRecord[key] !== itemRecord[key])
 }
 
 function areItemMutationsUnlocked(itemIds: Iterable<string>): boolean {
@@ -769,6 +778,7 @@ export function addItemsOnNewTracks(items: TimelineItem[], tracks: TimelineTrack
 export function updateItem(id: string, updates: Partial<TimelineItem>): void {
   const item = useItemsStore.getState().itemById[id]
   if (!item) return
+  if (!changesItem(item, updates)) return
   if (changesLockedItemPlacement(item, updates) && !areItemMutationsUnlocked([id])) return
   if (
     updates.trackId &&

@@ -8,7 +8,33 @@ import { importMediaLibraryService } from '@/features/timeline/deps/media-librar
 import { blobUrlManager } from '@/infrastructure/browser/blob-url-manager'
 import { execute, applyTransitionRepairs, getLogger } from '../shared'
 import { timelineToSourceFrames } from '../../../utils/source-calculations'
-import { isInTransitionOverlap } from './shared'
+import { canMutateTimelineItems, isInTransitionOverlap } from './shared'
+
+function canCommitFreezeFrame(itemId: string, playheadFrame: number): boolean {
+  const store = useItemsStore.getState()
+  const item = store.itemById[itemId]
+  if (!item || item.type !== 'video') return false
+  if (
+    playheadFrame <= item.from ||
+    playheadFrame >= item.from + item.durationInFrames ||
+    isInTransitionOverlap(itemId, playheadFrame - item.from, item.durationInFrames)
+  ) {
+    return false
+  }
+
+  const mutationIds = [
+    itemId,
+    ...store.items
+      .filter(
+        (candidate) =>
+          candidate.id !== itemId &&
+          candidate.trackId === item.trackId &&
+          candidate.from > playheadFrame,
+      )
+      .map((candidate) => candidate.id),
+  ]
+  return canMutateTimelineItems(mutationIds, [item.trackId])
+}
 
 /**
  * Insert a freeze frame at the playhead position.
@@ -33,6 +59,7 @@ export async function insertFreezeFrame(itemId: string, playheadFrame: number): 
   if (isInTransitionOverlap(itemId, playheadFrame - itemStart, item.durationInFrames)) {
     return false
   }
+  if (!canCommitFreezeFrame(itemId, playheadFrame)) return false
 
   const fps = useTimelineSettingsStore.getState().fps
   const speed = item.speed ?? 1
@@ -144,6 +171,25 @@ export async function insertFreezeFrame(itemId: string, playheadFrame: number): 
     const frameMediaId = mediaMetadata.id
     const frameBlobUrl = blobUrlManager.acquire(frameMediaId, frameBlob)
 
+    const rollbackPersistedFrame = async (): Promise<void> => {
+      try {
+        await mediaLibraryService.deleteMediaFromProject(currentProjectId, frameMediaId)
+      } catch (cleanupError) {
+        getLogger().warn(
+          '[insertFreezeFrame] Failed to roll back persisted frame after rejected commit',
+          cleanupError,
+        )
+      }
+      blobUrlManager.release(frameMediaId)
+    }
+
+    // Locks can change while frame extraction and persistence are awaiting.
+    // Revalidate the complete split/shift cohort immediately before execute().
+    if (!canCommitFreezeFrame(itemId, playheadFrame)) {
+      await rollbackPersistedFrame()
+      return false
+    }
+
     // Step 4: Perform timeline mutations atomically (split + insert + shift).
     // Prepend the media item to the store only after execute() succeeds so a
     // failed _splitItem (e.g. the source clip was removed between validation
@@ -229,18 +275,7 @@ export async function insertFreezeFrame(itemId: string, playheadFrame: number): 
       // only by this project, so the reference-counted variant covers it
       // and preserves the global "delete everywhere" semantics for the
       // explicit user action.
-      try {
-        await mediaLibraryService.deleteMediaFromProject(currentProjectId, frameMediaId)
-      } catch (cleanupError) {
-        getLogger().warn(
-          '[insertFreezeFrame] Failed to roll back persisted frame after split failure',
-          cleanupError,
-        )
-      }
-      // blobUrlManager.acquire above bumped the ref count for frameMediaId;
-      // matched release here revokes the underlying ObjectURL and frees the
-      // Blob so a failure path doesn't accumulate leaked frames over time.
-      blobUrlManager.release(frameMediaId)
+      await rollbackPersistedFrame()
       return false
     }
 

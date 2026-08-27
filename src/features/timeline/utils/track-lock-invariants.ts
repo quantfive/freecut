@@ -8,6 +8,11 @@ export interface ItemMutationLockPartition {
   blockedByLockedLinkedCohort: boolean
 }
 
+export interface TimelineMutationPreflight extends ItemMutationLockPartition {
+  allowed: boolean
+  lockedDestinationTrackIds: string[]
+}
+
 function getLockedTrackIds(tracks: TimelineTrack[]): Set<string> {
   const lockedTrackIds = new Set(
     resolveEffectiveTrackStates(tracks)
@@ -70,5 +75,34 @@ export function partitionItemMutationIdsByLock(params: {
     allowedIds: requestedIds.filter((itemId) => !blockedIds.has(itemId)),
     blockedIds: requestedIds.filter((itemId) => blockedIds.has(itemId)),
     blockedByLockedLinkedCohort,
+  }
+}
+
+/**
+ * Validate an entire public-action mutation cohort before its first write.
+ *
+ * Callers must provide every existing item whose timing, source window, or
+ * existence the action can change. Linked cohorts are intentionally checked
+ * independent of the linked-selection preference: opting out of synchronized
+ * selection must never let an unlocked member peel away from a locked one.
+ * Destination lanes are checked separately so cross-track moves and source
+ * edits cannot write into an effectively locked Layer Group child.
+ */
+export function preflightTimelineMutation(params: {
+  items: TimelineItem[]
+  tracks: TimelineTrack[]
+  itemIds: Iterable<string>
+  destinationTrackIds?: Iterable<string>
+}): TimelineMutationPreflight {
+  const partition = partitionItemMutationIdsByLock(params)
+  const lockedTrackIds = getLockedTrackIds(params.tracks)
+  const lockedDestinationTrackIds = Array.from(new Set(params.destinationTrackIds ?? [])).filter(
+    (trackId) => lockedTrackIds.has(trackId),
+  )
+
+  return {
+    ...partition,
+    allowed: partition.blockedIds.length === 0 && lockedDestinationTrackIds.length === 0,
+    lockedDestinationTrackIds,
   }
 }
