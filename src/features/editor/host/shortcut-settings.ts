@@ -1,4 +1,8 @@
-import { sanitizeHotkeyOverrides, type HotkeyOverrideMap } from '@/config/hotkeys'
+import {
+  resolveHotkeyConfiguration,
+  type HotkeyConflictWarning,
+  type HotkeyOverrideMap,
+} from '@/config/hotkeys'
 import { useSettingsStore } from '@/features/editor/deps/settings'
 import {
   HOST_SHORTCUTS_SCHEMA,
@@ -8,12 +12,19 @@ import {
   type HostShortcutSettings,
 } from './contract'
 
-function normalizeHostShortcutSettings(settings: HostShortcutSettings): HostShortcutSettings {
+function normalizeHostShortcutSettings(settings: HostShortcutSettings): {
+  settings: HostShortcutSettings
+  warnings: HotkeyConflictWarning[]
+} {
   if (settings.schema !== HOST_SHORTCUTS_SCHEMA || settings.version !== HOST_SHORTCUTS_VERSION) {
     throw new Error('Unsupported host shortcut settings schema')
   }
 
-  return createHostShortcutSettings(sanitizeHotkeyOverrides(settings.overrides))
+  const resolution = resolveHotkeyConfiguration(settings.overrides)
+  return {
+    settings: createHostShortcutSettings(resolution.overrides),
+    warnings: resolution.warnings,
+  }
 }
 
 function copyOverrides(overrides: HotkeyOverrideMap): HotkeyOverrideMap {
@@ -50,8 +61,7 @@ export async function mountHostShortcutSettings(host: EditorHost): Promise<() =>
   let inboundRevision = 0
   let writeQueue = Promise.resolve()
 
-  const isCurrent = () =>
-    !disposed && currentOwnership?.epoch === ownership.epoch
+  const isCurrent = () => !disposed && currentOwnership?.epoch === ownership.epoch
 
   const reportFailure = (message: string) => {
     host.notify?.({ kind: 'error', message })
@@ -61,9 +71,20 @@ export async function mountHostShortcutSettings(host: EditorHost): Promise<() =>
     if (!isCurrent()) return
     const normalized = normalizeHostShortcutSettings(settings)
     inboundRevision += 1
+    if (normalized.warnings.length > 0) {
+      for (const warning of normalized.warnings) {
+        host.notify?.({
+          kind: 'conflict',
+          message:
+            warning.resolution === 'fallback'
+              ? `Shortcut conflict for ${warning.command}; using its default binding.`
+              : `Shortcut conflict for ${warning.command}; the binding was disabled.`,
+        })
+      }
+    }
     applyingHostSettings = true
     try {
-      useSettingsStore.getState().replaceHotkeyOverrides(normalized.overrides)
+      useSettingsStore.getState().replaceHotkeyOverrides(normalized.settings.overrides)
     } finally {
       applyingHostSettings = false
     }
