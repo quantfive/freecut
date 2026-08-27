@@ -7,7 +7,7 @@ import type {
   TimelineRevision,
 } from '@/features/editor/codepress/contract'
 import type { FreeCutFrameDocument } from '@/features/editor/codepress/document'
-import { resolveHotkeyConfiguration, type HotkeyOverrideMap } from '@/config/hotkeys'
+import { sanitizeHotkeyOverrides, type HotkeyOverrideMap } from '@/config/hotkeys'
 
 /**
  * The browser surface is deliberately a port.  It knows how to render and
@@ -351,7 +351,7 @@ export function createHostShortcutSettings(
   return {
     schema: HOST_SHORTCUTS_SCHEMA,
     version: HOST_SHORTCUTS_VERSION,
-    overrides: resolveHotkeyConfiguration(overrides).overrides,
+    overrides: sanitizeHotkeyOverrides(overrides),
   }
 }
 

@@ -231,14 +231,12 @@ describe('host shortcut settings round trip', () => {
   })
 
   it('resolves a host collision so capture and bubbling listeners fire one intended action', async () => {
-    const harness = createShortcutHost({
-      schema: 'freecut-host-shortcuts',
-      version: 1,
-      overrides: {
+    const harness = createShortcutHost(
+      createHostShortcutSettings({
         SHUTTLE_PAUSE: 'k',
         EDIT_KEYFRAME_ADD: 'k',
-      },
-    })
+      }),
+    )
     const unmount = await mountHostShortcutSettings(harness.host)
     const addKeyframe = vi.fn()
 
