@@ -1,160 +1,135 @@
-import { act, render } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vite-plus/test'
-import { HOTKEYS } from '@/config/hotkeys'
+import { useSettingsStore } from '@/features/timeline/deps/settings'
+import { usePlaybackStore } from '@/shared/state/playback'
+import { useSourcePlayerStore } from '@/shared/state/source-player'
 import type { SourcePlayerMethods } from '@/shared/state/source-player/types'
-import type { VideoItem } from '@/types/timeline'
 import { usePlaybackShortcuts } from './use-playback-shortcuts'
 
-const { itemsState, playbackState, sourcePlayerState, useHotkeysMock } = vi.hoisted(() => {
-  const playbackState = {
-    currentFrame: 0,
-    isPlaying: false,
-    togglePlayPause: vi.fn(),
+function PlaybackShortcutHarness() {
+  usePlaybackShortcuts({})
+  return <input aria-label="Editable title" />
+}
+
+function sourcePlayerMethods(): SourcePlayerMethods {
+  return {
+    toggle: vi.fn(),
+    pause: vi.fn(),
+    isPlaying: vi.fn(() => true),
     shuttleForward: vi.fn(),
     shuttleReverse: vi.fn(),
-    pause: vi.fn(),
-    setCurrentFrame: vi.fn((frame: number) => {
-      playbackState.currentFrame = frame
-    }),
-    setPreviewFrame: vi.fn(),
-  }
-
-  return {
-    itemsState: { items: [] as Array<{ from: number; durationInFrames: number }> },
-    playbackState,
-    sourcePlayerState: {
-      hoveredPanel: null as 'source' | null,
-      playerMethods: null as SourcePlayerMethods | null,
-    },
-    useHotkeysMock: vi.fn(),
-  }
-})
-
-vi.mock('react-hotkeys-hook', () => ({
-  useHotkeys: useHotkeysMock,
-}))
-
-vi.mock('@/features/timeline/deps/settings', () => ({
-  useResolvedHotkeys: () => ({
-    PLAY_PAUSE: 'space',
-    PREVIOUS_FRAME: 'left',
-    NEXT_FRAME: 'right',
-    GO_TO_START: 'home',
-    GO_TO_END: 'end',
-    NEXT_SNAP_POINT: 'down',
-    PREVIOUS_SNAP_POINT: 'up',
-  }),
-}))
-
-vi.mock('@/shared/state/playback', () => ({
-  usePlaybackStore: Object.assign(
-    (selector: (state: typeof playbackState) => unknown) => selector(playbackState),
-    { getState: () => playbackState },
-  ),
-}))
-
-vi.mock('@/shared/state/preview-bridge', () => ({
-  usePreviewBridgeStore: (selector: (state: { setDisplayedFrame: () => void }) => unknown) =>
-    selector({ setDisplayedFrame: vi.fn() }),
-}))
-
-vi.mock('@/shared/state/source-player', () => ({
-  useSourcePlayerStore: {
-    getState: () => sourcePlayerState,
-  },
-}))
-
-vi.mock('../../stores/items-store', () => ({
-  useItemsStore: {
-    getState: () => itemsState,
-  },
-}))
-
-type HotkeyCallback = (event: { preventDefault: () => void }) => void
-
-function makeVideoItem(overrides: Partial<VideoItem> = {}): VideoItem {
-  return {
-    id: 'clip-1',
-    type: 'video',
-    trackId: 'track-1',
-    from: 10,
-    durationInFrames: 5,
-    label: 'Clip',
-    src: 'clip.mp4',
-    ...overrides,
+    seek: vi.fn(),
+    frameBack: vi.fn(),
+    frameForward: vi.fn(),
+    getDurationInFrames: vi.fn(() => 300),
   }
 }
 
-function ShortcutHarness() {
-  usePlaybackShortcuts({})
-  return null
-}
-
-function getHotkeyCallback(binding: string): HotkeyCallback {
-  const registration = useHotkeysMock.mock.calls.find(([keys]) => keys === binding)
-  expect(registration).toBeDefined()
-  return registration?.[1] as HotkeyCallback
-}
-
-function trigger(callback: HotkeyCallback) {
-  act(() => callback({ preventDefault: vi.fn() }))
-}
-
-describe('usePlaybackShortcuts frame boundaries', () => {
+describe('usePlaybackShortcuts transport routing', () => {
   beforeEach(() => {
-    vi.clearAllMocks()
-    playbackState.currentFrame = 0
-    playbackState.isPlaying = false
-    itemsState.items = [
-      makeVideoItem(),
-      makeVideoItem({ id: 'clip-2', from: 0, durationInFrames: 7 }),
-    ]
-    sourcePlayerState.hoveredPanel = null
-    sourcePlayerState.playerMethods = null
+    useSettingsStore.getState().resetHotkeys()
+    usePlaybackStore.setState({
+      isPlaying: false,
+      playbackRate: 1,
+      transportMode: 'normal',
+      currentFrame: 0,
+      previewFrame: null,
+      previewItemId: null,
+    })
+    useSourcePlayerStore.setState({
+      hoveredPanel: null,
+      playerMethods: null,
+    })
   })
 
-  it('clamps timeline ArrowRight to the final valid frame', () => {
-    playbackState.currentFrame = 13
-    render(<ShortcutHarness />)
+  it('routes J, K, and L to reverse, pause, and forward program transport', () => {
+    render(<PlaybackShortcutHarness />)
 
-    const nextFrame = getHotkeyCallback(HOTKEYS.NEXT_FRAME)
-    trigger(nextFrame)
-    expect(playbackState.currentFrame).toBe(14)
+    fireEvent.keyDown(document, { key: 'l', code: 'KeyL' })
+    expect(usePlaybackStore.getState()).toMatchObject({
+      isPlaying: true,
+      playbackRate: 1,
+      transportMode: 'shuttle',
+    })
 
-    trigger(nextFrame)
-    expect(playbackState.currentFrame).toBe(14)
+    fireEvent.keyDown(document, { key: 'k', code: 'KeyK' })
+    expect(usePlaybackStore.getState()).toMatchObject({
+      isPlaying: false,
+      playbackRate: 1,
+      transportMode: 'normal',
+    })
+
+    fireEvent.keyDown(document, { key: 'j', code: 'KeyJ' })
+    expect(usePlaybackStore.getState()).toMatchObject({
+      isPlaying: true,
+      playbackRate: -1,
+      transportMode: 'shuttle',
+    })
   })
 
-  it('seeks timeline End to the maximum inclusive item frame, or zero when empty', () => {
-    render(<ShortcutHarness />)
+  it('claims K as pause even when program transport is already paused', () => {
+    render(<PlaybackShortcutHarness />)
 
-    const goToEnd = getHotkeyCallback(HOTKEYS.GO_TO_END)
-    trigger(goToEnd)
-    expect(playbackState.currentFrame).toBe(14)
-
-    itemsState.items = []
-    trigger(goToEnd)
-    expect(playbackState.currentFrame).toBe(0)
+    expect(fireEvent.keyDown(document, { key: 'k', code: 'KeyK' })).toBe(false)
+    expect(usePlaybackStore.getState().isPlaying).toBe(false)
   })
 
-  it('clamps source-player End to a nonnegative frame', () => {
-    const playerMethods: SourcePlayerMethods = {
-      toggle: vi.fn(),
-      pause: vi.fn(),
-      isPlaying: vi.fn(() => false),
-      shuttleForward: vi.fn(),
-      shuttleReverse: vi.fn(),
-      seek: vi.fn(),
-      frameBack: vi.fn(),
-      frameForward: vi.fn(),
-      getDurationInFrames: vi.fn(() => 0),
-    }
-    sourcePlayerState.hoveredPanel = 'source'
-    sourcePlayerState.playerMethods = playerMethods
-    render(<ShortcutHarness />)
+  it('routes J, K, and L to the source monitor while it is hovered', () => {
+    const playerMethods = sourcePlayerMethods()
+    useSourcePlayerStore.setState({ hoveredPanel: 'source', playerMethods })
+    render(<PlaybackShortcutHarness />)
 
-    trigger(getHotkeyCallback(HOTKEYS.GO_TO_END))
+    fireEvent.keyDown(document, { key: 'j', code: 'KeyJ' })
+    fireEvent.keyDown(document, { key: 'k', code: 'KeyK' })
+    fireEvent.keyDown(document, { key: 'l', code: 'KeyL' })
 
-    expect(playerMethods.seek).toHaveBeenCalledWith(0)
+    expect(playerMethods.shuttleReverse).toHaveBeenCalledTimes(1)
+    expect(playerMethods.pause).toHaveBeenCalledTimes(1)
+    expect(playerMethods.shuttleForward).toHaveBeenCalledTimes(1)
+    expect(usePlaybackStore.getState().isPlaying).toBe(false)
+  })
+
+  it('protects editable fields from transport shortcuts', () => {
+    render(<PlaybackShortcutHarness />)
+    const input = screen.getByRole('textbox', { name: 'Editable title' })
+
+    fireEvent.keyDown(input, { key: 'j', code: 'KeyJ' })
+    fireEvent.keyDown(input, { key: 'k', code: 'KeyK' })
+    fireEvent.keyDown(input, { key: 'l', code: 'KeyL' })
+
+    expect(usePlaybackStore.getState()).toMatchObject({
+      isPlaying: false,
+      playbackRate: 1,
+      transportMode: 'normal',
+    })
+  })
+
+  it('routes customized transport bindings instead of the defaults', () => {
+    useSettingsStore.getState().replaceHotkeyOverrides({
+      SHUTTLE_REVERSE: 'q',
+      SHUTTLE_PAUSE: 'w',
+      SHUTTLE_FORWARD: 'e',
+    })
+    render(<PlaybackShortcutHarness />)
+
+    fireEvent.keyDown(document, { key: 'l', code: 'KeyL' })
+    expect(usePlaybackStore.getState().isPlaying).toBe(false)
+
+    fireEvent.keyDown(document, { key: 'e', code: 'KeyE' })
+    expect(usePlaybackStore.getState()).toMatchObject({
+      isPlaying: true,
+      playbackRate: 1,
+      transportMode: 'shuttle',
+    })
+
+    fireEvent.keyDown(document, { key: 'w', code: 'KeyW' })
+    expect(usePlaybackStore.getState().isPlaying).toBe(false)
+
+    fireEvent.keyDown(document, { key: 'q', code: 'KeyQ' })
+    expect(usePlaybackStore.getState()).toMatchObject({
+      isPlaying: true,
+      playbackRate: -1,
+      transportMode: 'shuttle',
+    })
   })
 })

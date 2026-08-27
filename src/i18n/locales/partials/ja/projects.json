@@ -447,6 +447,9 @@
         },
         "items": {
           "playPause": "再生/一時停止",
+          "shuttleReverse": "逆方向シャトル",
+          "shuttlePause": "トランスポートを一時停止",
+          "shuttleForward": "順方向シャトル",
           "previousFrame": "前のフレーム",
           "nextFrame": "次のフレーム",
           "goToStart": "先頭に移動",

@@ -15,6 +15,7 @@ const page = {
           headers: ['Action', 'Shortcut'],
           rows: [
             ['Play / Pause', '`Space`'],
+            ['Shuttle reverse / Pause / Forward', '`J` / `K` / `L`'],
             ['Previous / Next frame', '`Left` / `Right`'],
             ['Previous / Next snap point', '`Up` / `Down`'],
             ['Go to start / end', '`Home` / `End`'],
@@ -29,8 +30,7 @@ const page = {
           kind: 'table',
           headers: ['Action', 'Shortcut'],
           rows: [
-            ['Split at playhead', '`Alt+C`'],
-            ['Split at cursor', '`Shift+C`'],
+            ['Split at playhead', '`Shift+C` / `Alt+C`'],
             ['Join', '`Shift+J`'],
             ['Delete / Ripple delete', '`Delete` / `Ctrl+Delete`'],
             ['Insert freeze frame', '`Shift+F`'],
@@ -59,7 +59,7 @@ const page = {
         {
           kind: 'note',
           tone: 'info',
-          text: 'Ripple and rolling are trim behaviors of the **Trim edit** tool, not separate tools with their own shortcut.',
+          text: 'With the **Trim edit** tool, hold `Shift` while dragging for a ripple trim or `Alt` for a rolling trim.',
         },
       ],
     },
@@ -90,7 +90,7 @@ const page = {
             ['Add / Remove marker', '`M` / `Shift+M`'],
             ['Previous / Next marker', '`[` / `]`'],
             ['Clear keyframes', '`Shift+A`'],
-            ['Add keyframe to selected Edit layer', '`K`'],
+            ['Add keyframe to selected Edit layer', '`Shift+K`'],
             ['Keyframe graph / sheet / split view', '`1` / `2` / `3`'],
             ['Previous / Next property keyframe', '`Alt+[` / `Alt+]`'],
             ['Toggle auto-key for active property', '`A`'],

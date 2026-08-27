@@ -7,6 +7,7 @@ import type {
   TimelineRevision,
 } from '@/features/editor/codepress/contract'
 import type { FreeCutFrameDocument } from '@/features/editor/codepress/document'
+import { sanitizeHotkeyOverrides, type HotkeyOverrideMap } from '@/config/hotkeys'
 
 /**
  * The browser surface is deliberately a port.  It knows how to render and
@@ -328,6 +329,32 @@ export interface EditorHostNavigation {
   back(): void
 }
 
+export const HOST_SHORTCUTS_SCHEMA = 'freecut-host-shortcuts'
+export const HOST_SHORTCUTS_VERSION = 1
+
+/** Versioned shortcut payload shared by the host, UI, and agent settings surface. */
+export interface HostShortcutSettings {
+  schema: typeof HOST_SHORTCUTS_SCHEMA
+  version: typeof HOST_SHORTCUTS_VERSION
+  overrides: HotkeyOverrideMap
+}
+
+export interface EditorShortcutPort {
+  getSettings(): Promise<HostShortcutSettings> | HostShortcutSettings
+  setSettings(settings: HostShortcutSettings): Promise<void> | void
+  subscribe?(listener: (settings: HostShortcutSettings) => void): () => void
+}
+
+export function createHostShortcutSettings(
+  overrides: HotkeyOverrideMap = {},
+): HostShortcutSettings {
+  return {
+    schema: HOST_SHORTCUTS_SCHEMA,
+    version: HOST_SHORTCUTS_VERSION,
+    overrides: sanitizeHotkeyOverrides(overrides),
+  }
+}
+
 export interface EditorHost {
   readonly capabilities: EditorCapabilityMap
   load(): Promise<EmbeddedEditorSnapshot> | EmbeddedEditorSnapshot
@@ -343,6 +370,8 @@ export interface EditorHost {
    * the surface calls when it tears the runtime down.
    */
   subscribe?(listener: (snapshot: EmbeddedEditorSnapshot) => void): () => void
+  /** Optional host/agent round-trip for user-configurable keyboard shortcuts. */
+  shortcuts?: EditorShortcutPort
   /** Optional application-issued transcript read/preview boundary. */
   transcript?: EditorTranscriptPort
   navigation?: EditorHostNavigation

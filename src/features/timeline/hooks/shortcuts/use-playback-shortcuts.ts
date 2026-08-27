@@ -80,10 +80,10 @@ export function usePlaybackShortcuts(callbacks: TimelineShortcutCallbacks) {
     [togglePlayPause, isPlaying, callbacks],
   )
 
-  // Shuttle: L advances forward through 1x, 2x, and 4x. Ignore browser key
+  // Shuttle forward advances through 1x, 2x, and 4x. Ignore browser key
   // repeat so one physical press produces one transport transition.
   useHotkeys(
-    'l',
+    hotkeys.SHUTTLE_FORWARD,
     (event) => {
       if (event.repeat) return
       event.preventDefault()
@@ -102,10 +102,10 @@ export function usePlaybackShortcuts(callbacks: TimelineShortcutCallbacks) {
     [callbacks, shuttleForward],
   )
 
-  // Shuttle: J mirrors L in reverse. Browser media stays on a paused visual
+  // Shuttle reverse mirrors forward playback. Browser media stays on a paused visual
   // seek path for negative rates; the Clock still advances at display cadence.
   useHotkeys(
-    'j',
+    hotkeys.SHUTTLE_REVERSE,
     (event) => {
       if (event.repeat) return
       event.preventDefault()
@@ -124,25 +124,24 @@ export function usePlaybackShortcuts(callbacks: TimelineShortcutCallbacks) {
     [callbacks, shuttleReverse],
   )
 
-  // K owns pause only while a transport is active. When already paused it
-  // yields to the existing Edit keyframe shortcut.
+  // Pause always owns its binding, including while already paused, so transport
+  // routing cannot fall through to another command.
   useHotkeys(
-    'k',
+    hotkeys.SHUTTLE_PAUSE,
     (event) => {
       if (event.repeat) return
+      event.preventDefault()
+      event.stopPropagation()
       const { hoveredPanel, playerMethods } = useSourcePlayerStore.getState()
       if (hoveredPanel === 'source' && playerMethods) {
-        if (!playerMethods.isPlaying()) return
-        event.preventDefault()
-        event.stopPropagation()
         playerMethods.pause()
         return
       }
-      if (!usePlaybackStore.getState().isPlaying) return
-      event.preventDefault()
-      event.stopPropagation()
+      const wasPlaying = usePlaybackStore.getState().isPlaying
       pause()
-      callbacks.onPause?.()
+      if (wasPlaying) {
+        callbacks.onPause?.()
+      }
     },
     { ...HOTKEY_OPTIONS, eventListenerOptions: { capture: true } },
     [callbacks, pause],

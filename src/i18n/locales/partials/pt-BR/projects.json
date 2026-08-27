@@ -447,6 +447,9 @@
         },
         "items": {
           "playPause": "Reproduzir/Pausar",
+          "shuttleReverse": "Shuttle reverso",
+          "shuttlePause": "Pausar transporte",
+          "shuttleForward": "Shuttle para frente",
           "previousFrame": "Quadro anterior",
           "nextFrame": "Próximo quadro",
           "goToStart": "Ir para o início",
