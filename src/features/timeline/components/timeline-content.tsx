@@ -882,9 +882,11 @@ export const TimelineContent = memo(function TimelineContent({
   const setPreviewFrame = usePlaybackStore((s) => s.setPreviewFrame)
   const setPreviewFrameRef = useRef(setPreviewFrame)
   setPreviewFrameRef.current = setPreviewFrame
+  const previewInteractionEpochRef = useRef(0)
   const previewRafRef = useRef<number | null>(null)
   const previewDelayTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const cancelPendingHoverPreview = useCallback(() => {
+    previewInteractionEpochRef.current += 1
     if (previewDelayTimeoutRef.current !== null) {
       clearTimeout(previewDelayTimeoutRef.current)
       previewDelayTimeoutRef.current = null
@@ -1410,6 +1412,19 @@ export const TimelineContent = memo(function TimelineContent({
     }
   }
 
+  const handleTimelineClickCapture = useCallback(
+    (e: React.MouseEvent) => {
+      if (e.button !== 0) return
+      const target = e.target as HTMLElement
+      if (!target.closest('[data-track-id]')) return
+
+      // Item clicks stop propagation, so invalidate hover work here before the
+      // item's click handler commits its own geometry-derived seek.
+      cancelPendingHoverPreview()
+    },
+    [cancelPendingHoverPreview],
+  )
+
   // Build snap targets for razor shift-snap (item edges, grid, playhead, markers)
   // Called on-demand during mouse move — reads stores directly to avoid subscriptions
   const buildRazorSnapTargets = useCallback((): RazorSnapTarget[] => {
@@ -1434,37 +1449,33 @@ export const TimelineContent = memo(function TimelineContent({
   }, [])
 
   // Preview scrubber: show ghost playhead on hover
-  const handleTimelineMouseDownCapture = useCallback((e: React.MouseEvent) => {
-    if (shouldIgnoreTimelineMouseDownCapture(e.button)) return
+  const handleTimelineMouseDownCapture = useCallback(
+    (e: React.MouseEvent) => {
+      if (shouldIgnoreTimelineMouseDownCapture(e.button)) return
 
-    const target = e.target as HTMLElement
-    if (
-      !target.closest('[data-track-id]') ||
-      target.closest('[data-item-id]') ||
-      target.closest('[data-timeline-density-bucket]')
-    ) {
-      return
-    }
+      const target = e.target as HTMLElement
+      if (!target.closest('[data-track-id]')) return
 
-    // A press on track background is a potential marquee gesture. Freeze the
-    // skim target immediately so the few pixels before marquee activation do
-    // not briefly seek the preview away from the mouse-down frame.
-    marqueePointerDownRef.current = true
-    if (marqueeReleaseRafRef.current !== null) {
-      cancelAnimationFrame(marqueeReleaseRafRef.current)
-      marqueeReleaseRafRef.current = null
-    }
-    const playback = usePlaybackStore.getState()
-    marqueeStartPreviewFrameRef.current = playback.previewFrame
-    marqueeReleasePreviewRef.current =
-      playback.previewFrame === null
-        ? null
-        : { frame: playback.previewFrame, itemId: playback.previewItemId ?? undefined }
-    if (previewRafRef.current !== null) {
-      cancelAnimationFrame(previewRafRef.current)
-      previewRafRef.current = null
-    }
-  }, [])
+      // Start a new interaction epoch before item/background handlers run. A
+      // hover callback already dequeued by the browser can no longer take display
+      // ownership during this pointer interaction.
+      cancelPendingHoverPreview()
+      if (target.closest('[data-item-id]') || target.closest('[data-timeline-density-bucket]'))
+        return
+
+      // A press on track background is a potential marquee gesture. Freeze the
+      // skim target immediately so the few pixels before marquee activation do
+      // not briefly seek the preview away from the mouse-down frame.
+      marqueePointerDownRef.current = true
+      const playback = usePlaybackStore.getState()
+      marqueeStartPreviewFrameRef.current = playback.previewFrame
+      marqueeReleasePreviewRef.current =
+        playback.previewFrame === null
+          ? null
+          : { frame: playback.previewFrame, itemId: playback.previewItemId ?? undefined }
+    },
+    [cancelPendingHoverPreview],
+  )
 
   const finishMarqueePointerGesture = useCallback((e: MouseEvent) => {
     const wasMarqueePointerGesture = marqueePointerDownRef.current
@@ -1487,10 +1498,15 @@ export const TimelineContent = memo(function TimelineContent({
     if (pointerIsInsideTimeline && releasePreview) {
       // Complete marquee teardown first. Its mouseup path may clear transient
       // preview state later in the same event dispatch.
-      marqueeReleaseRafRef.current = requestAnimationFrame(() => {
-        marqueeReleaseRafRef.current = null
+      const previewEpoch = previewInteractionEpochRef.current
+      const releaseRafId = requestAnimationFrame(() => {
+        if (marqueeReleaseRafRef.current === releaseRafId) {
+          marqueeReleaseRafRef.current = null
+        }
+        if (previewEpoch !== previewInteractionEpochRef.current) return
         setPreviewFrameRef.current(releasePreview.frame, releasePreview.itemId)
       })
+      marqueeReleaseRafRef.current = releaseRafId
     } else {
       setPreviewFrameRef.current(null)
     }
@@ -1612,21 +1628,29 @@ export const TimelineContent = memo(function TimelineContent({
       // normal hover responsive while allowing Ctrl/Cmd-wheel to cancel the
       // pending preview before it can compete with the first zoom frame.
       cancelPendingHoverPreview()
+      const previewEpoch = previewInteractionEpochRef.current
       const schedulePreviewFrame = () => {
-        previewDelayTimeoutRef.current = null
-        previewRafRef.current = requestAnimationFrame(() => {
-          previewRafRef.current = null
+        if (previewEpoch !== previewInteractionEpochRef.current) return
+        const previewRafId = requestAnimationFrame(() => {
+          if (previewRafRef.current === previewRafId) {
+            previewRafRef.current = null
+          }
+          if (previewEpoch !== previewInteractionEpochRef.current) return
           withPerfMeasure('tl.raf.previewHover', () => setPreviewFrameRef.current(frame, itemId))
         })
+        previewRafRef.current = previewRafId
       }
       if (
         useItemsStore.getState().items.length >= DENSE_TIMELINE_TRACK_ITEM_THRESHOLD &&
         usePlaybackStore.getState().previewFrame === null
       ) {
-        previewDelayTimeoutRef.current = setTimeout(
-          schedulePreviewFrame,
-          DENSE_TIMELINE_HOVER_PREVIEW_DELAY_MS,
-        )
+        const previewDelayTimeout = setTimeout(() => {
+          if (previewDelayTimeoutRef.current === previewDelayTimeout) {
+            previewDelayTimeoutRef.current = null
+          }
+          schedulePreviewFrame()
+        }, DENSE_TIMELINE_HOVER_PREVIEW_DELAY_MS)
+        previewDelayTimeoutRef.current = previewDelayTimeout
       } else {
         schedulePreviewFrame()
       }
