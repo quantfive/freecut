@@ -48,12 +48,21 @@ vi.mock('@/features/timeline/deps/analysis', () => ({
 
 vi.mock('@/features/timeline/deps/settings', () => ({
   useResolvedHotkeys: () => ({
+    JOIN_ITEMS: 'shift+j',
+    FREEZE_FRAME: 'shift+f',
+    DELETE_SELECTED: 'delete',
     RIPPLE_DELETE: 'mod+backspace',
   }),
 }))
 
 vi.mock('@/config/hotkeys', () => ({
-  formatHotkeyBinding: (binding: string) => (binding === 'mod+backspace' ? 'Ctrl + Backspace' : ''),
+  formatHotkeyBinding: (binding: string) =>
+    ({
+      'mod+backspace': 'Ctrl + Backspace',
+      'shift+j': 'Shift + J',
+      'shift+f': 'Shift + F',
+      delete: 'Delete',
+    })[binding] ?? '',
 }))
 
 function renderContextMenu(overrides: Partial<ComponentProps<typeof ItemContextMenu>> = {}) {
