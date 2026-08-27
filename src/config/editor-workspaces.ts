@@ -18,6 +18,7 @@ export type EditorSidebarTab =
   | 'lottie'
   | 'transcript'
   | 'ai'
+  | `host:${string}`
 export type EditorClipInspectorTab = 'video' | 'motion' | 'audio' | 'effects'
 
 /** The slice of editor UI state that a workspace controls. */
@@ -91,8 +92,17 @@ const CLIP_INSPECTOR_TABS: readonly EditorClipInspectorTab[] = [
   'effects',
 ]
 
+/**
+ * Host-registered sidebar modules are namespaced under `host:` so persisted
+ * layouts and host-mode tab resets can recognize them without knowing the
+ * host's module ids.
+ */
+export function isHostSidebarTab(value: unknown): value is `host:${string}` {
+  return typeof value === 'string' && value.startsWith('host:')
+}
+
 function isSidebarTab(value: unknown): value is EditorSidebarTab {
-  return SIDEBAR_TABS.includes(value as EditorSidebarTab)
+  return SIDEBAR_TABS.includes(value as EditorSidebarTab) || isHostSidebarTab(value)
 }
 
 function isClipInspectorTab(value: unknown): value is EditorClipInspectorTab {

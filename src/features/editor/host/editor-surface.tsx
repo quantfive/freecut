@@ -1,10 +1,11 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type RefObject } from 'react'
 import { I18nextProvider } from 'react-i18next'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { GlobalTooltip } from '@/components/ui/global-tooltip'
 import { ErrorBoundary } from '@/app/error-boundary'
 import { i18n, i18nReady } from '@/i18n'
 import { LoadedEditor } from '@/features/editor/components/editor'
+import { useEditorStore } from '@/shared/state/editor'
 import {
   DEFAULT_HOST_CAPABILITIES,
   isHostCapabilityEnabled,
@@ -15,11 +16,34 @@ import { EditorHostProvider } from './context-provider'
 import { HostCaptionEditorProvider } from './caption-editor-context'
 import { HostTranscriptEditorProvider } from './transcript-editor-context'
 import { EmbeddedEditorHostRuntime } from './runtime'
+import { isHostRailTab } from './sidebar-rail'
 import '@/index.css'
 
 interface HostSurfaceState {
   snapshot: EmbeddedEditorSnapshot
   runtime: EmbeddedEditorHostRuntime
+}
+
+/**
+ * Imperative handle the host receives through `apiRef`.  Lets the host drive
+ * the sidebar without reaching into editor stores — e.g. auto-opening a
+ * registered sidebar module when host-side work needs attention.
+ */
+export interface FreeCutEditorSurfaceApi {
+  /**
+   * Select a registered `sidebarModules` entry's tab and open the panel.
+   * No-ops for an id the host never registered, and for one its `sidebarRail`
+   * suppresses — opening a tab with no rail button would strand the user, and
+   * the next authoritative snapshot would reset it anyway.
+   */
+  openSidebarModule(id: string): void
+  /** Close the left sidebar panel. */
+  closeSidebar(): void
+}
+
+interface FreeCutEditorSurfaceProps {
+  host: EditorHost
+  apiRef?: RefObject<FreeCutEditorSurfaceApi | null>
 }
 
 /**
@@ -33,7 +57,7 @@ interface HostSurfaceState {
  * know that chrome exists, and never subtracts anything from `100vh`/`100dvh`.
  * The container must therefore have a definite height.
  */
-export function FreeCutEditorSurface({ host }: { host: EditorHost }) {
+export function FreeCutEditorSurface({ host, apiRef }: FreeCutEditorSurfaceProps) {
   const [state, setState] = useState<HostSurfaceState | null>(null)
   const [error, setError] = useState<Error | null>(null)
 
@@ -63,6 +87,28 @@ export function FreeCutEditorSurface({ host }: { host: EditorHost }) {
       unsubscribe = undefined
     }
   }, [host])
+
+  // The host drives its registered sidebar modules through `apiRef` over the
+  // same editor store the MediaSidebar reads, rather than reaching into the
+  // store itself.  Opening fails closed for any tab the rail does not show.
+  useEffect(() => {
+    if (!apiRef || !state) return
+    apiRef.current = {
+      openSidebarModule: (id) => {
+        if (!isHostRailTab(`host:${id}`, host)) return
+        const { setActiveTab, toggleLeftSidebar } = useEditorStore.getState()
+        setActiveTab(`host:${id}`)
+        if (!useEditorStore.getState().leftSidebarOpen) toggleLeftSidebar()
+      },
+      closeSidebar: () => {
+        const store = useEditorStore.getState()
+        if (store.leftSidebarOpen) store.toggleLeftSidebar()
+      },
+    }
+    return () => {
+      apiRef.current = null
+    }
+  }, [apiRef, state, host])
 
   if (error) {
     return (

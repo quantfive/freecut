@@ -17,12 +17,12 @@ import { useSelectionStore } from '@/shared/state/selection'
 import { useGizmoStore, useMaskEditorStore } from '@/features/editor/deps/preview'
 import { peekSharedPreviewAudioContext } from '@/features/editor/deps/composition-runtime'
 import {
-  isHostCapabilityEnabled,
   type EmbeddedEditorSnapshot,
   type EditorHost,
   type HostEditRejectionDetail,
   type HostNotice,
 } from './contract'
+import { hostRailFallbackTab, isHostRailTab } from './sidebar-rail'
 import {
   HostEditorController,
   NO_SUPPORTED_EDIT_REASON,
@@ -179,20 +179,19 @@ export class EmbeddedEditorHostRuntime implements EmbeddedEditorHostRuntimeContr
       // The first host slice exposes the normal Edit layout only.  Set this
       // in memory so a local user's persisted Color/Motion preference cannot
       // activate an unsupported host workspace.  Preserve the active sidebar
-      // tab when host mode still shows it: resetting it on every authoritative
-      // snapshot would unmount the transcript panel mid-apply, losing its
-      // applied/conflict state before the user can see it.
+      // tab while the rail still shows it: resetting it on every authoritative
+      // snapshot would unmount the transcript panel mid-apply or a host module
+      // mid-job.  Both the test and the fallback read the same rail resolution
+      // the sidebar renders from, so a host that reorders or suppresses tabs
+      // through `sidebarRail` cannot strand `activeTab` on a tab with no rail
+      // button — and the fallback is the rail's head, not a hardcoded `media`,
+      // since a host may drop media from its rail entirely.
       const currentTab = useEditorStore.getState().activeTab
-      const currentTabVisibleInHostMode =
-        currentTab === 'media' ||
-        (currentTab === 'text' &&
-          isHostCapabilityEnabled(this.host.capabilities, 'timeline.add')) ||
-        (currentTab === 'transcript' &&
-          isHostCapabilityEnabled(this.host.capabilities, 'media.transcription') &&
-          this.host.transcript !== undefined)
       useEditorStore.setState({
         workspace: 'edit',
-        activeTab: currentTabVisibleInHostMode ? currentTab : 'media',
+        activeTab: isHostRailTab(currentTab, this.host)
+          ? currentTab
+          : hostRailFallbackTab(this.host),
       })
 
       const mediaItems = hostAssetsToMediaMetadata(snapshot.assets)

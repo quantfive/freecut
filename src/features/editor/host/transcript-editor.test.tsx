@@ -4,6 +4,26 @@ import { readFileSync } from 'node:fs'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vite-plus/test'
 
+// Some machines run jsdom with an opaque origin, leaving localStorage
+// undefined; the zustand persist middleware captures it at store creation
+// (import time).  Install a stub before imports evaluate — a no-op wherever
+// the environment provides a real localStorage (e.g. CI).
+vi.hoisted(() => {
+  if (typeof globalThis.localStorage !== 'undefined') return
+  const backing = new Map<string, string>()
+  const stub: Storage = {
+    getItem: (key: string) => backing.get(key) ?? null,
+    setItem: (key: string, value: string) => void backing.set(key, String(value)),
+    removeItem: (key: string) => void backing.delete(key),
+    clear: () => backing.clear(),
+    key: () => null,
+    get length() {
+      return backing.size
+    },
+  }
+  Object.defineProperty(globalThis, 'localStorage', { value: stub, configurable: true })
+})
+
 // The transcript tab renders inside the real MediaSidebar; the media library
 // grid is unrelated to the tab lifecycle and stays stubbed out.
 vi.mock('@/features/editor/deps/media-library', async (importOriginal) => {

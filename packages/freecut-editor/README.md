@@ -63,6 +63,48 @@ provider details, URLs, paths, and media bytes remain host-owned.
 The same 0.3.0 surface retains the host-backed caption tracks, bounded cues,
 caption styles, and display toggles from 0.2.0.
 
+The 0.3.8 surface lets the host register its own modules into the editor's
+left sidebar rail. `EditorHost.sidebarModules` entries (`{ id, label, icon,
+Panel }`) appear as `host:<id>` rail tabs; the surface renders each module's
+`Panel` in the sidebar panel area, mounts it on first activation, and keeps it
+mounted across tab switches and authoritative snapshot installs so in-flight
+host work survives. Each `Panel` receives `{ active, collapsed, width }`, so it
+can pause work while it is not the selected tab and adapt to a sidebar resize
+without measuring the DOM itself. Icons and panels cross the package boundary
+as React components (react/react-dom are peer dependencies).
+
+`FreeCutEditorSurface` also accepts an optional `apiRef` that receives a
+`FreeCutEditorSurfaceApi` — `openSidebarModule(id)` selects a module's tab and
+opens the panel (ids the rail does not show fail closed), and `closeSidebar()`
+closes the panel.
+
+By default the rail is the capability-gated built-ins (`media`, then `text` and
+`transcript` when the host's capabilities allow them) followed by the modules in
+registration order. `EditorHost.sidebarRail` replaces that with an explicit
+rail: the exact tabs, in the exact order, with anything omitted hidden — which
+is how a host both reorders the rail and suppresses built-ins it does not want.
+Capability gating still runs first, so a rail can only ever subtract from and
+reorder what the capabilities already allow, never add to it. Ids matching no
+available tab are dropped, as are repeats after the first, and a rail that
+matches nothing at all falls back to the default rather than leaving the editor
+with no navigation.
+
+```tsx
+const apiRef = useRef<FreeCutEditorSurfaceApi>(null)
+
+const host: EditorHost = {
+  // ...capabilities, load, resolveMedia, submitEdit
+  sidebarModules: [
+    { id: 'transcribe', label: 'Transcribe', icon: Captions, Panel: TranscribePanel },
+    { id: 'brand-kit', label: 'Brand kit', icon: Palette, Panel: BrandKitPanel },
+  ],
+  // Host module first, no built-in `text` tab.
+  sidebarRail: ['host:transcribe', 'media', 'host:brand-kit'],
+}
+
+<FreeCutEditorSurface host={host} apiRef={apiRef} />
+```
+
 This package is built from a specific FreeCut commit. To create the local
 consumer artifact from a clean checkout, run:
 

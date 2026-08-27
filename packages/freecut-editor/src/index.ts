@@ -1,4 +1,5 @@
 export { FreeCutEditorSurface } from '@/features/editor/host/editor-surface'
+export type { FreeCutEditorSurfaceApi } from '@/features/editor/host/editor-surface'
 export { EditorHostProvider } from '@/features/editor/host/context-provider'
 export {
   DEFAULT_HOST_CAPABILITIES,
@@ -14,6 +15,7 @@ export {
   createLocalEditorHost,
   isHostCapabilityEnabled,
 } from '@/features/editor/host/contract'
+export type { EditorSidebarTab } from '@/config/editor-workspaces'
 export type { EditorHostContextValue } from '@/features/editor/host/context'
 export type { EditorHostProviderProps } from '@/features/editor/host/context-provider'
 export type {
@@ -21,6 +23,8 @@ export type {
   EditorCapabilityMap,
   EditorHost,
   EditorHostNavigation,
+  EditorSidebarModule,
+  EditorSidebarModulePanelProps,
   EmbeddedEditorAsset,
   EmbeddedEditorProject,
   EmbeddedEditorSnapshot,

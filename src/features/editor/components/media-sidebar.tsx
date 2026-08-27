@@ -1,4 +1,14 @@
-import { useCallback, useMemo, useRef, useEffect, memo, lazy, Suspense, useState } from 'react'
+import {
+  useCallback,
+  useMemo,
+  useRef,
+  useEffect,
+  memo,
+  lazy,
+  Suspense,
+  useState,
+  type ComponentType,
+} from 'react'
 import { useTranslation } from 'react-i18next'
 import {
   ChevronDown,
@@ -78,10 +88,96 @@ import {
   clampLeftEditorSidebarWidth,
   getEditorLayout,
 } from '@/config/editor-layout'
+import { isHostSidebarTab, type EditorSidebarTab } from '@/config/editor-workspaces'
+import type { EditorHost, EditorSidebarModule } from '../host/contract'
+import { hostRailTabIds } from '../host/sidebar-rail'
 
 const logger = createLogger('MediaSidebar')
 const TEXT_TEMPLATE_PREVIEW_SHELL =
   'w-full aspect-video rounded-sm border border-border bg-slate-950'
+
+/**
+ * Host-registered module panels — mounted on first activation, then kept
+ * mounted (hidden) across tab switches so in-flight host work (e.g. job
+ * polling) survives the user browsing other tabs.  Extracted from the
+ * MediaSidebar body both for readability and to keep the sidebar's own
+ * complexity inside the changed-code health budget.
+ */
+function HostModulePanels({
+  modules,
+  activeTab,
+  collapsed,
+  width,
+}: {
+  modules: readonly EditorSidebarModule[]
+  activeTab: EditorSidebarTab
+  collapsed: boolean
+  width: number
+}) {
+  const [activatedTabs, setActivatedTabs] = useState<ReadonlySet<string>>(() =>
+    isHostSidebarTab(activeTab) ? new Set([activeTab]) : new Set(),
+  )
+  useEffect(() => {
+    if (!isHostSidebarTab(activeTab)) return
+    setActivatedTabs((previous) =>
+      previous.has(activeTab) ? previous : new Set(previous).add(activeTab),
+    )
+  }, [activeTab])
+  return (
+    <>
+      {modules.map((module) => {
+        const tabId = `host:${module.id}` as const
+        return (
+          <div
+            key={tabId}
+            className={`min-h-0 flex-1 overflow-hidden ${activeTab === tabId ? 'block' : 'hidden'}`}
+          >
+            {activatedTabs.has(tabId) && (
+              <module.Panel active={activeTab === tabId} collapsed={collapsed} width={width} />
+            )}
+          </div>
+        )
+      })}
+    </>
+  )
+}
+
+type RailCategory = {
+  id: EditorSidebarTab
+  icon: ComponentType<{ className?: string }>
+  label: string
+}
+
+/** Host-registered modules join the rail as `host:<id>` tabs after the built-in categories. */
+function hostModuleRailCategories(
+  host: { sidebarModules?: readonly EditorSidebarModule[] } | null | undefined,
+) {
+  // Labels are host-owned and already localized.
+  return (host?.sidebarModules ?? []).map((module) => ({
+    id: `host:${module.id}` as const,
+    icon: module.icon,
+    label: module.label,
+  }))
+}
+
+/**
+ * Rail categories host mode shows, in the order `hostRailTabIds` resolved —
+ * capability-gated built-ins plus registered modules by default, or exactly
+ * the host's `sidebarRail` when it declared one.  The local editor rail is
+ * unaffected; only host mode consults the host contract.
+ */
+function visibleRailCategories(
+  categories: readonly RailCategory[],
+  hostMode: boolean,
+  host: EditorHost | undefined,
+): readonly RailCategory[] {
+  if (!hostMode || !host) return categories
+  const byId = new Map(categories.map((category) => [category.id, category]))
+  return hostRailTabIds(host).flatMap((id) => {
+    const category = byId.get(id)
+    return category ? [category] : []
+  })
+}
 
 function renderTextTemplatePreview(preset?: TextStylePreset) {
   if (!preset) {
@@ -288,12 +384,18 @@ const TEXT_TEMPLATE_GROUPS: ReadonlyArray<{
 const DEFAULT_TEXT_TEMPLATE_LABEL = 'Text'
 const ADD_TEXT_TEMPLATE_LABEL = 'Add Text'
 
+// The sidebar is the editor's tab orchestrator: one branch per built-in panel
+// times drag/drop, resize, and host-mode gating. The host-module additions are
+// extracted (HostModulePanels, visibleRailCategories above); what remains is
+// the pre-existing tab matrix, now covered by real-sidebar tests in
+// src/features/editor/host/. Tracked as a known orchestration hotspot, same as
+// the preview/timeline modules ignored in .fallowrc.json.
+// fallow-ignore-next-line complexity
 export const MediaSidebar = memo(function MediaSidebar() {
   const { t } = useTranslation()
   const hostMode = useEditorHostMode()
   const { host } = useEditorHostContext()
   const canAddTimeline = useEditorCapability('timeline.add')
-  const canTranscribe = useEditorCapability('media.transcription')
   const editorDensity = useSettingsStore((s) => s.editorDensity)
   const editorLayout = getEditorLayout(editorDensity)
   // Use granular selectors - Zustand v5 best practice
@@ -559,14 +661,11 @@ export const MediaSidebar = memo(function MediaSidebar() {
     { id: 'transcript' as const, icon: Captions, label: t('transcript.tabLabel') },
     { id: 'ai' as const, icon: WandSparkles, label: t('editor.mediaSidebar.ai') },
   ]
-  const visibleCategories = hostMode
-    ? categories.filter(
-        ({ id }) =>
-          id === 'media' ||
-          (id === 'text' && canAddTimeline) ||
-          (id === 'transcript' && canTranscribe && !!host?.transcript),
-      )
-    : categories
+  const mergedCategories: readonly RailCategory[] = [
+    ...categories,
+    ...hostModuleRailCategories(host),
+  ]
+  const visibleCategories = visibleRailCategories(mergedCategories, hostMode, host)
 
   const shouldSuppressGeneratedItemClick = useCallback(() => {
     if (!suppressGeneratedItemClickRef.current) {
@@ -709,7 +808,7 @@ export const MediaSidebar = memo(function MediaSidebar() {
               style={{ height: EDITOR_LAYOUT_CSS_VALUES.sidebarHeaderHeight }}
             >
               <span className="text-sm font-medium text-foreground">
-                {categories.find((c) => c.id === activeTab)?.label}
+                {mergedCategories.find((c) => c.id === activeTab)?.label}
               </span>
               <Button
                 variant="ghost"
@@ -1192,6 +1291,13 @@ export const MediaSidebar = memo(function MediaSidebar() {
                 </Suspense>
               )}
             </div>
+
+            <HostModulePanels
+              modules={host?.sidebarModules ?? []}
+              activeTab={activeTab}
+              collapsed={!leftSidebarOpen}
+              width={sidebarWidth}
+            />
           </>
         </div>
         {/* Resize Handle */}
