@@ -2,19 +2,17 @@
  * Timeline in/out shortcuts: I, O, Shift+I/O, Alt+X.
  */
 
-import { useHotkeys } from 'react-hotkeys-hook'
-import { HOTKEY_OPTIONS, getRuntimeHotkeyBinding } from '@/config/hotkeys'
+import {
+  COMMAND_HOTKEYS as hotkeys,
+  useCommandHotkey,
+  useDerivedCommandHotkey,
+} from '@/hooks/use-hotkey-registration'
+import { HOTKEY_OPTIONS } from '@/config/hotkeys'
 import { usePlaybackStore } from '@/shared/state/playback'
 import { useTimelineStore } from '../../stores/timeline-store'
-import { useResolvedHotkeys, useRuntimeHotkeys } from '@/features/timeline/deps/settings'
 
 export function useInOutShortcuts() {
-  const resolvedHotkeys = useResolvedHotkeys()
-  const hotkeys = useRuntimeHotkeys()
-  const markInAtPreview = getRuntimeHotkeyBinding(resolvedHotkeys, 'MARK_IN', 'preview')
-  const markOutAtPreview = getRuntimeHotkeyBinding(resolvedHotkeys, 'MARK_OUT', 'preview')
-
-  useHotkeys(
+  useCommandHotkey(
     hotkeys.MARK_IN,
     (event) => {
       event.preventDefault()
@@ -25,18 +23,19 @@ export function useInOutShortcuts() {
     [],
   )
 
-  useHotkeys(
-    markInAtPreview ?? [],
+  useDerivedCommandHotkey(
+    'MARK_IN',
+    'preview',
     (event) => {
       event.preventDefault()
       const { previewFrame, currentFrame } = usePlaybackStore.getState()
       useTimelineStore.getState().setInPoint(previewFrame ?? currentFrame)
     },
     HOTKEY_OPTIONS,
-    [markInAtPreview],
+    [],
   )
 
-  useHotkeys(
+  useCommandHotkey(
     hotkeys.MARK_OUT,
     (event) => {
       event.preventDefault()
@@ -47,18 +46,19 @@ export function useInOutShortcuts() {
     [],
   )
 
-  useHotkeys(
-    markOutAtPreview ?? [],
+  useDerivedCommandHotkey(
+    'MARK_OUT',
+    'preview',
     (event) => {
       event.preventDefault()
       const { previewFrame, currentFrame } = usePlaybackStore.getState()
       useTimelineStore.getState().setOutPoint(previewFrame ?? currentFrame)
     },
     HOTKEY_OPTIONS,
-    [markOutAtPreview],
+    [],
   )
 
-  useHotkeys(
+  useCommandHotkey(
     hotkeys.CLEAR_IN_OUT,
     (event) => {
       event.preventDefault()

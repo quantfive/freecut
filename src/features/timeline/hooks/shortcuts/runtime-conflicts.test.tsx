@@ -3,7 +3,6 @@ import { beforeEach, describe, expect, it, vi } from 'vite-plus/test'
 import { useHotkeys } from 'react-hotkeys-hook'
 import {
   HOTKEY_OPTIONS,
-  HOTKEYS,
   getRuntimeHotkeyBinding,
   resolveHotkeys,
   type HotkeyBindingMap,
@@ -22,15 +21,6 @@ const runtimeHotkeysOverride = vi.hoisted(() => ({
   current: null as HotkeyBindingMap | null,
 }))
 
-function runtimePrimaryBindings(bindings: HotkeyBindingMap): HotkeyBindingMap {
-  return Object.fromEntries(
-    (Object.keys(HOTKEYS) as HotkeyKey[]).map((command) => [
-      command,
-      getRuntimeHotkeyBinding(bindings, command) ?? '',
-    ]),
-  ) as HotkeyBindingMap
-}
-
 const originalPlaybackActions = {
   togglePlayPause: usePlaybackStore.getState().togglePlayPause,
   shuttleForward: usePlaybackStore.getState().shuttleForward,
@@ -42,8 +32,15 @@ vi.mock('@/features/timeline/deps/settings', async (importOriginal) => {
   return {
     ...actual,
     useResolvedHotkeys: () => runtimeHotkeysOverride.current ?? actual.useResolvedHotkeys(),
-    useRuntimeHotkeys: () =>
-      runtimePrimaryBindings(runtimeHotkeysOverride.current ?? actual.useResolvedHotkeys()),
+  }
+})
+
+vi.mock('@/hooks/use-runtime-hotkey-binding', () => {
+  const getBindings = () =>
+    runtimeHotkeysOverride.current ?? resolveHotkeys(useSettingsStore.getState().hotkeyOverrides)
+  return {
+    useRuntimeHotkeyBinding: (command: HotkeyKey, variant: 'primary' | 'preview' = 'primary') =>
+      getRuntimeHotkeyBinding(getBindings(), command, variant) ?? '',
   }
 })
 
@@ -173,6 +170,39 @@ describe('runtime shortcut ownership', () => {
 
     expect(togglePlayPause).toHaveBeenCalledTimes(1)
     expect(shuttleReverse).not.toHaveBeenCalled()
+  })
+
+  it('executes exactly one action through a dead-claimant platform bridge', () => {
+    runtimeHotkeysOverride.current = {
+      ...resolveHotkeys(),
+      PLAY_PAUSE: 'meta+f10',
+      SHUTTLE_REVERSE: 'mod+f10',
+      SHUTTLE_PAUSE: 'ctrl+f10',
+    }
+    const togglePlayPause = vi.fn(originalPlaybackActions.togglePlayPause)
+    const shuttleReverse = vi.fn(originalPlaybackActions.shuttleReverse)
+    const pause = vi.fn()
+    usePlaybackStore.setState({ togglePlayPause, shuttleReverse, pause })
+    render(<FullRuntimeConflictHarness />)
+
+    const event = new KeyboardEvent('keydown', {
+      key: 'F10',
+      code: 'F10',
+      ctrlKey: true,
+      bubbles: true,
+      cancelable: true,
+    })
+    const preventDefault = vi.spyOn(event, 'preventDefault')
+    const stopPropagation = vi.spyOn(event, 'stopPropagation')
+    document.dispatchEvent(event)
+
+    expect(pause).toHaveBeenCalledTimes(1)
+    expect(shuttleReverse).not.toHaveBeenCalled()
+    expect(togglePlayPause).not.toHaveBeenCalled()
+    // react-hotkeys-hook applies preventDefault from HOTKEY_OPTIONS before the
+    // preserved winner callback applies it; the dead claimant adds no calls.
+    expect(preventDefault).toHaveBeenCalledTimes(2)
+    expect(stopPropagation).toHaveBeenCalledTimes(1)
   })
 
   it('gives playback sole ownership across playback and split shortcut hooks', () => {

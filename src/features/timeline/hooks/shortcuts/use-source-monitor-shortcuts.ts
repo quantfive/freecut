@@ -9,17 +9,14 @@
  * source monitor is hovered/focused.
  */
 
-import { useHotkeys } from 'react-hotkeys-hook'
+import { COMMAND_HOTKEYS as hotkeys, useCommandHotkey } from '@/hooks/use-hotkey-registration'
 import { HOTKEY_OPTIONS } from '@/config/hotkeys'
 import { useEditorStore } from '@/shared/state/editor'
 import { performInsertEdit, performOverwriteEdit } from '../../stores/actions/source-edit-actions'
-import { useRuntimeHotkeys } from '@/features/timeline/deps/settings'
 
 export function useSourceMonitorShortcuts() {
-  const hotkeys = useRuntimeHotkeys()
-
   // Insert Edit: , (comma) — works globally when source monitor is open
-  useHotkeys(
+  useCommandHotkey(
     hotkeys.INSERT_EDIT,
     (event) => {
       event.preventDefault()
@@ -32,7 +29,7 @@ export function useSourceMonitorShortcuts() {
   )
 
   // Overwrite Edit: . (period) — works globally when source monitor is open
-  useHotkeys(
+  useCommandHotkey(
     hotkeys.OVERWRITE_EDIT,
     (event) => {
       event.preventDefault()

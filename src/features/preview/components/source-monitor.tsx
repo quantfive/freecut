@@ -71,7 +71,8 @@ import { formatTimecodeCompact } from '@/shared/utils/time-utils'
 import { getPreviewPixelSnapSize } from '../utils/preview-pixel-snap'
 import type { TimelineTrack } from '@/types/timeline'
 import { doesHotkeyEventMatchBinding, formatHotkeyBinding } from '@/config/hotkeys'
-import { useResolvedHotkeys, useRuntimeHotkeys } from '@/features/preview/deps/settings'
+import { useCommandHotkeyBinding } from '@/hooks/use-hotkey-registration'
+import { useResolvedHotkeys } from '@/features/preview/deps/settings'
 
 interface SourceMonitorProps {
   mediaId: string
@@ -208,7 +209,6 @@ const SourceMonitorContent = memo(function SourceMonitorContent({
   const [blobUrl, setBlobUrl] = useState<string>('')
   const media = useMediaLibraryStore((s) => s.mediaById[mediaId])
   const hotkeys = useResolvedHotkeys()
-  const runtimeHotkeys = useRuntimeHotkeys()
 
   // Sync current media ID into source player store for I/O points
   useEffect(() => {
@@ -281,7 +281,6 @@ const SourceMonitorContent = memo(function SourceMonitorContent({
             seekFrame={seekFrame}
             onClose={onClose}
             hotkeys={hotkeys}
-            runtimeHotkeys={runtimeHotkeys}
           />
         </VideoConfigProvider>
       </ClockBridgeProvider>
@@ -306,7 +305,6 @@ interface SourceMonitorInnerProps {
   seekFrame: number | null
   onClose?: () => void
   hotkeys: ReturnType<typeof useResolvedHotkeys>
-  runtimeHotkeys: ReturnType<typeof useRuntimeHotkeys>
 }
 
 function SourceMonitorInner({
@@ -324,7 +322,6 @@ function SourceMonitorInner({
   seekFrame,
   onClose,
   hotkeys,
-  runtimeHotkeys,
 }: SourceMonitorInnerProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const contentHostRef = useRef<HTMLDivElement>(null)
@@ -449,6 +446,9 @@ function SourceMonitorInner({
   }, [interactive, setHoveredPanel, setPlayerMethods])
 
   // Handle I/O shortcuts locally on this element (not global useHotkeys)
+  const markInHotkey = useCommandHotkeyBinding('MARK_IN')
+  const markOutHotkey = useCommandHotkeyBinding('MARK_OUT')
+  const clearInOutHotkey = useCommandHotkeyBinding('CLEAR_IN_OUT')
   const wrapperRef = useRef<HTMLDivElement>(null)
   const hadFocusRef = useRef(false)
   const handleKeyDown = useCallback(
@@ -457,21 +457,21 @@ function SourceMonitorInner({
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return
       const { currentSourceFrame, setInPoint, setOutPoint, clearInOutPoints } =
         useSourcePlayerStore.getState()
-      if (doesHotkeyEventMatchBinding(e, runtimeHotkeys.MARK_IN)) {
+      if (doesHotkeyEventMatchBinding(e, markInHotkey)) {
         e.preventDefault()
         e.stopPropagation()
         setInPoint(currentSourceFrame)
-      } else if (doesHotkeyEventMatchBinding(e, runtimeHotkeys.MARK_OUT)) {
+      } else if (doesHotkeyEventMatchBinding(e, markOutHotkey)) {
         e.preventDefault()
         e.stopPropagation()
         setOutPoint(getExclusiveSourceOutPoint(currentSourceFrame, durationInFrames))
-      } else if (doesHotkeyEventMatchBinding(e, runtimeHotkeys.CLEAR_IN_OUT)) {
+      } else if (doesHotkeyEventMatchBinding(e, clearInOutHotkey)) {
         e.preventDefault()
         e.stopPropagation()
         clearInOutPoints()
       }
     },
-    [durationInFrames, interactive, runtimeHotkeys],
+    [clearInOutHotkey, durationInFrames, interactive, markInHotkey, markOutHotkey],
   )
 
   const handleMouseEnter = useCallback(() => {

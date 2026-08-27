@@ -870,6 +870,31 @@ function getRuntimeHotkeyConflictGraph(
   return conflicts
 }
 
+/**
+ * Runtime ownership graph containing only live candidates. Each primary or
+ * derived candidate acquires every platform alias as one transaction. A
+ * collision with any earlier live candidate rejects the whole candidate and
+ * leaves every one of its aliases available to later declarations.
+ */
+function getOwnedRuntimeHotkeyConflictGraph(
+  bindings: HotkeyBindingMap,
+): Record<string, RuntimePhysicalHotkeyClaim[]> {
+  const owned: Record<string, RuntimePhysicalHotkeyClaim[]> = {}
+
+  for (const command of HOTKEY_COMMAND_ORDER) {
+    for (const claim of getCommandRuntimeHotkeyClaims(command, bindings[command])) {
+      const physicalBindings = getPhysicalHotkeyBindings(claim.binding)
+      if (physicalBindings.some((physicalBinding) => owned[physicalBinding]?.length)) continue
+
+      for (const physicalBinding of physicalBindings) {
+        owned[physicalBinding] = [{ ...claim, physicalBinding }]
+      }
+    }
+  }
+
+  return owned
+}
+
 function getOwnedRuntimeHotkeyBinding(
   graph: Record<string, RuntimePhysicalHotkeyClaim[]>,
   bindings: HotkeyBindingMap,
@@ -894,7 +919,7 @@ function getOwnedRuntimeHotkeyBinding(
  * persisted settings are never mutated.
  */
 export function resolveRuntimeHotkeys(bindings: HotkeyBindingMap): HotkeyBindingMap {
-  const graph = getRuntimeHotkeyConflictGraph(bindings)
+  const graph = getOwnedRuntimeHotkeyConflictGraph(bindings)
   return Object.fromEntries(
     HOTKEY_COMMAND_ORDER.map((command) => [
       command,
@@ -908,7 +933,7 @@ export function getRuntimeHotkeyBinding(
   command: HotkeyKey,
   variant: RuntimeHotkeyVariant = 'primary',
 ): string | null {
-  const graph = getRuntimeHotkeyConflictGraph(bindings)
+  const graph = getOwnedRuntimeHotkeyConflictGraph(bindings)
   return getOwnedRuntimeHotkeyBinding(graph, bindings, command, variant)
 }
 
