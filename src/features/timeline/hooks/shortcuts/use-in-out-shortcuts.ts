@@ -3,30 +3,15 @@
  */
 
 import { useHotkeys } from 'react-hotkeys-hook'
-import { HOTKEY_OPTIONS } from '@/config/hotkeys'
+import { HOTKEY_OPTIONS, getRuntimeHotkeyBinding } from '@/config/hotkeys'
 import { usePlaybackStore } from '@/shared/state/playback'
 import { useTimelineStore } from '../../stores/timeline-store'
 import { useResolvedHotkeys } from '@/features/timeline/deps/settings'
 
-function addShiftModifier(binding: string): string {
-  const parts = binding
-    .split('+')
-    .map((part) => part.trim())
-    .filter(Boolean)
-
-  if (parts.some((part) => part.toLowerCase() === 'shift')) {
-    return binding
-  }
-
-  const key = parts.pop()
-  if (!key) return `shift+${binding}`
-  return [...parts, 'shift', key].join('+')
-}
-
 export function useInOutShortcuts() {
   const hotkeys = useResolvedHotkeys()
-  const markInAtPreview = addShiftModifier(hotkeys.MARK_IN)
-  const markOutAtPreview = addShiftModifier(hotkeys.MARK_OUT)
+  const markInAtPreview = getRuntimeHotkeyBinding(hotkeys, 'MARK_IN', 'preview')
+  const markOutAtPreview = getRuntimeHotkeyBinding(hotkeys, 'MARK_OUT', 'preview')
 
   useHotkeys(
     hotkeys.MARK_IN,
@@ -40,7 +25,7 @@ export function useInOutShortcuts() {
   )
 
   useHotkeys(
-    markInAtPreview,
+    markInAtPreview ?? [],
     (event) => {
       event.preventDefault()
       const { previewFrame, currentFrame } = usePlaybackStore.getState()
@@ -62,7 +47,7 @@ export function useInOutShortcuts() {
   )
 
   useHotkeys(
-    markOutAtPreview,
+    markOutAtPreview ?? [],
     (event) => {
       event.preventDefault()
       const { previewFrame, currentFrame } = usePlaybackStore.getState()

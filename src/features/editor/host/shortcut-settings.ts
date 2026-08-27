@@ -34,6 +34,7 @@ function copyOverrides(overrides: HotkeyOverrideMap): HotkeyOverrideMap {
 interface ShortcutOwnership {
   epoch: number
   standaloneOverrides: HotkeyOverrideMap
+  dispose?: () => void
 }
 
 let nextOwnershipEpoch = 0
@@ -47,17 +48,18 @@ export async function mountHostShortcutSettings(
   host: EditorHost,
   signal?: AbortSignal,
 ): Promise<() => void> {
+  const previousOwnership = currentOwnership
+  const standaloneOverrides = copyOverrides(
+    previousOwnership?.standaloneOverrides ?? useSettingsStore.getState().hotkeyOverrides,
+  )
+  previousOwnership?.dispose?.()
   const ownership: ShortcutOwnership = {
     epoch: ++nextOwnershipEpoch,
-    standaloneOverrides: copyOverrides(
-      currentOwnership?.standaloneOverrides ?? useSettingsStore.getState().hotkeyOverrides,
-    ),
+    standaloneOverrides,
   }
   currentOwnership = ownership
   let applyingHostSettings = false
   let disposed = false
-  let inboundRevision = 0
-  let writeQueue = Promise.resolve()
   let unsubscribeHost: (() => void) | undefined
   let unsubscribeStore: (() => void) | undefined
 
@@ -66,7 +68,6 @@ export async function mountHostShortcutSettings(
   const dispose = () => {
     if (disposed) return
     disposed = true
-    inboundRevision += 1
     unsubscribeStore?.()
     unsubscribeHost?.()
     signal?.removeEventListener('abort', dispose)
@@ -74,6 +75,7 @@ export async function mountHostShortcutSettings(
     currentOwnership = null
     useSettingsStore.getState().replaceHotkeyOverrides(ownership.standaloneOverrides)
   }
+  ownership.dispose = dispose
 
   if (signal?.aborted) {
     dispose()
@@ -95,26 +97,89 @@ export async function mountHostShortcutSettings(
     host.notify?.({ kind: 'error', message })
   }
 
+  const settingsEqual = (left: HostShortcutSettings, right: HostShortcutSettings) => {
+    const leftKeys = Object.keys(left.overrides)
+    const rightKeys = Object.keys(right.overrides)
+    return (
+      leftKeys.length === rightKeys.length &&
+      leftKeys.every(
+        (key) =>
+          left.overrides[key as keyof HotkeyOverrideMap] ===
+          right.overrides[key as keyof HotkeyOverrideMap],
+      )
+    )
+  }
+
+  let desiredSettings: HostShortcutSettings | null = null
+  let settledSettings: HostShortcutSettings | null = null
+  let inFlightSettings: HostShortcutSettings | null = null
+  let reconcileAfterFlight = false
+  let reconcileScheduled = false
+
+  const canStartReconcile = () => {
+    if (!isCurrent()) return false
+    if (inFlightSettings || !desiredSettings) return false
+    if (reconcileAfterFlight || !settledSettings) return true
+    return !settingsEqual(desiredSettings, settledSettings)
+  }
+
+  const finishReconcile = (settingsToWrite: HostShortcutSettings, succeeded: boolean) => {
+    if (!isCurrent()) return
+    if (succeeded) settledSettings = settingsToWrite
+    const desiredChanged =
+      desiredSettings !== null && !settingsEqual(desiredSettings, settingsToWrite)
+    inFlightSettings = null
+    if (desiredChanged || reconcileAfterFlight) scheduleReconcile()
+  }
+
+  const persistDesiredSettings = async () => {
+    reconcileScheduled = false
+    if (!canStartReconcile()) return
+
+    const settingsToWrite = desiredSettings!
+    inFlightSettings = settingsToWrite
+    reconcileAfterFlight = false
+    let succeeded = false
+    try {
+      await Promise.resolve(port.setSettings(settingsToWrite))
+      succeeded = true
+    } catch {
+      if (isCurrent()) reportFailure('Could not save keyboard shortcuts to the host.')
+    }
+    finishReconcile(settingsToWrite, succeeded)
+  }
+
+  function scheduleReconcile() {
+    if (reconcileScheduled || inFlightSettings || !desiredSettings) return
+    reconcileScheduled = true
+    void Promise.resolve().then(persistDesiredSettings)
+  }
+
   const applyHostSettings = (settings: HostShortcutSettings) => {
     if (!isCurrent()) return
     const normalized = normalizeHostShortcutSettings(settings)
-    inboundRevision += 1
     if (normalized.warnings.length > 0) {
       for (const warning of normalized.warnings) {
         host.notify?.({
           kind: 'conflict',
-          message:
-            warning.resolution === 'fallback'
-              ? `Shortcut conflict for ${warning.command}; using its default binding.`
-              : `Shortcut conflict for ${warning.command}; the binding was disabled.`,
+          message: `Shortcut ${warning.binding} for ${warning.command} conflicts with ${warning.conflictingCommand}; retained the last valid shortcut settings.`,
         })
       }
+      return
     }
     applyingHostSettings = true
     try {
       useSettingsStore.getState().replaceHotkeyOverrides(normalized.settings.overrides)
     } finally {
       applyingHostSettings = false
+    }
+    desiredSettings = normalized.settings
+    if (inFlightSettings) {
+      reconcileAfterFlight = !settingsEqual(inFlightSettings, normalized.settings)
+    } else {
+      // A subscription is the host's persisted authority unless an older write
+      // can still complete after it and overwrite that state.
+      settledSettings = normalized.settings
     }
   }
 
@@ -128,6 +193,10 @@ export async function mountHostShortcutSettings(
   if (!isCurrent()) {
     return dispose
   }
+  desiredSettings = createHostShortcutSettings(
+    copyOverrides(useSettingsStore.getState().hotkeyOverrides),
+  )
+  settledSettings = initialSettings
   applyHostSettings(initialSettings)
 
   unsubscribeHost = port.subscribe?.((settings) => {
@@ -149,15 +218,8 @@ export async function mountHostShortcutSettings(
     }
 
     const settings = createHostShortcutSettings(copyOverrides(state.hotkeyOverrides))
-    const revisionAtQueue = inboundRevision
-    writeQueue = writeQueue
-      .then(() => {
-        if (!isCurrent() || inboundRevision !== revisionAtQueue) return undefined
-        return Promise.resolve(port.setSettings(settings))
-      })
-      .catch(() => {
-        if (isCurrent()) reportFailure('Could not save keyboard shortcuts to the host.')
-      })
+    desiredSettings = settings
+    scheduleReconcile()
   })
 
   return dispose
