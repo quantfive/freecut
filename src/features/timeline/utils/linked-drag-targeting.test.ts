@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vite-plus/test'
 import type { TimelineTrack } from '@/types/timeline'
 import {
   resolveCreateNewDragTrackTargets,
+  resolveLinkedCohortDragTrackTargets,
   resolveLinkedDragTrackTargets,
 } from './linked-drag-targeting'
 
@@ -182,6 +183,148 @@ describe('resolveCreateNewDragTrackTargets', () => {
       draggedItems: [{ id: 'video-1', initialTrackId: 'v1', type: 'video' }],
       zone: 'audio',
       preferredTrackHeight: 72,
+    })
+
+    expect(result).toBeNull()
+  })
+})
+
+describe('resolveLinkedCohortDragTrackTargets', () => {
+  const sectionTracks = [
+    makeTrack({ id: 'v3', name: 'V3', kind: 'video', order: 0 }),
+    makeTrack({ id: 'v2', name: 'V2', kind: 'video', order: 1 }),
+    makeTrack({ id: 'v1', name: 'V1', kind: 'video', order: 2 }),
+    makeTrack({ id: 'a1', name: 'A1', kind: 'audio', order: 3 }),
+    makeTrack({ id: 'a2', name: 'A2', kind: 'audio', order: 4 }),
+    makeTrack({ id: 'a3', name: 'A3', kind: 'audio', order: 5 }),
+  ]
+
+  it('moves two linked A/V pairs by one shared media-section delta', () => {
+    const result = resolveLinkedCohortDragTrackTargets({
+      tracks: sectionTracks,
+      draggedItems: [
+        { id: 'video-1', initialTrackId: 'v1', type: 'video' },
+        { id: 'audio-1', initialTrackId: 'a1', type: 'audio' },
+        { id: 'video-2', initialTrackId: 'v2', type: 'video' },
+        { id: 'audio-2', initialTrackId: 'a2', type: 'audio' },
+      ],
+      anchorItemId: 'video-1',
+      anchorRelatedItemIds: ['video-1', 'audio-1'],
+      hoveredTrackId: 'v2',
+      zone: 'video',
+      preferredTrackHeight: 80,
+    })
+
+    expect(Object.fromEntries(result?.trackAssignments ?? [])).toEqual({
+      'video-1': 'v2',
+      'audio-1': 'a2',
+      'video-2': 'v3',
+      'audio-2': 'a3',
+    })
+  })
+
+  it('keeps an attached caption on its relative visual section', () => {
+    const result = resolveLinkedCohortDragTrackTargets({
+      tracks: sectionTracks,
+      draggedItems: [
+        { id: 'video-1', initialTrackId: 'v1', type: 'video' },
+        { id: 'audio-1', initialTrackId: 'a1', type: 'audio' },
+        { id: 'caption-1', initialTrackId: 'v2', type: 'text' },
+      ],
+      anchorItemId: 'video-1',
+      anchorRelatedItemIds: ['video-1', 'audio-1'],
+      hoveredTrackId: 'v2',
+      zone: 'video',
+      preferredTrackHeight: 80,
+    })
+
+    expect(Object.fromEntries(result?.trackAssignments ?? [])).toEqual({
+      'video-1': 'v2',
+      'audio-1': 'a2',
+      'caption-1': 'v3',
+    })
+  })
+
+  it('anchors a mixed-kind move through the dragged item linked companion section', () => {
+    const tracks = [
+      makeTrack({ id: 'v4', name: 'V4', kind: 'video', order: 0 }),
+      ...sectionTracks.map((track) => ({ ...track, order: track.order + 1 })),
+      makeTrack({ id: 'a4', name: 'A4', kind: 'audio', order: 7 }),
+    ]
+    const result = resolveLinkedCohortDragTrackTargets({
+      tracks,
+      draggedItems: [
+        { id: 'video-1', initialTrackId: 'v1', type: 'video' },
+        { id: 'audio-1', initialTrackId: 'a2', type: 'audio' },
+        { id: 'visual-extra', initialTrackId: 'v2', type: 'image' },
+        { id: 'audio-extra', initialTrackId: 'a3', type: 'audio' },
+      ],
+      anchorItemId: 'video-1',
+      anchorRelatedItemIds: ['video-1', 'audio-1'],
+      hoveredTrackId: 'a3',
+      zone: 'audio',
+      preferredTrackHeight: 80,
+    })
+
+    expect(Object.fromEntries(result?.trackAssignments ?? [])).toEqual({
+      'video-1': 'v2',
+      'audio-1': 'a3',
+      'visual-extra': 'v3',
+      'audio-extra': 'a4',
+    })
+  })
+
+  it('creates corresponding outer video and audio lanes for multiple pairs', () => {
+    const tracks = [
+      makeTrack({ id: 'v2', name: 'V2', kind: 'video', order: 0 }),
+      makeTrack({ id: 'v1', name: 'V1', kind: 'video', order: 1 }),
+      makeTrack({ id: 'a1', name: 'A1', kind: 'audio', order: 2 }),
+      makeTrack({ id: 'a2', name: 'A2', kind: 'audio', order: 3 }),
+    ]
+    const result = resolveLinkedCohortDragTrackTargets({
+      tracks,
+      draggedItems: [
+        { id: 'video-1', initialTrackId: 'v1', type: 'video' },
+        { id: 'audio-1', initialTrackId: 'a1', type: 'audio' },
+        { id: 'video-2', initialTrackId: 'v2', type: 'video' },
+        { id: 'audio-2', initialTrackId: 'a2', type: 'audio' },
+      ],
+      anchorItemId: 'video-1',
+      anchorRelatedItemIds: ['video-1', 'audio-1'],
+      hoveredTrackId: 'v2',
+      zone: 'video',
+      createNew: true,
+      preferredTrackHeight: 80,
+    })
+
+    const assignments = result?.trackAssignments
+    expect(assignments?.get('video-1')).toBe('v2')
+    expect(assignments?.get('audio-1')).toBe('a2')
+    expect(result?.tracks.find((track) => track.id === assignments?.get('video-2'))).toMatchObject({
+      kind: 'video',
+      name: 'V3',
+    })
+    expect(result?.tracks.find((track) => track.id === assignments?.get('audio-2'))).toMatchObject({
+      kind: 'audio',
+      name: 'A3',
+    })
+    expect(result?.tracks).toHaveLength(6)
+  })
+
+  it('rejects the cohort when an implicit companion source track is locked', () => {
+    const result = resolveLinkedCohortDragTrackTargets({
+      tracks: sectionTracks.map((track) =>
+        track.id === 'a1' ? { ...track, locked: true } : track,
+      ),
+      draggedItems: [
+        { id: 'video-1', initialTrackId: 'v1', type: 'video' },
+        { id: 'audio-1', initialTrackId: 'a1', type: 'audio' },
+      ],
+      anchorItemId: 'video-1',
+      anchorRelatedItemIds: ['video-1', 'audio-1'],
+      hoveredTrackId: 'v2',
+      zone: 'video',
+      preferredTrackHeight: 80,
     })
 
     expect(result).toBeNull()

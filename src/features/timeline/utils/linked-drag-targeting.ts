@@ -32,6 +32,17 @@ export interface CreateNewDragTrackTargetResult {
   trackAssignments: Map<string, string>
 }
 
+export interface LinkedDragCohortItem {
+  id: string
+  initialTrackId: string
+  type: TimelineItem['type']
+}
+
+export interface LinkedDragCohortTrackTargetResult {
+  tracks: TimelineTrack[]
+  trackAssignments: Map<string, string>
+}
+
 function getKindTracks(tracks: TimelineTrack[], kind: TrackKind): TimelineTrack[] {
   return [...tracks]
     .filter((track) => getTrackKind(track) === kind)
@@ -114,6 +125,275 @@ function addCreateNewTrack(params: {
 
 function getDraggedItemTrackKind(type: TimelineItem['type']): TrackKind {
   return type === 'audio' ? 'audio' : 'video'
+}
+
+/**
+ * Return lanes in section order, starting at the A/V divider and moving
+ * outward. Video order is therefore the reverse of its visual top-to-bottom
+ * order, while audio order already starts at the divider.
+ */
+function getSectionTracks(tracks: TimelineTrack[], kind: TrackKind): TimelineTrack[] {
+  const kindTracks = getKindTracks(tracks, kind)
+  return kind === 'video' ? kindTracks.reverse() : kindTracks
+}
+
+function getTrackSectionIndex(tracks: TimelineTrack[], kind: TrackKind, trackId: string): number {
+  return getSectionTracks(tracks, kind).findIndex((track) => track.id === trackId)
+}
+
+function ensureTrackSectionIndex(params: EnsureTrackIndexParams): {
+  tracks: TimelineTrack[]
+  trackId: string
+} {
+  const { kind, index, preferredTrackHeight } = params
+  let workingTracks = [...params.tracks]
+
+  while (getSectionTracks(workingTracks, kind).length <= index) {
+    workingTracks = addCreateNewTrack({
+      tracks: workingTracks,
+      kind,
+      preferredTrackHeight,
+    })
+  }
+
+  return {
+    tracks: workingTracks,
+    trackId: getSectionTracks(workingTracks, kind)[index]!.id,
+  }
+}
+
+interface CohortTrackPlan {
+  item: LinkedDragCohortItem
+  kind: TrackKind
+  sourceSection: number
+}
+
+interface CohortTrackPlanState {
+  tracks: TimelineTrack[]
+  plans: CohortTrackPlan[]
+}
+
+function upgradeCohortSourceTracks(
+  tracks: TimelineTrack[],
+  draggedItems: LinkedDragCohortItem[],
+): TimelineTrack[] | null {
+  let workingTracks = [...tracks]
+  for (const draggedItem of draggedItems) {
+    const kind = getDraggedItemTrackKind(draggedItem.type)
+    const sourceTrack = workingTracks.find((track) => track.id === draggedItem.initialTrackId)
+    if (!sourceTrack || sourceTrack.isGroup || sourceTrack.locked) return null
+
+    const sourceKind = getTrackKind(sourceTrack)
+    if (sourceKind !== null && sourceKind !== kind) return null
+    if (sourceKind === null) {
+      const upgradedTrack = renameTrackForKind(sourceTrack, workingTracks, kind)
+      workingTracks = workingTracks.map((track) =>
+        track.id === sourceTrack.id ? upgradedTrack : track,
+      )
+    }
+  }
+
+  return workingTracks
+}
+
+function createCohortTrackPlans(
+  tracks: TimelineTrack[],
+  draggedItems: LinkedDragCohortItem[],
+): CohortTrackPlan[] | null {
+  const plans: CohortTrackPlan[] = []
+  for (const draggedItem of draggedItems) {
+    const kind = getDraggedItemTrackKind(draggedItem.type)
+    const sourceSection = getTrackSectionIndex(tracks, kind, draggedItem.initialTrackId)
+    if (sourceSection < 0) return null
+    plans.push({ item: draggedItem, kind, sourceSection })
+  }
+
+  return plans
+}
+
+function buildCohortTrackPlans(
+  tracks: TimelineTrack[],
+  draggedItems: LinkedDragCohortItem[],
+): CohortTrackPlanState | null {
+  if (draggedItems.length === 0) return null
+
+  const workingTracks = upgradeCohortSourceTracks(tracks, draggedItems)
+  if (!workingTracks) return null
+
+  const plans = createCohortTrackPlans(workingTracks, draggedItems)
+  if (!plans) return null
+
+  return { tracks: workingTracks, plans }
+}
+
+function getSourceAnchorSection(params: {
+  plans: CohortTrackPlan[]
+  zoneKind: TrackKind
+  anchorItemId: string
+  anchorRelatedItemIds: readonly string[]
+}): number | null {
+  const relatedIds = new Set([params.anchorItemId, ...params.anchorRelatedItemIds])
+  const anchorPlan = params.plans.find(
+    (plan) => plan.item.id === params.anchorItemId && plan.kind === params.zoneKind,
+  )
+  const relatedZonePlan = params.plans.find(
+    (plan) => relatedIds.has(plan.item.id) && plan.kind === params.zoneKind,
+  )
+  const fallbackAnchorPlan = params.plans.find((plan) => plan.item.id === params.anchorItemId)
+
+  return (
+    anchorPlan?.sourceSection ??
+    relatedZonePlan?.sourceSection ??
+    fallbackAnchorPlan?.sourceSection ??
+    null
+  )
+}
+
+function resolveExistingCohortDrop(params: {
+  tracks: TimelineTrack[]
+  plans: CohortTrackPlan[]
+  zoneKind: TrackKind
+  anchorItemId: string
+  anchorRelatedItemIds: readonly string[]
+  hoveredTrackId: string
+}): { tracks: TimelineTrack[]; sectionDelta: number } | null {
+  let workingTracks = params.tracks
+  let hoveredTrack = workingTracks.find((track) => track.id === params.hoveredTrackId)
+  if (!hoveredTrack || hoveredTrack.isGroup) return null
+
+  let hoveredKind = getTrackKind(hoveredTrack)
+  if (hoveredKind === null) {
+    if (hoveredTrack.locked) return null
+    const upgradedTrack = renameTrackForKind(hoveredTrack, workingTracks, params.zoneKind)
+    workingTracks = workingTracks.map((track) =>
+      track.id === hoveredTrack!.id ? upgradedTrack : track,
+    )
+    hoveredTrack = upgradedTrack
+    hoveredKind = params.zoneKind
+  }
+
+  const targetSection = getTrackSectionIndex(workingTracks, hoveredKind, hoveredTrack.id)
+  const sourceAnchorSection = getSourceAnchorSection(params)
+  if (targetSection < 0 || sourceAnchorSection === null) return null
+
+  return {
+    tracks: workingTracks,
+    sectionDelta: targetSection - sourceAnchorSection,
+  }
+}
+
+function getCreateNewCohortSectionDelta(
+  tracks: TimelineTrack[],
+  plans: CohortTrackPlan[],
+  zoneKind: TrackKind,
+): number | null {
+  const zonePlans = plans.filter((plan) => plan.kind === zoneKind)
+  if (zonePlans.length === 0) return null
+
+  const outermostSourceSection = Math.max(...zonePlans.map((plan) => plan.sourceSection))
+  return getSectionTracks(tracks, zoneKind).length - outermostSourceSection
+}
+
+function assignCohortTrackTargets(params: {
+  tracks: TimelineTrack[]
+  plans: CohortTrackPlan[]
+  sectionDelta: number
+  preferredTrackHeight: number
+}): LinkedDragCohortTrackTargetResult | null {
+  let workingTracks = params.tracks
+  const targetTrackIdBySource = new Map<string, string>()
+  const sourcePlans = Array.from(
+    new Map(
+      params.plans.map((plan) => [
+        `${plan.kind}:${plan.item.initialTrackId}`,
+        {
+          key: `${plan.kind}:${plan.item.initialTrackId}`,
+          kind: plan.kind,
+          targetSection: plan.sourceSection + params.sectionDelta,
+        },
+      ]),
+    ).values(),
+  ).sort((left, right) => left.targetSection - right.targetSection)
+
+  for (const sourcePlan of sourcePlans) {
+    const ensuredTrack = ensureTrackSectionIndex({
+      tracks: workingTracks,
+      kind: sourcePlan.kind,
+      index: sourcePlan.targetSection,
+      preferredTrackHeight: params.preferredTrackHeight,
+    })
+    workingTracks = ensuredTrack.tracks
+
+    const targetTrack = workingTracks.find((track) => track.id === ensuredTrack.trackId)
+    if (!targetTrack || targetTrack.locked) return null
+    targetTrackIdBySource.set(sourcePlan.key, targetTrack.id)
+  }
+
+  const trackAssignments = new Map<string, string>()
+  for (const plan of params.plans) {
+    const targetTrackId = targetTrackIdBySource.get(`${plan.kind}:${plan.item.initialTrackId}`)
+    if (!targetTrackId) return null
+    trackAssignments.set(plan.item.id, targetTrackId)
+  }
+
+  return { tracks: workingTracks, trackAssignments }
+}
+
+/**
+ * Resolve every member of a linked drag cohort by media section instead of by
+ * raw global track index. The same section delta is applied to video, audio,
+ * and attached visual items, preserving relative lane relationships while
+ * keeping each item in a compatible media section.
+ */
+export function resolveLinkedCohortDragTrackTargets(params: {
+  tracks: TimelineTrack[]
+  draggedItems: LinkedDragCohortItem[]
+  anchorItemId: string
+  anchorRelatedItemIds?: readonly string[]
+  hoveredTrackId: string
+  zone: LinkedDragDropZone
+  createNew?: boolean
+  preferredTrackHeight: number
+}): LinkedDragCohortTrackTargetResult | null {
+  const {
+    tracks,
+    draggedItems,
+    anchorItemId,
+    anchorRelatedItemIds = [],
+    hoveredTrackId,
+    zone,
+    createNew = false,
+    preferredTrackHeight,
+  } = params
+  const planState = buildCohortTrackPlans(tracks, draggedItems)
+  if (!planState) return null
+
+  const { plans } = planState
+  const zoneKind: TrackKind = zone
+  const dropState = createNew
+    ? {
+        tracks: planState.tracks,
+        sectionDelta: getCreateNewCohortSectionDelta(planState.tracks, plans, zoneKind),
+      }
+    : resolveExistingCohortDrop({
+        tracks: planState.tracks,
+        plans,
+        zoneKind,
+        anchorItemId,
+        anchorRelatedItemIds,
+        hoveredTrackId,
+      })
+  if (!dropState || dropState.sectionDelta === null) return null
+
+  const innermostSourceSection = Math.min(...plans.map((plan) => plan.sourceSection))
+  const sectionDelta = Math.max(dropState.sectionDelta, -innermostSourceSection)
+
+  return assignCohortTrackTargets({
+    tracks: dropState.tracks,
+    plans,
+    sectionDelta,
+    preferredTrackHeight,
+  })
 }
 
 function buildContiguousTrackAssignment(params: {
