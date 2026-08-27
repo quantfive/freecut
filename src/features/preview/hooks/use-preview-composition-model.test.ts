@@ -3,10 +3,121 @@
 import { describe, expect, it } from 'vite-plus/test'
 import type { TimelineTrack } from '@/types/timeline'
 import {
+  buildPreviewSourceBindings,
   buildPreviewCompositionData,
   mergeLiveItemPresentation,
   mergeLiveItemPreview,
 } from './use-preview-composition-model'
+
+describe('buildPreviewSourceBindings', () => {
+  const directTrack: TimelineTrack = {
+    id: 'root-track',
+    name: 'Root',
+    height: 80,
+    locked: false,
+    visible: true,
+    muted: false,
+    solo: false,
+    order: 0,
+    items: [
+      {
+        id: 'direct-video',
+        trackId: 'root-track',
+        type: 'video',
+        mediaId: 'media-direct',
+        src: 'blob:stale-direct',
+        label: 'Direct',
+        from: 0,
+        durationInFrames: 30,
+      },
+      {
+        id: 'compound',
+        trackId: 'root-track',
+        type: 'composition',
+        compositionId: 'composition-a',
+        compositionWidth: 1920,
+        compositionHeight: 1080,
+        label: 'Compound',
+        from: 0,
+        durationInFrames: 30,
+      },
+      {
+        id: 'missing-compound',
+        trackId: 'root-track',
+        type: 'composition',
+        compositionId: 'missing-composition',
+        compositionWidth: 1920,
+        compositionHeight: 1080,
+        label: 'Missing',
+        from: 0,
+        durationInFrames: 30,
+      },
+    ],
+  }
+
+  it('walks reachable nested media deterministically and survives cycles and missing references', () => {
+    const compositionById = {
+      'composition-a': {
+        id: 'composition-a',
+        items: [
+          {
+            id: 'nested-video',
+            trackId: 'nested-track',
+            type: 'video' as const,
+            mediaId: 'media-nested',
+            src: 'blob:stale-nested',
+            label: 'Nested',
+            from: 0,
+            durationInFrames: 30,
+          },
+          {
+            id: 'cycle-to-b',
+            trackId: 'nested-track',
+            type: 'composition' as const,
+            compositionId: 'composition-b',
+            compositionWidth: 1920,
+            compositionHeight: 1080,
+            label: 'B',
+            from: 0,
+            durationInFrames: 30,
+          },
+        ],
+      },
+      'composition-b': {
+        id: 'composition-b',
+        items: [
+          {
+            id: 'cycle-to-a',
+            trackId: 'nested-track',
+            type: 'composition' as const,
+            compositionId: 'composition-a',
+            compositionWidth: 1920,
+            compositionHeight: 1080,
+            label: 'A',
+            from: 0,
+            durationInFrames: 30,
+          },
+        ],
+      },
+    }
+
+    const result = buildPreviewSourceBindings({
+      tracks: [directTrack],
+      compositionById,
+      getEpoch: (mediaId) => `epoch:${mediaId}`,
+      getUrl: (mediaId) => `blob:current:${mediaId}`,
+    })
+
+    expect([...result.urls]).toEqual([
+      ['media-direct', 'blob:current:media-direct'],
+      ['media-nested', 'blob:current:media-nested'],
+    ])
+    expect(JSON.parse(result.identity)).toEqual([
+      ['media-direct', 'epoch:media-direct', 'blob:current:media-direct'],
+      ['media-nested', 'epoch:media-nested', 'blob:current:media-nested'],
+    ])
+  })
+})
 
 describe('mergeLiveItemPreview', () => {
   it('merges live shape properties into the canvas renderer snapshot', () => {
@@ -268,7 +379,7 @@ describe('buildPreviewCompositionData', () => {
     expect(result.renderSize).toEqual({ width: 1504, height: 846 })
   })
 
-  it('uses an already-acquired blob URL before resolvedUrls catches up', () => {
+  it('uses an already-acquired blob URL before a stale resolvedUrls entry', () => {
     const track: TimelineTrack = {
       id: 'track-1',
       name: 'Video',
@@ -298,7 +409,7 @@ describe('buildPreviewCompositionData', () => {
       items: track.items,
       keyframes: [],
       transitions: [],
-      resolvedUrls: new Map(),
+      resolvedUrls: new Map([['media-1', 'blob://stale-resolved']]),
       useProxy: false,
       blobUrlVersion: 1,
       project: { width: 1920, height: 1080 },

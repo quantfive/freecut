@@ -217,3 +217,12 @@ export const blobUrlManager = new BlobUrlManager()
 export function useBlobUrlVersion(): number {
   return useSyncExternalStore(blobUrlManager.subscribe, blobUrlManager.getSnapshot)
 }
+
+/**
+ * Subscribe to the source generation owned by one media id. Unlike the global
+ * version, this stays stable when another media item acquires or releases a
+ * URL, so source-local canvases can retain their decoded frame state.
+ */
+export function useBlobUrlEpoch(mediaId: string): string {
+  return useSyncExternalStore(blobUrlManager.subscribe, () => blobUrlManager.getEpoch(mediaId))
+}
