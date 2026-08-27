@@ -818,6 +818,7 @@ export function unlinkItems(ids: string[]): void {
 
   const linkedItems = items.filter((item) => unlinkIds.has(item.id) && item.linkedGroupId)
   if (linkedItems.length === 0) return
+  if (!areItemMutationsUnlocked(linkedItems.map((item) => item.id))) return
 
   // Detect video items that have a linked audio companion — their embedded audio
   // should be muted after unlinking so it doesn't start playing when the audio is deleted.
@@ -858,6 +859,7 @@ export function linkItems(ids: string[]): boolean {
   if (!canLinkSelection(items, ids) || selectedItems.length < 2) {
     return false
   }
+  if (!areItemMutationsUnlocked(selectedItems.map((item) => item.id))) return false
 
   const linkedGroupId = crypto.randomUUID()
   execute(
@@ -990,30 +992,31 @@ export function commitPreparedReverseItems(
 export function removeItems(ids: string[]): void {
   const { items, tracks } = useItemsStore.getState()
   const expandedIds = expandIdsWithLinkedItems(items, ids, isLinkedSelectionEnabled())
-  const { allowedIds } = partitionItemMutationIdsByLock({
+  const partition = partitionItemMutationIdsByLock({
     items,
     tracks,
     itemIds: expandedIds,
   })
-  if (allowedIds.length === 0) return
+  if (partition.allowedIds.length === 0 || partition.blockedIds.length > 0) return
+  const removalIds = partition.allowedIds
 
   execute(
     'REMOVE_ITEMS',
     () => {
       // Remove items
-      useItemsStore.getState()._removeItems(allowedIds)
+      useItemsStore.getState()._removeItems(removalIds)
 
       // Cascade: Remove transitions referencing deleted items
-      useTransitionsStore.getState()._removeTransitionsForItems(allowedIds)
+      useTransitionsStore.getState()._removeTransitionsForItems(removalIds)
 
       // Cascade: Remove keyframes for deleted items
-      useKeyframesStore.getState()._removeKeyframesForItems(allowedIds)
+      useKeyframesStore.getState()._removeKeyframesForItems(removalIds)
 
       pruneLayerGroupsAfterItemRemoval()
 
       useTimelineSettingsStore.getState().markDirty()
     },
-    { ids: allowedIds },
+    { ids: removalIds },
   )
 
   emitUiSound('delete')
@@ -1171,7 +1174,7 @@ export function rippleDeleteItems(ids: string[]): void {
     tracks,
     itemIds: expandedIds,
   })
-  if (deletionPartition.allowedIds.length === 0) return
+  if (deletionPartition.allowedIds.length === 0 || deletionPartition.blockedIds.length > 0) return
   const plan = buildRippleDeletePlan({
     items,
     tracks,

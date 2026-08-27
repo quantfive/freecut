@@ -77,6 +77,46 @@ function trackItems(trackId: string): TimelineItem[] {
     .sort((a, b) => a.from - b.from)
 }
 
+function deferSourceUrl() {
+  let release!: (url: string) => void
+  let reportStarted!: () => void
+  const started = new Promise<void>((resolve) => {
+    reportStarted = resolve
+  })
+  mocks.resolveMediaUrl = () =>
+    new Promise<string>((resolve) => {
+      release = resolve
+      reportStarted()
+    })
+  return { started, release: (url = 'blob:source-media') => release(url) }
+}
+
+function rejectionSnapshot() {
+  return {
+    items: structuredClone(useItemsStore.getState().items),
+    tracks: structuredClone(useItemsStore.getState().tracks),
+    transitions: structuredClone(useTransitionsStore.getState().transitions),
+    selection: structuredClone(useSelectionStore.getState().selectedItemIds),
+    playhead: usePlaybackStore.getState().currentFrame,
+    dirty: useTimelineSettingsStore.getState().isDirty,
+    undoDepth: useTimelineCommandStore.getState().undoStack.length,
+    redoDepth: useTimelineCommandStore.getState().redoStack.length,
+    mediaById: structuredClone(mocks.mediaById),
+  }
+}
+
+function expectRejectedEditToPreserve(snapshot: ReturnType<typeof rejectionSnapshot>): void {
+  expect(useItemsStore.getState().items).toEqual(snapshot.items)
+  expect(useItemsStore.getState().tracks).toEqual(snapshot.tracks)
+  expect(useTransitionsStore.getState().transitions).toEqual(snapshot.transitions)
+  expect(useSelectionStore.getState().selectedItemIds).toEqual(snapshot.selection)
+  expect(usePlaybackStore.getState().currentFrame).toBe(snapshot.playhead)
+  expect(useTimelineSettingsStore.getState().isDirty).toBe(snapshot.dirty)
+  expect(useTimelineCommandStore.getState().undoStack).toHaveLength(snapshot.undoDepth)
+  expect(useTimelineCommandStore.getState().redoStack).toHaveLength(snapshot.redoDepth)
+  expect(mocks.mediaById).toEqual(snapshot.mediaById)
+}
+
 describe('source edit actions', () => {
   beforeEach(() => {
     useTimelineCommandStore.getState().clearHistory()
@@ -227,41 +267,6 @@ describe('source edit actions', () => {
       expect(inserted).toHaveLength(1)
       expect(inserted[0]?.trackId).not.toBe('track-v1')
     })
-
-    it('revalidates target locks immediately before the async commit', async () => {
-      let releaseUrl!: (url: string) => void
-      let reportStarted!: () => void
-      const started = new Promise<void>((resolve) => {
-        reportStarted = resolve
-      })
-      mocks.resolveMediaUrl = () =>
-        new Promise<string>((resolve) => {
-          releaseUrl = resolve
-          reportStarted()
-        })
-      usePlaybackStore.setState({ currentFrame: 0 })
-
-      const pendingEdit = performInsertEdit()
-      await started
-      useItemsStore.getState().setTracks([
-        makeTimelineTrack({
-          id: 'track-v1',
-          name: 'V1',
-          kind: 'video',
-          order: 0,
-          locked: true,
-        }),
-        makeTimelineTrack({ id: 'track-a1', name: 'A1', kind: 'audio', order: 1 }),
-      ])
-      releaseUrl('blob:source-media')
-      await pendingEdit
-
-      expect(useItemsStore.getState().items).toHaveLength(0)
-      expect(useItemsStore.getState().tracks[0]?.locked).toBe(true)
-      expect(usePlaybackStore.getState().currentFrame).toBe(0)
-      expect(useTimelineSettingsStore.getState().isDirty).toBe(false)
-      expect(useTimelineCommandStore.getState().undoStack).toHaveLength(0)
-    })
   })
 
   describe('performOverwriteEdit', () => {
@@ -319,6 +324,163 @@ describe('source edit actions', () => {
       expect(items[0]).toMatchObject({ from: 0, durationInFrames: 40 })
       expect(items[1]).toMatchObject({ from: 40, durationInFrames: 60, mediaId: 'media-1' })
     })
+  })
+
+  it.each([
+    ['insert', performInsertEdit],
+    ['overwrite', performOverwriteEdit],
+  ])('rebuilds the %s item plan after async media resolution', async (mode, action) => {
+    usePlaybackStore.setState({ currentFrame: 0 })
+    useSelectionStore.getState().selectItems(['sentinel-selection'])
+    const deferred = deferSourceUrl()
+
+    const pendingEdit = action()
+    await deferred.started
+    const unrelatedTrack = makeTimelineTrack({
+      id: 'track-v2',
+      name: 'V2',
+      kind: 'video',
+      order: 2,
+    })
+    useItemsStore.getState().setTracks([...useItemsStore.getState().tracks, unrelatedTrack])
+    useItemsStore.getState().setItems([
+      makeTimelineVideoItem({
+        id: 'late-item',
+        trackId: 'track-v1',
+        from: 20,
+        durationInFrames: 20,
+        sourceEnd: 20,
+        sourceDuration: 120,
+      }),
+    ])
+    deferred.release()
+    await pendingEdit
+
+    expect(useItemsStore.getState().tracks.some((track) => track.id === unrelatedTrack.id)).toBe(
+      true,
+    )
+    if (mode === 'insert') {
+      expect(useItemsStore.getState().itemById['late-item']).toMatchObject({ from: 80 })
+    } else {
+      expect(useItemsStore.getState().itemById['late-item']).toBeUndefined()
+    }
+    expect(useTimelineCommandStore.getState().undoStack).toHaveLength(1)
+  })
+
+  it.each([
+    ['insert', performInsertEdit],
+    ['overwrite', performOverwriteEdit],
+  ])('does not resurrect an item removed during the %s await', async (_mode, action) => {
+    useItemsStore.getState().setItems([
+      makeTimelineVideoItem({
+        id: 'removed-during-await',
+        trackId: 'track-v1',
+        from: 0,
+        durationInFrames: 120,
+        sourceEnd: 120,
+        sourceDuration: 120,
+      }),
+    ])
+    const deferred = deferSourceUrl()
+    const pendingEdit = action()
+    await deferred.started
+
+    useItemsStore.getState()._removeItems(['removed-during-await'])
+    deferred.release()
+    await pendingEdit
+
+    expect(useItemsStore.getState().itemById['removed-during-await']).toBeUndefined()
+    expect(useItemsStore.getState().items).toHaveLength(1)
+    expect(useTimelineCommandStore.getState().undoStack).toHaveLength(1)
+  })
+
+  it.each([
+    ['insert', performInsertEdit],
+    ['overwrite', performOverwriteEdit],
+  ])(
+    'fails the %s edit closed when its target is removed during an await',
+    async (_mode, action) => {
+      const deferred = deferSourceUrl()
+      const pendingEdit = action()
+      await deferred.started
+
+      useItemsStore
+        .getState()
+        .setTracks([makeTimelineTrack({ id: 'track-a1', name: 'A1', kind: 'audio', order: 1 })])
+      const before = rejectionSnapshot()
+      deferred.release()
+      await pendingEdit
+
+      expectRejectedEditToPreserve(before)
+      expect(useItemsStore.getState().tracks.some((track) => track.id === 'track-v1')).toBe(false)
+    },
+  )
+
+  it.each([
+    ['insert', performInsertEdit],
+    ['overwrite', performOverwriteEdit],
+  ])(
+    'fails the %s edit closed when its target is nested under a newly locked ancestor',
+    async (_mode, action) => {
+      const deferred = deferSourceUrl()
+      const pendingEdit = action()
+      await deferred.started
+
+      useItemsStore.getState().setTracks([
+        makeTimelineTrack({
+          id: 'grandparent',
+          name: 'Locked Grandparent',
+          order: 0,
+          isGroup: true,
+          locked: true,
+        }),
+        makeTimelineTrack({
+          id: 'parent',
+          name: 'Parent',
+          order: 1,
+          isGroup: true,
+          parentTrackId: 'grandparent',
+        }),
+        makeTimelineTrack({
+          id: 'track-v1',
+          name: 'V1',
+          kind: 'video',
+          order: 2,
+          parentTrackId: 'parent',
+        }),
+        makeTimelineTrack({ id: 'track-a1', name: 'A1', kind: 'audio', order: 3 }),
+      ])
+      const before = rejectionSnapshot()
+      deferred.release()
+      await pendingEdit
+
+      expectRejectedEditToPreserve(before)
+    },
+  )
+
+  it.each([
+    ['insert', performInsertEdit],
+    ['overwrite', performOverwriteEdit],
+  ])('fails the %s edit closed when its target locks during an await', async (_mode, action) => {
+    const deferred = deferSourceUrl()
+    const pendingEdit = action()
+    await deferred.started
+
+    useItemsStore.getState().setTracks([
+      makeTimelineTrack({
+        id: 'track-v1',
+        name: 'V1',
+        kind: 'video',
+        order: 0,
+        locked: true,
+      }),
+      makeTimelineTrack({ id: 'track-a1', name: 'A1', kind: 'audio', order: 1 }),
+    ])
+    const before = rejectionSnapshot()
+    deferred.release()
+    await pendingEdit
+
+    expectRejectedEditToPreserve(before)
   })
 
   it.each([

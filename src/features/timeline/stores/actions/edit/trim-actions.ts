@@ -82,6 +82,85 @@ function getSynchronizedTrimItems(
   return Array.from(synchronizedById.values())
 }
 
+function getClampedSynchronizedTrimAmount(
+  synchronizedItems: TimelineItem[],
+  items: TimelineItem[],
+  handle: 'start' | 'end',
+  trimAmount: number,
+): number {
+  const timelineFps = useTimelineSettingsStore.getState().fps
+  let synchronizedTrimAmount = trimAmount
+  for (const synchronizedItem of synchronizedItems) {
+    const sourceClampedAmount = clampTrimAmount(
+      synchronizedItem,
+      handle,
+      synchronizedTrimAmount,
+      timelineFps,
+    ).clampedAmount
+    synchronizedTrimAmount = keepTightestDelta(
+      synchronizedTrimAmount,
+      clampToAdjacentItems(
+        synchronizedItem,
+        handle,
+        sourceClampedAmount,
+        items,
+        getTransitionLinkedIds(synchronizedItem.id),
+      ),
+    )
+  }
+  return synchronizedTrimAmount
+}
+
+function getAttachedCaptionTrimMutationIds(
+  items: TimelineItem[],
+  synchronizedItems: TimelineItem[],
+  handle: 'start' | 'end',
+  trimAmount: number,
+): string[] {
+  const captionMutationIds = new Set<string>()
+  const itemById = new Map(items.map((item) => [item.id, item] as const))
+
+  for (const clip of synchronizedItems) {
+    if (clip.type === 'text') continue
+    const finalBounds = getFinalTrimmedClipBounds(clip, handle, trimAmount)
+
+    for (const captionId of getAttachedCaptionItemIds(items, clip.id)) {
+      const caption = itemById.get(captionId)
+      if (caption?.type !== 'text') continue
+      if (captionChangesWithinBounds(caption, finalBounds)) captionMutationIds.add(caption.id)
+    }
+  }
+
+  return Array.from(captionMutationIds)
+}
+
+function getFinalTrimmedClipBounds(
+  clip: TimelineItem,
+  handle: 'start' | 'end',
+  trimAmount: number,
+): { start: number; end: number } {
+  return {
+    start: handle === 'start' ? clip.from + trimAmount : clip.from,
+    end:
+      handle === 'start'
+        ? clip.from + clip.durationInFrames
+        : clip.from + clip.durationInFrames + trimAmount,
+  }
+}
+
+function captionChangesWithinBounds(
+  caption: TimelineItem,
+  bounds: { start: number; end: number },
+): boolean {
+  const finalStart = Math.max(caption.from, bounds.start)
+  const finalEnd = Math.min(caption.from + caption.durationInFrames, bounds.end)
+  return (
+    finalEnd <= finalStart ||
+    finalStart !== caption.from ||
+    finalEnd - finalStart !== caption.durationInFrames
+  )
+}
+
 function getSynchronizedTrimMutationIds(
   id: string,
   handle: 'start' | 'end',
@@ -93,9 +172,24 @@ function getSynchronizedTrimMutationIds(
   if (!synchronizedItems.some((item) => item.id === id)) return []
 
   const synchronizedIds = synchronizedItems.map((item) => item.id)
-  const shrinksVisibleBounds = handle === 'start' ? trimAmount > 0 : trimAmount < 0
+  const synchronizedTrimAmount = getClampedSynchronizedTrimAmount(
+    synchronizedItems,
+    items,
+    handle,
+    trimAmount,
+  )
+  const shrinksVisibleBounds =
+    handle === 'start' ? synchronizedTrimAmount > 0 : synchronizedTrimAmount < 0
   return shrinksVisibleBounds
-    ? expandItemIdsWithAttachedCaptions(items, synchronizedIds)
+    ? [
+        ...synchronizedIds,
+        ...getAttachedCaptionTrimMutationIds(
+          items,
+          synchronizedItems,
+          handle,
+          synchronizedTrimAmount,
+        ),
+      ]
     : synchronizedIds
 }
 
@@ -441,26 +535,12 @@ function applySynchronizedTrim(
   const anchorBefore = synchronizedItems.find((item) => item.id === id)
   if (!anchorBefore) return
 
-  const timelineFps = useTimelineSettingsStore.getState().fps
-  let synchronizedTrimAmount = trimAmount
-  for (const synchronizedItem of synchronizedItems) {
-    const sourceClampedAmount = clampTrimAmount(
-      synchronizedItem,
-      handle,
-      synchronizedTrimAmount,
-      timelineFps,
-    ).clampedAmount
-    synchronizedTrimAmount = keepTightestDelta(
-      synchronizedTrimAmount,
-      clampToAdjacentItems(
-        synchronizedItem,
-        handle,
-        sourceClampedAmount,
-        itemsBefore,
-        getTransitionLinkedIds(synchronizedItem.id),
-      ),
-    )
-  }
+  const synchronizedTrimAmount = getClampedSynchronizedTrimAmount(
+    synchronizedItems,
+    itemsBefore,
+    handle,
+    trimAmount,
+  )
 
   if (handle === 'start') {
     itemsStore._trimItemStart(id, synchronizedTrimAmount, { skipAdjacentClamp: true })
