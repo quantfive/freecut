@@ -2,21 +2,19 @@
  * Marker shortcuts: M (add), Shift+M (remove), [ ] (navigate).
  */
 
-import { useHotkeys } from 'react-hotkeys-hook'
+import { COMMAND_HOTKEYS as hotkeys, useCommandHotkey } from '@/hooks/use-hotkey-registration'
 import { usePlaybackStore } from '@/shared/state/playback'
 import { useMarkersStore } from '../../stores/markers-store'
 import { useSelectionStore } from '@/shared/state/selection'
 import { HOTKEY_OPTIONS } from '@/config/hotkeys'
 import { addMarker, removeMarker } from '../../stores/actions/marker-actions'
-import { useRuntimeHotkeys } from '@/features/timeline/deps/settings'
 
 export function useMarkerShortcuts() {
-  const hotkeys = useRuntimeHotkeys()
   const setCurrentFrame = usePlaybackStore((s) => s.setCurrentFrame)
   const clearSelection = useSelectionStore((s) => s.clearSelection)
 
   // Markers: M - Add marker at playhead
-  useHotkeys(
+  useCommandHotkey(
     hotkeys.ADD_MARKER,
     (event) => {
       event.preventDefault()
@@ -28,7 +26,7 @@ export function useMarkerShortcuts() {
   )
 
   // Markers: Shift+M - Remove selected marker
-  useHotkeys(
+  useCommandHotkey(
     hotkeys.REMOVE_MARKER,
     (event) => {
       event.preventDefault()
@@ -43,7 +41,7 @@ export function useMarkerShortcuts() {
   )
 
   // Markers: [ - Jump to previous marker
-  useHotkeys(
+  useCommandHotkey(
     hotkeys.PREVIOUS_MARKER,
     (event) => {
       event.preventDefault()
@@ -67,7 +65,7 @@ export function useMarkerShortcuts() {
   )
 
   // Markers: ] - Jump to next marker
-  useHotkeys(
+  useCommandHotkey(
     hotkeys.NEXT_MARKER,
     (event) => {
       event.preventDefault()

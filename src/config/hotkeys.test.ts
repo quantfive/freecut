@@ -333,6 +333,41 @@ describe('resolveHotkeyConfiguration', () => {
     })
   })
 
+  it('does not let a dead portable claimant reserve an uncollided platform alias', () => {
+    const bindings = {
+      ...resolveHotkeys(),
+      PLAY_PAUSE: 'meta+f10',
+      SHUTTLE_REVERSE: 'mod+f10',
+      SHUTTLE_PAUSE: 'ctrl+f10',
+    }
+    const reordered = Object.fromEntries(Object.entries(bindings).toReversed()) as typeof bindings
+
+    expect(resolveRuntimeHotkeys(bindings)).toMatchObject({
+      PLAY_PAUSE: 'meta+f10',
+      SHUTTLE_REVERSE: '',
+      SHUTTLE_PAUSE: 'ctrl+f10',
+    })
+    expect(resolveRuntimeHotkeys(reordered)).toMatchObject({
+      PLAY_PAUSE: 'meta+f10',
+      SHUTTLE_REVERSE: '',
+      SHUTTLE_PAUSE: 'ctrl+f10',
+    })
+  })
+
+  it('does not let a dead derived claimant reserve an uncollided platform alias', () => {
+    const bindings = {
+      ...resolveHotkeys(),
+      PLAY_PAUSE: 'meta+shift+f10',
+      MARK_IN: 'mod+f10',
+      INSERT_EDIT: 'ctrl+shift+f10',
+    }
+
+    expect(getRuntimeHotkeyBinding(bindings, 'PLAY_PAUSE')).toBe('meta+shift+f10')
+    expect(getRuntimeHotkeyBinding(bindings, 'MARK_IN')).toBe('mod+f10')
+    expect(getRuntimeHotkeyBinding(bindings, 'MARK_IN', 'preview')).toBeNull()
+    expect(getRuntimeHotkeyBinding(bindings, 'INSERT_EDIT')).toBe('ctrl+shift+f10')
+  })
+
   it('keeps distinct explicit meta and ctrl runtime bindings reachable', () => {
     const bindings = {
       ...resolveHotkeys(),

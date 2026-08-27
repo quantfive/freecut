@@ -17,7 +17,11 @@ import {
 } from 'react'
 import { flushSync } from 'react-dom'
 import { useTranslation } from 'react-i18next'
-import { useHotkeys } from 'react-hotkeys-hook'
+import {
+  COMMAND_HOTKEYS as hotkeys,
+  useCommandHotkey,
+  useLocalHotkey,
+} from '@/hooks/use-hotkey-registration'
 import {
   ChevronDown,
   ChevronLeft,
@@ -477,14 +481,6 @@ interface DopesheetEditorProps {
   shortcutsEnabled?: boolean
   /** Keep the Edit add-keyframe shortcut active while its dock is open. */
   addKeyframeShortcutEnabled?: boolean
-  /** User-configurable bindings for high-frequency keyframe actions. */
-  shortcuts?: {
-    addKeyframe: string
-    previousKeyframe: string
-    nextKeyframe: string
-    toggleAutoKey: string
-    fitKeyframes: string
-  }
   /** Additional class name */
   className?: string
 }
@@ -913,7 +909,6 @@ export const DopesheetEditor = memo(function DopesheetEditor({
   showPlayhead = true,
   shortcutsEnabled = false,
   addKeyframeShortcutEnabled = false,
-  shortcuts,
   className,
 }: DopesheetEditorProps) {
   perfMarkRender('DopesheetEditor')
@@ -1583,13 +1578,7 @@ export const DopesheetEditor = memo(function DopesheetEditor({
     linkedTimelineViewportWidth !== undefined &&
     linkedTimelineViewportWidth > 0
   const timelineCellBorderWidth =
-    presentation === 'classic'
-      ? hasLinkedTimelineAxis
-        ? 0
-        : 1
-      : presentation === 'lanes'
-        ? 1
-        : 0
+    presentation === 'classic' ? (hasLinkedTimelineAxis ? 0 : 1) : presentation === 'lanes' ? 1 : 0
   const effectiveTimelineWidth = Math.max(
     hasLinkedTimelineAxis
       ? linkedTimelineViewportWidth
@@ -1692,12 +1681,8 @@ export const DopesheetEditor = memo(function DopesheetEditor({
   }, [affectedFrameRange, effectiveTimelineWidth, frameToX])
   const sharedGridFrameToX = useCallback(
     (frame: number) =>
-      getFrameAxisX(
-        frame,
-        viewport,
-        effectiveTimelineWidth + timelineCellBorderWidth,
-        0,
-      ) - timelineCellBorderWidth,
+      getFrameAxisX(frame, viewport, effectiveTimelineWidth + timelineCellBorderWidth, 0) -
+      timelineCellBorderWidth,
     [effectiveTimelineWidth, timelineCellBorderWidth, viewport],
   )
   const getRenderedKeyframeX = useCallback(
@@ -1947,8 +1932,7 @@ export const DopesheetEditor = memo(function DopesheetEditor({
     if (timelineGridDivisions && timelineGridDivisions > 0) {
       return Array.from(
         { length: timelineGridDivisions + 1 },
-        (_, index) =>
-          viewport.startFrame + (index / timelineGridDivisions) * frameRange,
+        (_, index) => viewport.startFrame + (index / timelineGridDivisions) * frameRange,
       )
     }
     const step = getNiceTickStep(frameRange)
@@ -2557,8 +2541,8 @@ export const DopesheetEditor = memo(function DopesheetEditor({
     ? propertyRowByProperty.get(selectedProperty)
     : undefined
 
-  useHotkeys(
-    shortcuts?.addKeyframe ?? '',
+  useCommandHotkey(
+    hotkeys.EDIT_KEYFRAME_ADD,
     (event) => {
       event.preventDefault()
       if (activePropertyRow) {
@@ -2571,9 +2555,7 @@ export const DopesheetEditor = memo(function DopesheetEditor({
     {
       ...HOTKEY_OPTIONS,
       enabled:
-        (shortcutsEnabled || addKeyframeShortcutEnabled) &&
-        !disabled &&
-        Boolean(shortcuts?.addKeyframe && activePropertyRow),
+        (shortcutsEnabled || addKeyframeShortcutEnabled) && !disabled && Boolean(activePropertyRow),
     },
     [
       activePropertyRow,
@@ -2584,8 +2566,8 @@ export const DopesheetEditor = memo(function DopesheetEditor({
     ],
   )
 
-  useHotkeys(
-    shortcuts?.previousKeyframe ?? '',
+  useCommandHotkey(
+    hotkeys.KEYFRAME_PREVIOUS,
     (event) => {
       event.preventDefault()
       if (activePropertyRow) {
@@ -2594,14 +2576,13 @@ export const DopesheetEditor = memo(function DopesheetEditor({
     },
     {
       ...HOTKEY_OPTIONS,
-      enabled:
-        shortcutsEnabled && !disabled && Boolean(shortcuts?.previousKeyframe && activePropertyRow),
+      enabled: shortcutsEnabled && !disabled && Boolean(activePropertyRow),
     },
     [activePropertyRow, disabled, handleRowNavigate, shortcutsEnabled],
   )
 
-  useHotkeys(
-    shortcuts?.nextKeyframe ?? '',
+  useCommandHotkey(
+    hotkeys.KEYFRAME_NEXT,
     (event) => {
       event.preventDefault()
       if (activePropertyRow) {
@@ -2610,14 +2591,13 @@ export const DopesheetEditor = memo(function DopesheetEditor({
     },
     {
       ...HOTKEY_OPTIONS,
-      enabled:
-        shortcutsEnabled && !disabled && Boolean(shortcuts?.nextKeyframe && activePropertyRow),
+      enabled: shortcutsEnabled && !disabled && Boolean(activePropertyRow),
     },
     [activePropertyRow, disabled, handleRowNavigate, shortcutsEnabled],
   )
 
-  useHotkeys(
-    shortcuts?.toggleAutoKey ?? '',
+  useCommandHotkey(
+    hotkeys.KEYFRAME_TOGGLE_AUTO,
     (event) => {
       event.preventDefault()
       if (activePropertyRow) {
@@ -2626,29 +2606,26 @@ export const DopesheetEditor = memo(function DopesheetEditor({
     },
     {
       ...HOTKEY_OPTIONS,
-      enabled:
-        shortcutsEnabled &&
-        !disabled &&
-        Boolean(shortcuts?.toggleAutoKey && activePropertyRow && onPropertyValueCommit),
+      enabled: shortcutsEnabled && !disabled && Boolean(activePropertyRow && onPropertyValueCommit),
     },
     [activePropertyRow, disabled, handleRowAutoKeyToggle, onPropertyValueCommit, shortcutsEnabled],
   )
 
-  useHotkeys(
-    shortcuts?.fitKeyframes ?? '',
+  useCommandHotkey(
+    hotkeys.KEYFRAME_FIT,
     (event) => {
       event.preventDefault()
       fitKeyframesInView()
     },
     {
       ...HOTKEY_OPTIONS,
-      enabled: shortcutsEnabled && !disabled && Boolean(shortcuts?.fitKeyframes),
+      enabled: shortcutsEnabled && !disabled,
     },
     [disabled, fitKeyframesInView, shortcutsEnabled],
   )
 
-  useHotkeys(
-    'delete,backspace',
+  useLocalHotkey(
+    'DOPESHEET_DELETE',
     (event) => {
       event.preventDefault()
       if (selectedRefs.length > 0) {
@@ -2659,8 +2636,8 @@ export const DopesheetEditor = memo(function DopesheetEditor({
     [disabled, selectedRefs, onRemoveKeyframes],
   )
 
-  useHotkeys(
-    'left',
+  useLocalHotkey(
+    'DOPESHEET_NUDGE_LEFT',
     (event) => {
       event.preventDefault()
       nudgeSelectedKeyframes(-1)
@@ -2669,8 +2646,8 @@ export const DopesheetEditor = memo(function DopesheetEditor({
     [disabled, selectedRefs.length, nudgeSelectedKeyframes],
   )
 
-  useHotkeys(
-    'right',
+  useLocalHotkey(
+    'DOPESHEET_NUDGE_RIGHT',
     (event) => {
       event.preventDefault()
       nudgeSelectedKeyframes(1)
@@ -2679,8 +2656,8 @@ export const DopesheetEditor = memo(function DopesheetEditor({
     [disabled, selectedRefs.length, nudgeSelectedKeyframes],
   )
 
-  useHotkeys(
-    'shift+left',
+  useLocalHotkey(
+    'DOPESHEET_NUDGE_LEFT_LARGE',
     (event) => {
       event.preventDefault()
       nudgeSelectedKeyframes(-10)
@@ -2689,8 +2666,8 @@ export const DopesheetEditor = memo(function DopesheetEditor({
     [disabled, selectedRefs.length, nudgeSelectedKeyframes],
   )
 
-  useHotkeys(
-    'shift+right',
+  useLocalHotkey(
+    'DOPESHEET_NUDGE_RIGHT_LARGE',
     (event) => {
       event.preventDefault()
       nudgeSelectedKeyframes(10)

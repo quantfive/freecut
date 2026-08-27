@@ -94,6 +94,11 @@ const runtimeHotkeysState = vi.hoisted(() => ({
   hotkeys: { ...resolvedHotkeysState.hotkeys },
 }))
 
+vi.mock('@/hooks/use-runtime-hotkey-binding', () => ({
+  useRuntimeHotkeyBinding: (command: keyof typeof runtimeHotkeysState.hotkeys) =>
+    runtimeHotkeysState.hotkeys[command] ?? '',
+}))
+
 vi.mock('@/features/preview/deps/player-context', () => ({
   PlayerEmitterProvider: ({ children }: { children: ReactNode }) => <>{children}</>,
   ClockBridgeProvider: ({ children }: { children: ReactNode }) => <>{children}</>,

@@ -3,7 +3,7 @@
  */
 
 import { useCallback } from 'react'
-import { useHotkeys } from 'react-hotkeys-hook'
+import { COMMAND_HOTKEYS as hotkeys, useCommandHotkey } from '@/hooks/use-hotkey-registration'
 import { usePlaybackStore } from '@/shared/state/playback'
 import { usePreviewBridgeStore } from '@/shared/state/preview-bridge'
 import { useItemsStore } from '../../stores/items-store'
@@ -14,7 +14,6 @@ import type { TimelineShortcutCallbacks } from '../use-timeline-shortcuts'
 import { useSourcePlayerStore } from '@/shared/state/source-player'
 import { getFilteredItemSnapEdges } from '../../utils/timeline-snap-utils'
 import { getVisibleTrackIds } from '../../utils/group-utils'
-import { useRuntimeHotkeys } from '@/features/timeline/deps/settings'
 
 /** Compute snap points on-demand from current store state (avoids reactive subscriptions). */
 function getSnapPoints(): number[] {
@@ -41,7 +40,6 @@ function getFinalTimelineFrame(): number {
 }
 
 export function usePlaybackShortcuts(callbacks: TimelineShortcutCallbacks) {
-  const hotkeys = useRuntimeHotkeys()
   const togglePlayPause = usePlaybackStore((s) => s.togglePlayPause)
   const shuttleForward = usePlaybackStore((s) => s.shuttleForward)
   const shuttleReverse = usePlaybackStore((s) => s.shuttleReverse)
@@ -60,7 +58,7 @@ export function usePlaybackShortcuts(callbacks: TimelineShortcutCallbacks) {
   )
 
   // Playback: Space - Play/Pause
-  useHotkeys(
+  useCommandHotkey(
     hotkeys.PLAY_PAUSE,
     (event) => {
       event.preventDefault()
@@ -82,7 +80,7 @@ export function usePlaybackShortcuts(callbacks: TimelineShortcutCallbacks) {
 
   // Shuttle forward advances through 1x, 2x, and 4x. Ignore browser key
   // repeat so one physical press produces one transport transition.
-  useHotkeys(
+  useCommandHotkey(
     hotkeys.SHUTTLE_FORWARD,
     (event) => {
       if (event.repeat) return
@@ -104,7 +102,7 @@ export function usePlaybackShortcuts(callbacks: TimelineShortcutCallbacks) {
 
   // Shuttle reverse mirrors forward playback. Browser media stays on a paused visual
   // seek path for negative rates; the Clock still advances at display cadence.
-  useHotkeys(
+  useCommandHotkey(
     hotkeys.SHUTTLE_REVERSE,
     (event) => {
       if (event.repeat) return
@@ -126,7 +124,7 @@ export function usePlaybackShortcuts(callbacks: TimelineShortcutCallbacks) {
 
   // Pause always owns its binding, including while already paused, so transport
   // routing cannot fall through to another command.
-  useHotkeys(
+  useCommandHotkey(
     hotkeys.SHUTTLE_PAUSE,
     (event) => {
       if (event.repeat) return
@@ -148,7 +146,7 @@ export function usePlaybackShortcuts(callbacks: TimelineShortcutCallbacks) {
   )
 
   // Navigation: Arrow Left - Previous frame
-  useHotkeys(
+  useCommandHotkey(
     hotkeys.PREVIOUS_FRAME,
     (event) => {
       event.preventDefault()
@@ -165,7 +163,7 @@ export function usePlaybackShortcuts(callbacks: TimelineShortcutCallbacks) {
   )
 
   // Navigation: Arrow Right - Next frame
-  useHotkeys(
+  useCommandHotkey(
     hotkeys.NEXT_FRAME,
     (event) => {
       event.preventDefault()
@@ -182,7 +180,7 @@ export function usePlaybackShortcuts(callbacks: TimelineShortcutCallbacks) {
   )
 
   // Navigation: Home - Go to start
-  useHotkeys(
+  useCommandHotkey(
     hotkeys.GO_TO_START,
     (event) => {
       event.preventDefault()
@@ -198,7 +196,7 @@ export function usePlaybackShortcuts(callbacks: TimelineShortcutCallbacks) {
   )
 
   // Navigation: End - Go to end of timeline (last frame of last item)
-  useHotkeys(
+  useCommandHotkey(
     hotkeys.GO_TO_END,
     (event) => {
       event.preventDefault()
@@ -214,7 +212,7 @@ export function usePlaybackShortcuts(callbacks: TimelineShortcutCallbacks) {
   )
 
   // Navigation: Down - Jump to next snap point (clip edge or marker)
-  useHotkeys(
+  useCommandHotkey(
     hotkeys.NEXT_SNAP_POINT,
     (event) => {
       event.preventDefault()
@@ -229,7 +227,7 @@ export function usePlaybackShortcuts(callbacks: TimelineShortcutCallbacks) {
   )
 
   // Navigation: Up - Jump to previous snap point (clip edge or marker)
-  useHotkeys(
+  useCommandHotkey(
     hotkeys.PREVIOUS_SNAP_POINT,
     (event) => {
       event.preventDefault()

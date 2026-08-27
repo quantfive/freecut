@@ -117,6 +117,7 @@
     "zustand": "5.0.12"
   },
   "devDependencies": {
+    "@babel/parser": "7.29.7",
     "@tailwindcss/vite": "4.2.2",
     "@tanstack/router-cli": "1.166.33",
     "@testing-library/dom": "10.4.1",

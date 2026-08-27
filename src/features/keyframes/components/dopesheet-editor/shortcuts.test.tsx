@@ -25,13 +25,6 @@ describe('DopesheetEditor shortcuts', () => {
         height={240}
         onAddKeyframe={onAddKeyframe}
         shortcutsEnabled
-        shortcuts={{
-          addKeyframe: 'shift+k',
-          previousKeyframe: 'alt+bracketleft',
-          nextKeyframe: 'alt+bracketright',
-          toggleAutoKey: 'a',
-          fitKeyframes: 'f',
-        }}
       />,
     )
 
@@ -57,13 +50,6 @@ describe('DopesheetEditor shortcuts', () => {
         onAddKeyframe={onAddKeyframe}
         onRemoveKeyframes={onRemoveKeyframes}
         shortcutsEnabled
-        shortcuts={{
-          addKeyframe: 'shift+k',
-          previousKeyframe: 'alt+bracketleft',
-          nextKeyframe: 'alt+bracketright',
-          toggleAutoKey: 'a',
-          fitKeyframes: 'f',
-        }}
       />,
     )
 
@@ -86,13 +72,6 @@ describe('DopesheetEditor shortcuts', () => {
         height={240}
         onAddKeyframe={onAddKeyframe}
         shortcutsEnabled={false}
-        shortcuts={{
-          addKeyframe: 'shift+k',
-          previousKeyframe: 'alt+bracketleft',
-          nextKeyframe: 'alt+bracketright',
-          toggleAutoKey: 'a',
-          fitKeyframes: 'f',
-        }}
       />,
     )
 
@@ -119,13 +98,6 @@ describe('DopesheetEditor shortcuts', () => {
         onNavigateToKeyframe={onNavigateToKeyframe}
         shortcutsEnabled={false}
         addKeyframeShortcutEnabled
-        shortcuts={{
-          addKeyframe: 'shift+k',
-          previousKeyframe: 'alt+bracketleft',
-          nextKeyframe: 'alt+bracketright',
-          toggleAutoKey: 'a',
-          fitKeyframes: 'f',
-        }}
       />,
     )
 
@@ -153,13 +125,6 @@ describe('DopesheetEditor shortcuts', () => {
         height={240}
         onAddKeyframe={onAddKeyframe}
         shortcutsEnabled
-        shortcuts={{
-          addKeyframe: 'shift+k',
-          previousKeyframe: 'alt+bracketleft',
-          nextKeyframe: 'alt+bracketright',
-          toggleAutoKey: 'a',
-          fitKeyframes: 'f',
-        }}
       />,
     )
 
