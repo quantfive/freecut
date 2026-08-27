@@ -727,6 +727,10 @@ interface TimelinePersistenceSnapshot {
   isRootTimelineLive: boolean
 }
 
+function cloneAudioEq(busAudioEq: AudioEqSettings | undefined): AudioEqSettings | undefined {
+  return busAudioEq ? { ...busAudioEq } : undefined
+}
+
 /**
  * Capture a Main-rooted project snapshot without navigating the live editor.
  *
@@ -773,7 +777,7 @@ function captureTimelinePersistenceSnapshot(): TimelinePersistenceSnapshot {
     return {
       ...composition,
       durationInFrames,
-      busAudioEq: playback.busAudioEq,
+      busAudioEq: cloneAudioEq(playback.busAudioEq),
       markers: markers.markers,
       inPoint: markers.inPoint,
       outPoint: markers.outPoint,
@@ -787,7 +791,7 @@ function captureTimelinePersistenceSnapshot(): TimelinePersistenceSnapshot {
     zoomLevel: heldRoot?.zoomLevel ?? rootView?.zoomLevel ?? zoom.level,
     scrollPosition:
       heldRoot?.scrollPosition ?? rootView?.scrollPosition ?? settings.scrollPosition,
-    busAudioEq: heldRoot ? heldRoot.busAudioEq : playback.busAudioEq,
+    busAudioEq: cloneAudioEq(heldRoot ? heldRoot.busAudioEq : playback.busAudioEq),
     masterBusDb: playback.masterBusDb,
     markers: heldRoot ? heldRoot.markers : markers.markers,
     inPoint: heldRoot ? heldRoot.inPoint : markers.inPoint,
