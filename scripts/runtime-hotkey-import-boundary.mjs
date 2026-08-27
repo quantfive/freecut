@@ -53,6 +53,8 @@ const LOOP_SCOPE_KINDS = new Set([
   SyntaxKind.ForStatement,
   SyntaxKind.ForInStatement,
   SyntaxKind.ForOfStatement,
+  SyntaxKind.WhileStatement,
+  SyntaxKind.DoStatement,
 ])
 
 const BLOCK_SCOPE_KINDS = new Set([
@@ -117,6 +119,7 @@ function declareVariableList(declarationList, scope) {
         kind: 'constant',
         initializer: declaration.initializer,
         scope: declarationScope,
+        availableAfter: declaration.end,
       })
       continue
     }
@@ -172,11 +175,10 @@ function createChildLexicalScope(node, currentScope) {
     return createClassLexicalScope(node, currentScope)
   }
   if (node.kind === SyntaxKind.CatchClause) {
-    const catchScope = createScope(currentScope, 'catch')
+    const catchScope = createScope(currentScope, 'catch', false, true)
     if (node.variableDeclaration) declareBarrier(catchScope, node.variableDeclaration.name)
     return catchScope
   }
-  if (LOOP_SCOPE_KINDS.has(node.kind)) return createScope(currentScope, 'loop')
   if (node.kind === SyntaxKind.SwitchStatement) return createScope(currentScope, 'block')
   if (!BLOCK_SCOPE_KINDS.has(node.kind)) return undefined
 
@@ -206,8 +208,55 @@ function buildLexicalScopes(sourceFile) {
   const sourceScope = createScope(undefined, 'source', true, true)
   const nodeScopes = new WeakMap()
 
-  function visit(node, currentScope) {
+  function visitLoopHeader(node, currentScope) {
+    if (!node) return
     nodeScopes.set(node, currentScope)
+    node.forEachChild((child) => visit(child, currentScope))
+  }
+
+  function visitLoop(node, currentScope) {
+    const loopScope = createScope(currentScope, 'loop', false, true)
+
+    if (node.kind === SyntaxKind.ForStatement) {
+      // Rolldown folds outer constants in a classic-for initializer, then
+      // stops carrying them through the condition, update, and body.
+      if (node.initializer?.kind === SyntaxKind.VariableDeclarationList) {
+        declareVariableList(node.initializer, loopScope)
+        visitLoopHeader(node.initializer, currentScope)
+      } else {
+        visit(node.initializer, currentScope)
+      }
+      visit(node.condition, loopScope)
+      visit(node.incrementor, loopScope)
+      visit(node.statement, loopScope)
+      return
+    }
+
+    if (node.kind === SyntaxKind.ForInStatement || node.kind === SyntaxKind.ForOfStatement) {
+      if (node.initializer.kind === SyntaxKind.VariableDeclarationList) {
+        declareVariableList(node.initializer, loopScope)
+        visitLoopHeader(node.initializer, currentScope)
+      } else {
+        visit(node.initializer, currentScope)
+      }
+      // The collection expression behaves like an initializer; the repeated
+      // body is the constant-resolution boundary.
+      visit(node.expression, currentScope)
+      visit(node.statement, loopScope)
+      return
+    }
+
+    visit(node.expression, loopScope)
+    visit(node.statement, loopScope)
+  }
+
+  function visit(node, currentScope) {
+    if (!node) return
+    nodeScopes.set(node, currentScope)
+    if (LOOP_SCOPE_KINDS.has(node.kind)) {
+      visitLoop(node, currentScope)
+      return
+    }
     const childScope = createChildLexicalScope(node, currentScope)
     if (!childScope) predeclareNodeBindings(node, currentScope)
     node.forEachChild((child) => visit(child, childScope ?? currentScope))
@@ -222,74 +271,137 @@ function findBinding(scope, name) {
   while (current) {
     const binding = current.bindings.get(name)
     if (binding) return binding
-    // Rolldown folds through lexical blocks, but not through captured
-    // function, class, or namespace environments.
+    // Rolldown folds through ordinary lexical blocks, but not through
+    // captured, catch, repeated-loop, or namespace environments.
     if (current.isConstantBoundary) return undefined
     current = current.parent
   }
   return undefined
 }
 
-function evaluateTemplateString(expression, scope, resolving, referenceScope) {
+function isBindingAvailable(binding, referencePosition) {
+  return binding.availableAfter === undefined || referencePosition >= binding.availableAfter
+}
+
+function evaluateTemplateString(expression, scope, resolving) {
   let value = expression.head.text
+  const dependencies = []
   for (const span of expression.templateSpans) {
-    const interpolation = evaluateConstantString(
-      span.expression,
-      scope,
-      resolving,
-      referenceScope,
-    )
-    if (interpolation === undefined) return undefined
-    value += interpolation + span.literal.text
+    const interpolation = evaluateConstantString(span.expression, scope, resolving)
+    if (!interpolation) return undefined
+    value += interpolation.value + span.literal.text
+    dependencies.push(...interpolation.dependencies)
   }
-  return value
+  return { value, dependencies }
 }
 
-function evaluateConcatenatedString(expression, scope, resolving, referenceScope) {
+function evaluateConcatenatedString(expression, scope, resolving) {
   if (expression.operatorToken.kind !== SyntaxKind.PlusToken) return undefined
-  const left = evaluateConstantString(expression.left, scope, resolving, referenceScope)
-  const right = evaluateConstantString(expression.right, scope, resolving, referenceScope)
-  return left === undefined || right === undefined ? undefined : left + right
+  const left = evaluateConstantString(expression.left, scope, resolving)
+  const right = evaluateConstantString(expression.right, scope, resolving)
+  if (!left || !right) return undefined
+  return {
+    value: left.value + right.value,
+    dependencies: [...left.dependencies, ...right.dependencies],
+  }
 }
 
-function evaluateConstantBinding(expression, scope, resolving, referenceScope) {
+function evaluateConstantBindingValue(binding, resolving) {
+  // Bindings are stable identities, so aliases keep the declaration-time
+  // environment even when the same name is shadowed at a later use site.
+  if (binding.cachedValue !== undefined) return binding.cachedValue
+  if (resolving.has(binding)) return undefined
+
+  const nextResolving = new Set(resolving).add(binding)
+  const result = evaluateConstantString(binding.initializer, binding.scope, nextResolving)
+  binding.cachedValue = result ?? null
+  return result
+}
+
+function dependencyMatchesUseSite(dependency, referenceScope, referencePosition, resolving) {
+  const visibleBinding = findBinding(referenceScope, dependency.name)
+  if (
+    !visibleBinding ||
+    visibleBinding === dependency.binding ||
+    !isBindingAvailable(visibleBinding, referencePosition)
+  ) {
+    return true
+  }
+  if (visibleBinding.kind !== 'constant') return false
+
+  // A same-value shadow is eliminated by Rolldown and does not prevent the
+  // captured alias from becoming a literal import. An unknown shadow does.
+  const visibleValue = evaluateConstantBindingValue(visibleBinding, resolving)
+  return visibleValue?.value === dependency.value
+}
+
+function evaluateConstantBinding(expression, scope, resolving, referenceScope, referencePosition) {
   const binding = findBinding(scope, expression.text)
-  // Initializers use their declaration environment, but Rolldown only folds
-  // an alias when that referenced binding is still the one visible at use.
   if (
     !binding ||
     binding.kind !== 'constant' ||
     resolving.has(binding) ||
-    findBinding(referenceScope, expression.text) !== binding
+    !isBindingAvailable(binding, expression.getStart())
   ) {
     return undefined
   }
-  const nextResolving = new Set(resolving).add(binding)
-  return evaluateConstantString(binding.initializer, binding.scope, nextResolving, referenceScope)
+
+  const value = evaluateConstantBindingValue(binding, resolving)
+  if (!value) return undefined
+  const dependencies = [
+    { name: expression.text, binding, value: value.value },
+    ...value.dependencies,
+  ]
+  if (
+    !dependencies.every((dependency) =>
+      dependencyMatchesUseSite(dependency, referenceScope, referencePosition, resolving),
+    )
+  ) {
+    return undefined
+  }
+  return { value: value.value, dependencies }
 }
 
-function evaluateConstantString(expression, scope, resolving = new Set(), referenceScope = scope) {
+function evaluateConstantString(
+  expression,
+  scope,
+  resolving = new Set(),
+  referenceScope = scope,
+  referencePosition = expression?.getStart() ?? 0,
+) {
   if (!expression) return undefined
   if (isStringLiteral(expression) || isNoSubstitutionTemplateLiteral(expression)) {
-    return expression.text
+    return { value: expression.text, dependencies: [] }
   }
   if (CONSTANT_STRING_WRAPPER_CHECKS.some((check) => check(expression))) {
-    return evaluateConstantString(expression.expression, scope, resolving, referenceScope)
+    return evaluateConstantString(
+      expression.expression,
+      scope,
+      resolving,
+      referenceScope,
+      referencePosition,
+    )
   }
   if (isTemplateExpression(expression)) {
-    return evaluateTemplateString(expression, scope, resolving, referenceScope)
+    return evaluateTemplateString(expression, scope, resolving)
   }
   if (isBinaryExpression(expression)) {
-    return evaluateConcatenatedString(expression, scope, resolving, referenceScope)
+    return evaluateConcatenatedString(expression, scope, resolving)
   }
   if (isIdentifier(expression)) {
-    return evaluateConstantBinding(expression, scope, resolving, referenceScope)
+    return evaluateConstantBinding(
+      expression,
+      scope,
+      resolving,
+      referenceScope,
+      referencePosition,
+    )
   }
   return undefined
 }
 
 function isReactHotkeysSource(source, scope) {
-  return evaluateConstantString(source, scope) === REACT_HOTKEYS_HOOK_MODULE
+  return evaluateConstantString(source, scope)?.value === REACT_HOTKEYS_HOOK_MODULE
 }
 
 function isStaticReactHotkeysImport(node, scope) {
