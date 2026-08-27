@@ -70,7 +70,7 @@ import {
 import { formatTimecodeCompact } from '@/shared/utils/time-utils'
 import { getPreviewPixelSnapSize } from '../utils/preview-pixel-snap'
 import type { TimelineTrack } from '@/types/timeline'
-import { useBlobUrlVersion } from '@/infrastructure/browser/blob-url-manager'
+import { useBlobUrlEpoch } from '@/infrastructure/browser/blob-url-manager'
 
 interface SourceMonitorProps {
   mediaId: string
@@ -206,7 +206,7 @@ const SourceMonitorContent = memo(function SourceMonitorContent({
 }: SourceMonitorProps) {
   const [blobUrl, setBlobUrl] = useState<string>('')
   const media = useMediaLibraryStore((s) => s.mediaById[mediaId])
-  const blobUrlVersion = useBlobUrlVersion()
+  const blobUrlEpoch = useBlobUrlEpoch(mediaId)
 
   // Sync current media ID into source player store for I/O points
   useEffect(() => {
@@ -234,7 +234,7 @@ const SourceMonitorContent = memo(function SourceMonitorContent({
   // canvas visible while the replacement URL resolves.
   useLayoutEffect(() => {
     setBlobUrl('')
-  }, [blobUrlVersion, mediaId])
+  }, [blobUrlEpoch, mediaId])
 
   // SourceComposition can swap to a ready proxy for video preview without
   // losing the original fallback URL. Blob invalidation retries the same ID.
@@ -250,7 +250,7 @@ const SourceMonitorContent = memo(function SourceMonitorContent({
     return () => {
       cancelled = true
     }
-  }, [blobUrlVersion, mediaId])
+  }, [blobUrlEpoch, mediaId])
 
   if (!media) return null
 

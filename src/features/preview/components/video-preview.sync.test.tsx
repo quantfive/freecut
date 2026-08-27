@@ -2366,6 +2366,157 @@ describe('VideoPreview sync behavior', () => {
     }
   })
 
+  it('retires a reachable nested same-id source binding before the unchanged wrapper can repaint', async () => {
+    canvasPixelReadbackEnabled = true
+    const mediaId = 'nested-same-media-relink'
+    const gradeEffect = {
+      id: 'effect-grade',
+      enabled: true,
+      effect: {
+        type: 'gpu-effect' as const,
+        gpuEffectType: 'gpu-color-wheels' as const,
+        params: { exposure: 0.5 },
+      },
+    }
+    setMockBlobUrl(mediaId, 'blob:nested-old')
+    const nestedTrack = {
+      id: 'nested-track',
+      name: 'Nested',
+      height: 60,
+      locked: false,
+      visible: true,
+      muted: false,
+      solo: false,
+      order: 0,
+      items: [],
+    }
+    useCompositionsStore.getState().setCompositions([
+      {
+        id: 'nested-composition',
+        name: 'Nested composition',
+        width: 1920,
+        height: 1080,
+        fps: 30,
+        durationInFrames: 120,
+        tracks: [nestedTrack],
+        transitions: [],
+        keyframes: [],
+        items: [
+          {
+            id: 'nested-video',
+            label: 'Nested video',
+            type: 'video',
+            trackId: nestedTrack.id,
+            mediaId,
+            src: 'blob:nested-stale-item',
+            from: 0,
+            durationInFrames: 120,
+          } as unknown as TimelineItem,
+        ],
+      },
+    ])
+    setSingleVideoTrack()
+    useItemsStore.getState().setItems([
+      {
+        id: 'compound-with-grade',
+        label: 'Compound',
+        type: 'composition',
+        trackId: 'track-video',
+        compositionId: 'nested-composition',
+        compositionWidth: 1920,
+        compositionHeight: 1080,
+        from: 0,
+        durationInFrames: 120,
+        effects: [gradeEffect],
+      } as unknown as TimelineItem,
+    ])
+    act(() => {
+      usePlaybackStore.getState().setCurrentFrame(24)
+    })
+
+    let observeRelinkLayout = false
+    let wasBlankInLayout = false
+    let wasHiddenInLayout = false
+    let wasDisposedInLayout = false
+    let gpuDisplayCanvas: HTMLCanvasElement | null = null
+    let oldSplitRenderer: (typeof rendererMockState.instances)[number] | null = null
+    const onBindingLayout = () => {
+      if (!observeRelinkLayout || !gpuDisplayCanvas || !oldSplitRenderer) return
+      wasBlankInLayout = blankCanvasState.has(gpuDisplayCanvas)
+      wasHiddenInLayout = gpuDisplayCanvas.style.visibility === 'hidden'
+      wasDisposedInLayout = oldSplitRenderer.dispose.mock.calls.length === 1
+    }
+
+    const { container } = render(
+      <>
+        <VideoPreview project={DEFAULT_PROJECT} containerSize={{ width: 1280, height: 720 }} />
+        <BlobBindingLayoutProbe onLayout={onBindingLayout} />
+      </>,
+    )
+    await waitFor(() => expect(rendererMockState.instances).toHaveLength(1))
+    act(() => {
+      useGizmoStore.getState().setColorGradeComparisonMode('split')
+    })
+
+    oldSplitRenderer = await waitFor(() => {
+      expect(rendererMockState.instances).toHaveLength(2)
+      return rendererMockState.instances[1]!
+    })
+    const oldSplitCall = createCompositionRendererMock.mock.calls[1] as unknown as [
+      unknown,
+      HTMLCanvasElement,
+    ]
+    gpuDisplayCanvas = container.querySelectorAll('canvas')[1] as HTMLCanvasElement
+    setMockCanvasBlank(oldSplitCall[1], false)
+    setMockCanvasBlank(gpuDisplayCanvas, false)
+
+    let resolveOldRender: (() => void) | null = null
+    oldSplitRenderer.renderFrame.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveOldRender = resolve
+        }),
+    )
+    act(() => {
+      useGizmoStore.getState().setEffectsPreviewNew({
+        'compound-with-grade': [
+          { ...gradeEffect, effect: { ...gradeEffect.effect, params: { exposure: 0.8 } } },
+        ],
+      })
+    })
+    await waitFor(() => expect(resolveOldRender).not.toBeNull())
+
+    observeRelinkLayout = true
+    act(() => {
+      setMockBlobUrl(mediaId, null)
+    })
+
+    expect(wasBlankInLayout).toBe(true)
+    expect(wasHiddenInLayout).toBe(true)
+    expect(wasDisposedInLayout).toBe(true)
+    const drawCountAfterRetirement = getCanvasDrawImageCallCountFrom(
+      gpuDisplayCanvas,
+      oldSplitCall[1],
+    )
+
+    await act(async () => {
+      resolveOldRender?.()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(getCanvasDrawImageCallCountFrom(gpuDisplayCanvas, oldSplitCall[1])).toBe(
+      drawCountAfterRetirement,
+    )
+
+    act(() => {
+      setMockBlobUrl(mediaId, 'blob:nested-new')
+    })
+    await waitFor(() => expect(rendererMockState.instances.length).toBeGreaterThan(2))
+    await waitFor(() => {
+      expect(rendererMockState.instances.at(-1)?.renderFrame).toHaveBeenCalledWith(24)
+    })
+  })
+
   it('keeps the split after renderer warm when toggling away from split and back', async () => {
     setSingleVideoItemAtFrame({
       id: 'item-graded',

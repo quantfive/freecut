@@ -11,7 +11,7 @@ import { SourceComposition } from './source-composition'
 import { usePlaybackStore } from '@/shared/state/playback'
 import { EDITOR_LAYOUT_CSS_VALUES } from '@/config/editor-layout'
 import { getPreviewNeedsOverflow, getPreviewPlayerSize } from '../utils/preview-pixel-snap'
-import { useBlobUrlVersion } from '@/infrastructure/browser/blob-url-manager'
+import { useBlobUrlEpoch } from '@/infrastructure/browser/blob-url-manager'
 
 interface InlineSourcePreviewProps {
   mediaId: string
@@ -54,14 +54,14 @@ const InlineSourcePreviewContent = memo(function InlineSourcePreviewContent({
 }: InlineSourcePreviewProps) {
   const [blobUrl, setBlobUrl] = useState('')
   const media = useMediaLibraryStore((s) => s.mediaById[mediaId])
-  const blobUrlVersion = useBlobUrlVersion()
+  const blobUrlEpoch = useBlobUrlEpoch(mediaId)
   const zoom = usePlaybackStore((s) => s.zoom)
   const mediaWidth = media?.width || 640
   const mediaHeight = media?.height || 360
 
   useLayoutEffect(() => {
     setBlobUrl('')
-  }, [blobUrlVersion, mediaId])
+  }, [blobUrlEpoch, mediaId])
 
   useEffect(() => {
     let cancelled = false
@@ -78,7 +78,7 @@ const InlineSourcePreviewContent = memo(function InlineSourcePreviewContent({
     return () => {
       cancelled = true
     }
-  }, [blobUrlVersion, mediaId])
+  }, [blobUrlEpoch, mediaId])
 
   const containerWidth = containerSize.width
   const containerHeight = containerSize.height
