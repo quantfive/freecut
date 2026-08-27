@@ -17,11 +17,7 @@ import {
 } from 'react'
 import { flushSync } from 'react-dom'
 import { useTranslation } from 'react-i18next'
-import {
-  COMMAND_HOTKEYS as hotkeys,
-  useCommandHotkey,
-  useLocalHotkey,
-} from '@/hooks/use-hotkey-registration'
+import { useCommandHotkey, useLocalHotkey } from '@/hooks/use-hotkey-registration'
 import {
   ChevronDown,
   ChevronLeft,
@@ -2542,7 +2538,7 @@ export const DopesheetEditor = memo(function DopesheetEditor({
     : undefined
 
   useCommandHotkey(
-    hotkeys.EDIT_KEYFRAME_ADD,
+    'EDIT_KEYFRAME_ADD',
     (event) => {
       event.preventDefault()
       if (activePropertyRow) {
@@ -2567,7 +2563,7 @@ export const DopesheetEditor = memo(function DopesheetEditor({
   )
 
   useCommandHotkey(
-    hotkeys.KEYFRAME_PREVIOUS,
+    'KEYFRAME_PREVIOUS',
     (event) => {
       event.preventDefault()
       if (activePropertyRow) {
@@ -2582,7 +2578,7 @@ export const DopesheetEditor = memo(function DopesheetEditor({
   )
 
   useCommandHotkey(
-    hotkeys.KEYFRAME_NEXT,
+    'KEYFRAME_NEXT',
     (event) => {
       event.preventDefault()
       if (activePropertyRow) {
@@ -2597,7 +2593,7 @@ export const DopesheetEditor = memo(function DopesheetEditor({
   )
 
   useCommandHotkey(
-    hotkeys.KEYFRAME_TOGGLE_AUTO,
+    'KEYFRAME_TOGGLE_AUTO',
     (event) => {
       event.preventDefault()
       if (activePropertyRow) {
@@ -2612,7 +2608,7 @@ export const DopesheetEditor = memo(function DopesheetEditor({
   )
 
   useCommandHotkey(
-    hotkeys.KEYFRAME_FIT,
+    'KEYFRAME_FIT',
     (event) => {
       event.preventDefault()
       fitKeyframesInView()

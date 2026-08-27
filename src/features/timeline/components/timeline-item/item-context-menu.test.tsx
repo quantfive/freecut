@@ -1,7 +1,6 @@
 import type { ComponentProps, ReactNode } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vite-plus/test'
 import { fireEvent, render, screen } from '@testing-library/react'
-import { COMMAND_HOTKEYS } from '@/hooks/use-hotkey-registration'
 import { useSelectionStore } from '@/shared/state/selection'
 import { ItemContextMenu } from './item-context-menu'
 
@@ -115,10 +114,6 @@ describe('ItemContextMenu scene detection', () => {
       activeTrackId: null,
       selectionType: null,
     })
-  })
-
-  it('keeps command identifiers usable with the existing partial hotkey config mock', () => {
-    expect(COMMAND_HOTKEYS.DELETE_SELECTED).toBe('DELETE_SELECTED')
   })
 
   it('keeps the menu non-modal so dialog handoffs cannot strand pointer blocking', () => {

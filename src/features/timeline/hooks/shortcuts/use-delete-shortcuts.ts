@@ -8,7 +8,7 @@
  */
 
 import { useCallback } from 'react'
-import { COMMAND_HOTKEYS as hotkeys, useCommandHotkey } from '@/hooks/use-hotkey-registration'
+import { useCommandHotkey } from '@/hooks/use-hotkey-registration'
 import { useEditorStore } from '@/shared/state/editor'
 import { useTimelineStore } from '../../stores/timeline-store'
 import { useSelectionStore } from '@/shared/state/selection'
@@ -80,8 +80,8 @@ export function useDeleteShortcuts(callbacks: TimelineShortcutCallbacks) {
   )
 
   // Editing: Delete - Delete selected items, marker, or transition
-  useCommandHotkey(hotkeys.DELETE_SELECTED, deleteSelection, HOTKEY_OPTIONS, [deleteSelection])
+  useCommandHotkey('DELETE_SELECTED', deleteSelection, HOTKEY_OPTIONS, [deleteSelection])
 
   // Editing: Backspace - Delete selected items, marker, or transition (alternative)
-  useCommandHotkey(hotkeys.DELETE_SELECTED_ALT, deleteSelection, HOTKEY_OPTIONS, [deleteSelection])
+  useCommandHotkey('DELETE_SELECTED_ALT', deleteSelection, HOTKEY_OPTIONS, [deleteSelection])
 }

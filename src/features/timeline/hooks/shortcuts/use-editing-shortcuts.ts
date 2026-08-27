@@ -3,7 +3,7 @@
  */
 
 import { useCallback } from 'react'
-import { COMMAND_HOTKEYS as hotkeys, useCommandHotkey } from '@/hooks/use-hotkey-registration'
+import { useCommandHotkey } from '@/hooks/use-hotkey-registration'
 import { usePlaybackStore } from '@/shared/state/playback'
 import { useEditorStore } from '@/shared/state/editor'
 import { useTimelineStore } from '../../stores/timeline-store'
@@ -78,7 +78,7 @@ export function useEditingShortcuts(callbacks: TimelineShortcutCallbacks) {
 
   // Editing: Ctrl+Delete - Ripple delete selected items (delete + close gap)
   useCommandHotkey(
-    hotkeys.RIPPLE_DELETE,
+    'RIPPLE_DELETE',
     (event) => {
       if (deleteOwnedByPanel) {
         event.preventDefault()
@@ -100,7 +100,7 @@ export function useEditingShortcuts(callbacks: TimelineShortcutCallbacks) {
 
   // Editing: Ctrl+Backspace - Ripple delete selected items (alternative)
   useCommandHotkey(
-    hotkeys.RIPPLE_DELETE_ALT,
+    'RIPPLE_DELETE_ALT',
     (event) => {
       if (deleteOwnedByPanel) {
         event.preventDefault()
@@ -122,7 +122,7 @@ export function useEditingShortcuts(callbacks: TimelineShortcutCallbacks) {
 
   // Editing: Shift+Arrow keys - nudge selected visual items by 1px
   useCommandHotkey(
-    hotkeys.NUDGE_LEFT,
+    'NUDGE_LEFT',
     (event) => {
       event.preventDefault()
       nudgeSelectedVisualItems(-1, 0)
@@ -132,7 +132,7 @@ export function useEditingShortcuts(callbacks: TimelineShortcutCallbacks) {
   )
 
   useCommandHotkey(
-    hotkeys.NUDGE_RIGHT,
+    'NUDGE_RIGHT',
     (event) => {
       event.preventDefault()
       nudgeSelectedVisualItems(1, 0)
@@ -142,7 +142,7 @@ export function useEditingShortcuts(callbacks: TimelineShortcutCallbacks) {
   )
 
   useCommandHotkey(
-    hotkeys.NUDGE_UP,
+    'NUDGE_UP',
     (event) => {
       event.preventDefault()
       nudgeSelectedVisualItems(0, -1)
@@ -152,7 +152,7 @@ export function useEditingShortcuts(callbacks: TimelineShortcutCallbacks) {
   )
 
   useCommandHotkey(
-    hotkeys.NUDGE_DOWN,
+    'NUDGE_DOWN',
     (event) => {
       event.preventDefault()
       nudgeSelectedVisualItems(0, 1)
@@ -163,7 +163,7 @@ export function useEditingShortcuts(callbacks: TimelineShortcutCallbacks) {
 
   // Editing: Cmd/Ctrl+Shift+Arrow keys - nudge selected visual items by 10px
   useCommandHotkey(
-    hotkeys.NUDGE_LEFT_LARGE,
+    'NUDGE_LEFT_LARGE',
     (event) => {
       event.preventDefault()
       nudgeSelectedVisualItems(-10, 0)
@@ -173,7 +173,7 @@ export function useEditingShortcuts(callbacks: TimelineShortcutCallbacks) {
   )
 
   useCommandHotkey(
-    hotkeys.NUDGE_RIGHT_LARGE,
+    'NUDGE_RIGHT_LARGE',
     (event) => {
       event.preventDefault()
       nudgeSelectedVisualItems(10, 0)
@@ -183,7 +183,7 @@ export function useEditingShortcuts(callbacks: TimelineShortcutCallbacks) {
   )
 
   useCommandHotkey(
-    hotkeys.NUDGE_UP_LARGE,
+    'NUDGE_UP_LARGE',
     (event) => {
       event.preventDefault()
       nudgeSelectedVisualItems(0, -10)
@@ -193,7 +193,7 @@ export function useEditingShortcuts(callbacks: TimelineShortcutCallbacks) {
   )
 
   useCommandHotkey(
-    hotkeys.NUDGE_DOWN_LARGE,
+    'NUDGE_DOWN_LARGE',
     (event) => {
       event.preventDefault()
       nudgeSelectedVisualItems(0, 10)
@@ -204,7 +204,7 @@ export function useEditingShortcuts(callbacks: TimelineShortcutCallbacks) {
 
   // Editing: Shift+J - Join selected clips
   useCommandHotkey(
-    hotkeys.JOIN_ITEMS,
+    'JOIN_ITEMS',
     (event) => {
       if (selectedItemIds.length < 2) return
 
@@ -224,7 +224,7 @@ export function useEditingShortcuts(callbacks: TimelineShortcutCallbacks) {
   )
 
   useCommandHotkey(
-    hotkeys.LINK_AUDIO_VIDEO,
+    'LINK_AUDIO_VIDEO',
     (event) => {
       if (selectedItemIds.length < 2) return
       if (!canLinkSelection(items, selectedItemIds)) return
@@ -237,7 +237,7 @@ export function useEditingShortcuts(callbacks: TimelineShortcutCallbacks) {
   )
 
   useCommandHotkey(
-    hotkeys.UNLINK_AUDIO_VIDEO,
+    'UNLINK_AUDIO_VIDEO',
     (event) => {
       if (selectedItemIds.length === 0) return
       if (!selectedItemIds.some((id) => hasLinkedItems(items, id))) return
@@ -250,7 +250,7 @@ export function useEditingShortcuts(callbacks: TimelineShortcutCallbacks) {
   )
 
   useCommandHotkey(
-    hotkeys.TOGGLE_LINKED_SELECTION,
+    'TOGGLE_LINKED_SELECTION',
     (event) => {
       event.preventDefault()
       toggleLinkedSelectionEnabled()
@@ -268,7 +268,7 @@ export function useEditingShortcuts(callbacks: TimelineShortcutCallbacks) {
 
   // Editing: Alt+C - Split all items at gray playhead (or main playhead)
   useCommandHotkey(
-    hotkeys.SPLIT_AT_PLAYHEAD_ALT,
+    'SPLIT_AT_PLAYHEAD_ALT',
     splitAtPlayhead,
     { ...HOTKEY_OPTIONS, eventListenerOptions: { capture: true } },
     [splitAtPlayhead],
@@ -276,7 +276,7 @@ export function useEditingShortcuts(callbacks: TimelineShortcutCallbacks) {
 
   // Editing: Shift+F - Insert freeze frame at playhead
   useCommandHotkey(
-    hotkeys.FREEZE_FRAME,
+    'FREEZE_FRAME',
     (event) => {
       if (selectedItemIds.length !== 1) return
       const currentFrame = usePlaybackStore.getState().currentFrame
@@ -299,7 +299,7 @@ export function useEditingShortcuts(callbacks: TimelineShortcutCallbacks) {
 
   // Keyframes: Shift+A - Clear all keyframes for selected items (with confirmation)
   useCommandHotkey(
-    hotkeys.CLEAR_KEYFRAMES,
+    'CLEAR_KEYFRAMES',
     (event) => {
       if (selectedItemIds.length === 0) return
 
