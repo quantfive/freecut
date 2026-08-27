@@ -190,6 +190,11 @@ export async function resolveMediaUrls(
   const useProxy = options?.useProxy ?? true
   const signal = options?.signal
 
+  const throwIfAborted = () => {
+    if (signal?.aborted) throw new DOMException('Media resolution aborted', 'AbortError')
+  }
+  throwIfAborted()
+
   // Deep clone tracks to avoid mutating original
   const resolvedTracks: TimelineTrack[] = structuredClone(tracks)
 
@@ -206,7 +211,8 @@ export async function resolveMediaUrls(
           item.type === 'image' ||
           item.type === 'lottie')
       ) {
-        const promise = resolveMediaUrl(item.mediaId).then((blobUrl) => {
+        const resolution = resolveMediaUrl(item.mediaId).then((blobUrl) => {
+          throwIfAborted()
           // For video items in preview mode, prefer proxy URL if available
           if (useProxy && item.type === 'video') {
             const proxyUrl = resolveProxyUrl(item.mediaId!)
@@ -219,7 +225,30 @@ export async function resolveMediaUrls(
             }
           }
         })
-        resolutionPromises.push(promise)
+        if (signal) {
+          resolutionPromises.push(
+            new Promise<void>((resolve, reject) => {
+              const onAbort = () => {
+                signal.removeEventListener('abort', onAbort)
+                reject(new DOMException('Media resolution aborted', 'AbortError'))
+              }
+              signal.addEventListener('abort', onAbort, { once: true })
+              resolution.then(
+                () => {
+                  signal.removeEventListener('abort', onAbort)
+                  resolve()
+                },
+                (error) => {
+                  signal.removeEventListener('abort', onAbort)
+                  reject(error)
+                },
+              )
+              if (signal.aborted) onAbort()
+            }),
+          )
+        } else {
+          resolutionPromises.push(resolution)
+        }
       }
     }
   }
@@ -228,9 +257,7 @@ export async function resolveMediaUrls(
   await Promise.all(resolutionPromises)
 
   // Check if aborted after resolution
-  if (signal?.aborted) {
-    throw new DOMException('Media resolution aborted', 'AbortError')
-  }
+  throwIfAborted()
 
   return resolvedTracks
 }
