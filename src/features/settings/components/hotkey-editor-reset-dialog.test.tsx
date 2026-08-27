@@ -120,34 +120,28 @@ describe('HotkeyEditor reset all confirmation', () => {
     })
   })
 
-  it('restores partial conflict overwrites when capture is cancelled', async () => {
-    useSettingsStore.setState({
-      hotkeyOverrides: {
-        PLAY_PAUSE: 'shift+k',
-        PREVIOUS_FRAME: 'right',
-      },
+  it('repairs duplicate overrides before presenting conflict choices', async () => {
+    useSettingsStore.getState().replaceHotkeyOverrides({
+      PLAY_PAUSE: 'shift+space',
+      PREVIOUS_FRAME: 'right',
+    })
+
+    expect(useSettingsStore.getState().hotkeyOverrides).toEqual({
+      PLAY_PAUSE: 'shift+space',
     })
 
     click(getButton('Record'))
     await waitForText('Listening')
     keyDown('ArrowRight', 'ArrowRight')
 
-    await waitForBodyText('Conflicts with Previous frame')
     await waitForBodyText('Conflicts with Next frame')
-    click(getButton('Overwrite'))
-    await new Promise((resolve) => setTimeout(resolve, 0))
-
-    expect(useSettingsStore.getState().hotkeyOverrides).not.toEqual({
-      PLAY_PAUSE: 'shift+k',
-      PREVIOUS_FRAME: 'right',
-    })
+    expect(document.body.textContent).not.toContain('Conflicts with Previous frame')
 
     keyDown('Escape', 'Escape')
     await new Promise((resolve) => setTimeout(resolve, 0))
 
     expect(useSettingsStore.getState().hotkeyOverrides).toEqual({
-      PLAY_PAUSE: 'shift+k',
-      PREVIOUS_FRAME: 'right',
+      PLAY_PAUSE: 'shift+space',
     })
   })
 
