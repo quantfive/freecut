@@ -234,6 +234,364 @@ const ROLLDOWN_PARITY_CASES = [
       "declare function moduleName(): string; export function load() { const pkg = 'react-hotkeys-hook'; { const pkg = moduleName(); return import(pkg) } }",
     resolves: false,
   },
+  {
+    name: 'captured alias under different literal shadow',
+    source:
+      "export function load() { const pkg = 'react-hotkeys-hook'; const alias = pkg; { const pkg = 'other'; return import(alias) } }",
+    resolves: true,
+  },
+  {
+    name: 'captured alias under uninitialized let shadow',
+    source:
+      "export function load() { const pkg = 'react-hotkeys-hook'; const alias = pkg; { let pkg; return import(alias) } }",
+    resolves: true,
+  },
+  {
+    name: 'captured alias under unknown let shadow',
+    source:
+      "declare function moduleName(): string; export function load() { const pkg = 'react-hotkeys-hook'; const alias = pkg; { let pkg = moduleName(); return import(alias) } }",
+    resolves: false,
+  },
+  {
+    name: 'captured alias under mutated let shadow',
+    source:
+      "declare function moduleName(): string; export function load() { const pkg = 'react-hotkeys-hook'; const alias = pkg; { let pkg; pkg = moduleName(); return import(alias) } }",
+    resolves: false,
+  },
+  {
+    name: 'captured alias under function shadow',
+    source:
+      "export function load() { const pkg = 'react-hotkeys-hook'; const alias = pkg; { function pkg() {} return import(alias) } }",
+    resolves: true,
+  },
+  {
+    name: 'captured alias under class shadow',
+    source:
+      "export function load() { const pkg = 'react-hotkeys-hook'; const alias = pkg; { class pkg {} return import(alias) } }",
+    resolves: true,
+  },
+  {
+    name: 'captured alias with unknown sibling shadow',
+    source:
+      "export function load() { const pkg = 'react-hotkeys-hook'; const alias = pkg; { const pkg = moduleName() } { return import(alias) } }",
+    resolves: false,
+  },
+  {
+    name: 'captured alias with known sibling shadow',
+    source:
+      "export function load() { const pkg = 'react-hotkeys-hook'; const alias = pkg; { const pkg = 'other' } { return import(alias) } }",
+    resolves: true,
+  },
+  {
+    name: 'captured alias across closure parameter',
+    source:
+      "export function load() { const pkg = 'react-hotkeys-hook'; const alias = pkg; return function inner(pkg: string) { return import(alias) } }",
+    resolves: false,
+  },
+  {
+    name: 'direct let shadow',
+    source:
+      "export function load() { const pkg = 'react-hotkeys-hook'; { let pkg; return import(pkg) } }",
+    resolves: false,
+  },
+  {
+    name: 'direct var shadow',
+    source:
+      "const pkg = 'react-hotkeys-hook'; export function load() { import(pkg); var pkg: string }",
+    resolves: false,
+  },
+  {
+    name: 'direct destructuring shadow',
+    source:
+      "export function load(value: { pkg: string }) { const pkg = 'react-hotkeys-hook'; { const { pkg } = value; return import(pkg) } }",
+    resolves: false,
+  },
+  {
+    name: 'direct import binding shadow',
+    source: "import pkg from 'runtime-name'; export function load() { return import(pkg) }",
+    resolves: false,
+  },
+  {
+    name: 'direct function shadow',
+    source:
+      "export function load() { const pkg = 'react-hotkeys-hook'; { return import(pkg); function pkg() {} } }",
+    resolves: false,
+  },
+  {
+    name: 'direct class shadow',
+    source:
+      "export function load() { const pkg = 'react-hotkeys-hook'; { return import(pkg); class pkg {} } }",
+    resolves: false,
+  },
+  {
+    name: 'finally outer const',
+    source:
+      "export function load() { const pkg = 'react-hotkeys-hook'; try {} finally { return import(pkg) } }",
+    resolves: true,
+  },
+  {
+    name: 'finally captured alias under let shadow',
+    source:
+      "export function load() { const pkg = 'react-hotkeys-hook'; const alias = pkg; try {} finally { let pkg; return import(alias) } }",
+    resolves: true,
+  },
+  {
+    name: 'catch captured alias boundary',
+    source:
+      "export function load() { const pkg = 'react-hotkeys-hook'; const alias = pkg; try { throw 1 } catch { return import(alias) } }",
+    resolves: false,
+  },
+  {
+    name: 'classic for sequential declarator',
+    source:
+      "export function load() { for (const pkg = 'react-hotkeys-hook', pending = import(pkg); ;) break }",
+    resolves: true,
+  },
+  {
+    name: 'classic for later declarator temporal dead zone',
+    source:
+      "export function load() { for (const pending = import(pkg), pkg = 'react-hotkeys-hook'; ;) break }",
+    resolves: false,
+  },
+  {
+    name: 'classic for current declarator temporal dead zone',
+    source:
+      "export function load() { const pkg = 'react-hotkeys-hook'; for (const pkg = import(pkg); ;) break }",
+    resolves: false,
+  },
+  {
+    name: 'for-in same-name expression temporal dead zone',
+    source:
+      "export function load() { const pkg = 'react-hotkeys-hook'; for (const pkg in import(pkg)) break }",
+    resolves: false,
+  },
+  {
+    name: 'for-of same-name expression temporal dead zone',
+    source:
+      "export function load() { const pkg = 'react-hotkeys-hook'; for (const pkg of import(pkg)) break }",
+    resolves: false,
+  },
+  {
+    name: 'for-in different-name expression',
+    source:
+      "export function load() { const pkg = 'react-hotkeys-hook'; for (const key in import(pkg)) break }",
+    resolves: true,
+  },
+  {
+    name: 'for-of different-name expression',
+    source:
+      "export function load() { const pkg = 'react-hotkeys-hook'; for (const value of import(pkg)) break }",
+    resolves: true,
+  },
+  {
+    name: 'conditional true branch',
+    source: "const pkg = true ? 'react-hotkeys-hook' : 'other'; import(pkg)",
+    resolves: true,
+  },
+  {
+    name: 'conditional false branch',
+    source: "const pkg = false ? 'other' : 'react-hotkeys-hook'; import(pkg)",
+    resolves: true,
+  },
+  {
+    name: 'conditional non-target result',
+    source: "const pkg = true ? 'other' : 'react-hotkeys-hook'; import(pkg)",
+    resolves: false,
+  },
+  {
+    name: 'conditional unknown condition',
+    source:
+      "declare const enabled: boolean; const pkg = enabled ? 'react-hotkeys-hook' : 'other'; import(pkg)",
+    resolves: true,
+  },
+  {
+    name: 'conditional wholly dynamic result',
+    source:
+      'declare const enabled: boolean; declare const first: string; declare const second: string; const pkg = enabled ? first : second; import(pkg)',
+    resolves: false,
+  },
+  {
+    name: 'logical and truthy boolean',
+    source: "const pkg = true && 'react-hotkeys-hook'; import(pkg)",
+    resolves: true,
+  },
+  {
+    name: 'logical and truthy number',
+    source: "const pkg = 1 && 'react-hotkeys-hook'; import(pkg)",
+    resolves: true,
+  },
+  {
+    name: 'logical and falsy boolean',
+    source: "const pkg = false && 'react-hotkeys-hook'; import(pkg)",
+    resolves: false,
+  },
+  {
+    name: 'logical and falsy number',
+    source: "const pkg = 0 && 'react-hotkeys-hook'; import(pkg)",
+    resolves: false,
+  },
+  {
+    name: 'logical or falsy boolean',
+    source: "const pkg = false || 'react-hotkeys-hook'; import(pkg)",
+    resolves: true,
+  },
+  {
+    name: 'logical or falsy number',
+    source: "const pkg = 0 || 'react-hotkeys-hook'; import(pkg)",
+    resolves: true,
+  },
+  {
+    name: 'logical or truthy boolean',
+    source: "const pkg = true || 'react-hotkeys-hook'; import(pkg)",
+    resolves: false,
+  },
+  {
+    name: 'logical or truthy string',
+    source: "const pkg = 'other' || 'react-hotkeys-hook'; import(pkg)",
+    resolves: false,
+  },
+  {
+    name: 'nullish null',
+    source: "const pkg = null ?? 'react-hotkeys-hook'; import(pkg)",
+    resolves: true,
+  },
+  {
+    name: 'nullish non-null number',
+    source: "const pkg = 0 ?? 'react-hotkeys-hook'; import(pkg)",
+    resolves: false,
+  },
+  {
+    name: 'unknown logical operand',
+    source:
+      "declare const enabled: boolean; const pkg = enabled && 'react-hotkeys-hook'; import(pkg)",
+    resolves: false,
+  },
+  {
+    name: 'unknown concatenated operand',
+    source: "declare const suffix: string; const pkg = 'react-hotkeys-' + suffix; import(pkg)",
+    resolves: false,
+  },
+  {
+    name: 'wrapped logical expression',
+    source:
+      "const pkg = (((true && 'react-hotkeys-hook') as string)!) satisfies string; import(pkg)",
+    resolves: true,
+  },
+  {
+    name: 'const enum property member',
+    source: "const enum Modules { Hotkeys = 'react-hotkeys-hook' } import(Modules.Hotkeys)",
+    resolves: true,
+  },
+  {
+    name: 'const enum element member',
+    source: "const enum Modules { Hotkeys = 'react-hotkeys-hook' } import(Modules['Hotkeys'])",
+    resolves: true,
+  },
+  {
+    name: 'const enum member alias',
+    source:
+      "const enum Modules { Hotkeys = 'react-hotkeys-hook', Alias = Hotkeys } import(Modules.Alias)",
+    resolves: true,
+  },
+  {
+    name: 'const enum non-target member',
+    source:
+      "const enum Modules { Hotkeys = 'react-hotkeys-hook', Other = 'other' } import(Modules.Other)",
+    resolves: false,
+  },
+  {
+    name: 'const enum automatic numeric member',
+    source: 'const enum Modules { Other } import(Modules.Other)',
+    resolves: false,
+  },
+  {
+    name: 'const enum member cycle',
+    source: 'const enum Modules { First = Second, Second = First } import(Modules.First)',
+    resolves: false,
+  },
+  {
+    name: 'global require',
+    source: "export function load() { return require('react-hotkeys-hook') }",
+    resolves: true,
+  },
+  {
+    name: 'require parameter shadow',
+    source:
+      "export function load(require: (id: string) => unknown) { return require('react-hotkeys-hook') }",
+    resolves: false,
+  },
+  {
+    name: 'require destructuring parameter shadow',
+    source:
+      "export function load({ require }: { require: (id: string) => unknown }) { return require('react-hotkeys-hook') }",
+    resolves: false,
+  },
+  {
+    name: 'require local const shadow',
+    source:
+      "export function load() { const require = (id: string) => id; return require('react-hotkeys-hook') }",
+    resolves: false,
+  },
+  {
+    name: 'require local function shadow',
+    source:
+      "export function load() { return require('react-hotkeys-hook'); function require(id: string) { return id } }",
+    resolves: false,
+  },
+  {
+    name: 'require import shadow',
+    source:
+      "import { require } from 'runtime-name'; export function load() { return require('react-hotkeys-hook') }",
+    resolves: false,
+  },
+  {
+    name: 'require catch shadow',
+    source:
+      "export function load() { try { throw (() => undefined) } catch (require) { return require('react-hotkeys-hook') } }",
+    resolves: false,
+  },
+  {
+    name: 'require sibling unshadowed',
+    source:
+      "export function load() { { const require = (id: string) => id; require('react-hotkeys-hook') } return require('react-hotkeys-hook') }",
+    resolves: true,
+  },
+  {
+    name: 'type-only import declaration',
+    source: "import type { HotkeyCallback } from 'react-hotkeys-hook'",
+    resolves: false,
+  },
+  {
+    name: 'type-only import specifier',
+    source: "import { type HotkeyCallback } from 'react-hotkeys-hook'",
+    resolves: false,
+  },
+  {
+    name: 'mixed value and type import',
+    source:
+      "import { type HotkeyCallback, useHotkeys } from 'react-hotkeys-hook'; console.log(useHotkeys)",
+    resolves: true,
+  },
+  {
+    name: 'type-only export declaration',
+    source: "export type { HotkeyCallback } from 'react-hotkeys-hook'",
+    resolves: false,
+  },
+  {
+    name: 'type-only export specifier',
+    source: "export { type HotkeyCallback } from 'react-hotkeys-hook'",
+    resolves: false,
+  },
+  {
+    name: 'mixed value and type export',
+    source: "export { type HotkeyCallback, useHotkeys } from 'react-hotkeys-hook'",
+    resolves: true,
+  },
+  {
+    name: 'type-only import equals',
+    source: "import type Hotkeys = require('react-hotkeys-hook')",
+    resolves: false,
+  },
 ] as const
 
 const ROLLDOWN_PARITY_SCRIPT = `
@@ -260,7 +618,11 @@ const ROLLDOWN_PARITY_SCRIPT = `
       const generated = await bundle.generate({ format: 'es' })
       const chunk = generated.output.find((output) => output.type === 'chunk')
       if (!chunk) throw new Error('Rolldown did not generate a JavaScript chunk')
-      resolutions.push(/import\\(["']react-hotkeys-hook["']\\)/.test(chunk.code))
+      resolutions.push(
+        /(?:from\\s+|import\\s*\\(|import\\s+|__require\\s*\\()\\s*["']react-hotkeys-hook["']/.test(
+          chunk.code,
+        ),
+      )
     } finally {
       await bundle.close()
     }
@@ -453,6 +815,24 @@ describe('runtime hotkey registration coverage', () => {
     expect(
       findReactHotkeysHookImportViolations([{ path: 'src/features/documentation.ts', source }]),
     ).toEqual([])
+  })
+
+  it('fails transparently and deterministically on malformed source', () => {
+    const sources = [
+      {
+        path: 'src/features/z-malformed.ts',
+        source: "const hooks = import('react-hotkeys-hook'",
+      },
+      { path: 'src/features/a-malformed.ts', source: 'export const value = }' },
+    ]
+
+    expect(() => findReactHotkeysHookImportViolations(sources)).toThrowError(
+      new SyntaxError(
+        'Runtime hotkey import boundary could not parse source:\n' +
+          'src/features/a-malformed.ts:1:22 TS1109: Expression expected.\n' +
+          "src/features/z-malformed.ts:1:42 TS1005: ')' expected.",
+      ),
+    )
   })
 
   it('reports the exact source location and allowed adapter', () => {
