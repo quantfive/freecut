@@ -1319,4 +1319,129 @@ describe('TimelineContent playback selection behavior', () => {
     expect(usePlaybackStore.getState().previewFrame).not.toBe(releaseFrame)
     animationFrameSpy.mockRestore()
   })
+
+  it.each([
+    ['video only', 300, 100, ['Video track section scrollbar']],
+    ['audio only', 100, 300, ['Audio track section scrollbar']],
+    ['both sections', 300, 300, ['Video track section scrollbar', 'Audio track section scrollbar']],
+    ['neither section', 100, 100, []],
+  ])(
+    'renders focusable custom scrollbars for %s overflow',
+    (_name, videoScrollHeight, audioScrollHeight, expectedLabels) => {
+      const tracks: TimelineTrack[] = [
+        VIDEO_TRACK,
+        { ...VIDEO_TRACK, id: 'track-audio-1', name: 'A1', kind: 'audio', order: 1 },
+      ]
+      useTimelineStore.setState({ tracks, items: [] })
+      const clientHeightSpy = vi
+        .spyOn(HTMLElement.prototype, 'clientHeight', 'get')
+        .mockImplementation(function (this: HTMLElement) {
+          return this.hasAttribute('data-track-section-scroll') ? 100 : 12
+        })
+      const scrollHeightSpy = vi
+        .spyOn(HTMLElement.prototype, 'scrollHeight', 'get')
+        .mockImplementation(function (this: HTMLElement) {
+          const section = this.getAttribute('data-track-section-scroll')
+          if (section === 'video') return videoScrollHeight
+          if (section === 'audio') return audioScrollHeight
+          return 12
+        })
+      const videoTracksScrollRef = createRef<HTMLDivElement>()
+      const audioTracksScrollRef = createRef<HTMLDivElement>()
+
+      const { queryAllByRole, unmount } = render(
+        <TimelineContent
+          duration={10}
+          tracks={tracks}
+          videoPaneHeight={100}
+          audioPaneHeight={100}
+          videoTracksScrollRef={videoTracksScrollRef}
+          audioTracksScrollRef={audioTracksScrollRef}
+        />,
+      )
+      const scrollbars = queryAllByRole('scrollbar')
+
+      expect(scrollbars.map((scrollbar) => scrollbar.getAttribute('aria-label'))).toEqual(
+        expectedLabels,
+      )
+      for (const scrollbar of scrollbars) {
+        expect(scrollbar).toHaveAttribute('tabindex', '0')
+        expect(scrollbar).toHaveAttribute('aria-orientation', 'vertical')
+        expect(scrollbar).toHaveAttribute('aria-valuemin', '0')
+        expect(scrollbar).toHaveAttribute('aria-valuemax', '100')
+        scrollbar.focus()
+        expect(scrollbar).toHaveFocus()
+      }
+
+      unmount()
+      clientHeightSpy.mockRestore()
+      scrollHeightSpy.mockRestore()
+    },
+  )
+
+  it('bounds each overflowing split scrollbar for Arrow, Page, Home, and End keys', () => {
+    const tracks: TimelineTrack[] = [
+      VIDEO_TRACK,
+      { ...VIDEO_TRACK, id: 'track-audio-1', name: 'A1', kind: 'audio', order: 1 },
+    ]
+    useTimelineStore.setState({ tracks, items: [] })
+    const clientHeightSpy = vi
+      .spyOn(HTMLElement.prototype, 'clientHeight', 'get')
+      .mockImplementation(function (this: HTMLElement) {
+        return this.hasAttribute('data-track-section-scroll') ? 100 : 12
+      })
+    const scrollHeightSpy = vi
+      .spyOn(HTMLElement.prototype, 'scrollHeight', 'get')
+      .mockImplementation(function (this: HTMLElement) {
+        return this.hasAttribute('data-track-section-scroll') ? 300 : 12
+      })
+    const videoTracksScrollRef = createRef<HTMLDivElement>()
+    const audioTracksScrollRef = createRef<HTMLDivElement>()
+
+    const { container, getByRole, unmount } = render(
+      <TimelineContent
+        duration={10}
+        tracks={tracks}
+        videoPaneHeight={100}
+        audioPaneHeight={100}
+        videoTracksScrollRef={videoTracksScrollRef}
+        audioTracksScrollRef={audioTracksScrollRef}
+      />,
+    )
+    const videoContainer = container.querySelector<HTMLDivElement>(
+      '[data-track-section-scroll="video"]',
+    )!
+    const audioContainer = container.querySelector<HTMLDivElement>(
+      '[data-track-section-scroll="audio"]',
+    )!
+    const videoScrollbar = getByRole('scrollbar', {
+      name: 'Video track section scrollbar',
+    })
+    const audioScrollbar = getByRole('scrollbar', {
+      name: 'Audio track section scrollbar',
+    })
+
+    fireEvent.keyDown(videoScrollbar, { key: 'ArrowDown' })
+    expect(videoContainer.scrollTop).toBe(40)
+    expect(audioContainer.scrollTop).toBe(0)
+    fireEvent.keyDown(videoScrollbar, { key: 'PageDown' })
+    expect(videoContainer.scrollTop).toBe(130)
+    fireEvent.keyDown(videoScrollbar, { key: 'End' })
+    expect(videoContainer.scrollTop).toBe(200)
+    expect(videoScrollbar).toHaveAttribute('aria-valuenow', '100')
+    fireEvent.keyDown(videoScrollbar, { key: 'ArrowDown' })
+    expect(videoContainer.scrollTop).toBe(200)
+    fireEvent.keyDown(videoScrollbar, { key: 'Home' })
+    expect(videoContainer.scrollTop).toBe(0)
+    fireEvent.keyDown(videoScrollbar, { key: 'PageUp' })
+    expect(videoContainer.scrollTop).toBe(0)
+
+    fireEvent.keyDown(audioScrollbar, { key: 'ArrowDown' })
+    expect(audioContainer.scrollTop).toBe(40)
+    expect(videoContainer.scrollTop).toBe(0)
+
+    unmount()
+    clientHeightSpy.mockRestore()
+    scrollHeightSpy.mockRestore()
+  })
 })

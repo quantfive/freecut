@@ -279,4 +279,20 @@ describe('useTimelineItemPointerHandlers', () => {
       expect(input.handleSlipSlideStart).not.toHaveBeenCalled()
     })
   })
+
+  it('preserves smart edge trim routing', () => {
+    const input = makeInput({
+      smartTrimIntentRef: { current: 'ripple-start' },
+    })
+    const handlers = renderHandlers(input)
+    const event = makeMouseEvent()
+
+    handlers.handleSmartTrimStart(event, 'start')
+
+    expect(input.handleTrimStart).toHaveBeenCalledWith(event, 'start', {
+      forcedMode: 'ripple',
+      destroyTransitionAtHandle: false,
+    })
+    expect(input.handleDragStart).not.toHaveBeenCalled()
+  })
 })

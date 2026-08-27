@@ -13,6 +13,11 @@ function PlaybackShortcutHarness() {
   return <input aria-label="Editable title" />
 }
 
+function PlaybackShortcutTargetHarness({ children }: { children: React.ReactNode }) {
+  usePlaybackShortcuts({})
+  return children
+}
+
 function sourcePlayerMethods(durationInFrames = 300): SourcePlayerMethods {
   return {
     toggle: vi.fn(),
@@ -120,6 +125,26 @@ describe('usePlaybackShortcuts transport routing', () => {
       playbackRate: 1,
       transportMode: 'normal',
     })
+  })
+
+  it('does not trust spoofed timeline data attributes to suppress transport', () => {
+    const togglePlayPause = vi.spyOn(usePlaybackStore.getState(), 'togglePlayPause')
+    const { getByTestId } = render(
+      <PlaybackShortcutTargetHarness>
+        <div data-testid="spoof" data-timeline-item tabIndex={0} />
+      </PlaybackShortcutTargetHarness>,
+    )
+    const spoof = getByTestId('spoof')
+
+    fireEvent.keyDown(spoof, { key: ' ', code: 'Space' })
+    expect(togglePlayPause).toHaveBeenCalledTimes(1)
+
+    fireEvent.keyDown(spoof, { key: 'l', code: 'KeyL' })
+    expect(usePlaybackStore.getState()).toMatchObject({
+      isPlaying: true,
+      transportMode: 'shuttle',
+    })
+    expect(usePlaybackStore.getState().playbackRate).toBeGreaterThan(0)
   })
 
   it('routes customized transport bindings instead of the defaults', () => {

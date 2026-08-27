@@ -242,6 +242,7 @@ function TrackSectionScrollbarOverlay({
   height: number
   scrollRef?: React.RefObject<HTMLDivElement | null>
 }) {
+  const scrollbarRef = useRef<HTMLDivElement | null>(null)
   const railRef = useRef<HTMLDivElement | null>(null)
   const thumbRef = useRef<HTMLDivElement | null>(null)
   const dragOffsetRef = useRef(0)
@@ -250,6 +251,19 @@ function TrackSectionScrollbarOverlay({
   // without needing React re-renders
   const layoutRef = useRef({ railHeight: 0, thumbHeight: 0, maxThumbTravel: 0, overflowHeight: 0 })
   const railInset = 4
+
+  const updateAriaValue = useCallback(() => {
+    const element = scrollRef?.current
+    const scrollbar = scrollbarRef.current
+    if (!element || !scrollbar) return
+
+    const overflowHeight = Math.max(0, element.scrollHeight - element.clientHeight)
+    const value =
+      overflowHeight > 0
+        ? Math.round(Math.max(0, Math.min(1, element.scrollTop / overflowHeight)) * 100)
+        : 0
+    scrollbar.setAttribute('aria-valuenow', String(value))
+  }, [scrollRef])
 
   // Compute layout metrics and update thumb size/position imperatively
   const updateThumbLayout = useCallback(() => {
@@ -274,7 +288,8 @@ function TrackSectionScrollbarOverlay({
     thumb.style.height = `${thumbHeight}px`
     thumb.style.top = `${railInset + thumbTop}px`
     thumb.style.display = thumbHeight > 0 ? '' : 'none'
-  }, [height, scrollRef])
+    updateAriaValue()
+  }, [height, scrollRef, updateAriaValue])
 
   // Update thumb position only (cheaper — called on scroll)
   const updateThumbPosition = useCallback(() => {
@@ -283,11 +298,12 @@ function TrackSectionScrollbarOverlay({
     if (!element || !thumb) return
 
     const { maxThumbTravel, overflowHeight } = layoutRef.current
+    updateAriaValue()
     if (overflowHeight <= 0 || maxThumbTravel <= 0) return
 
     const thumbTop = (element.scrollTop / overflowHeight) * maxThumbTravel
     thumb.style.top = `${railInset + thumbTop}px`
-  }, [scrollRef])
+  }, [scrollRef, updateAriaValue])
 
   // Listen for scroll + resize, update thumb imperatively (no setState)
   useEffect(() => {
@@ -344,8 +360,9 @@ function TrackSectionScrollbarOverlay({
       )
 
       scrollElement.scrollTop = (nextThumbTop / maxThumbTravel) * overflowHeight
+      updateThumbPosition()
     },
-    [scrollRef],
+    [scrollRef, updateThumbPosition],
   )
 
   const stopDragging = useCallback(() => {
@@ -399,12 +416,54 @@ function TrackSectionScrollbarOverlay({
     [stopDragging, syncScrollFromClientY],
   )
 
+  const handleKeyDown = useCallback(
+    (event: React.KeyboardEvent<HTMLDivElement>) => {
+      const scrollElement = scrollRef?.current
+      if (!scrollElement) return
+
+      const overflowHeight = Math.max(0, scrollElement.scrollHeight - scrollElement.clientHeight)
+      const lineStep = 40
+      const pageStep = Math.max(1, scrollElement.clientHeight * 0.9)
+      let nextScrollTop: number
+
+      switch (event.key) {
+        case 'ArrowUp':
+          nextScrollTop = scrollElement.scrollTop - lineStep
+          break
+        case 'ArrowDown':
+          nextScrollTop = scrollElement.scrollTop + lineStep
+          break
+        case 'PageUp':
+          nextScrollTop = scrollElement.scrollTop - pageStep
+          break
+        case 'PageDown':
+          nextScrollTop = scrollElement.scrollTop + pageStep
+          break
+        case 'Home':
+          nextScrollTop = 0
+          break
+        case 'End':
+          nextScrollTop = overflowHeight
+          break
+        default:
+          return
+      }
+
+      event.preventDefault()
+      event.stopPropagation()
+      scrollElement.scrollTop = Math.max(0, Math.min(overflowHeight, nextScrollTop))
+      updateThumbPosition()
+    },
+    [scrollRef, updateThumbPosition],
+  )
+
   if (height <= 0) {
     return null
   }
 
   return (
     <div
+      ref={scrollbarRef}
       className="relative shrink-0"
       style={{
         height:
@@ -413,13 +472,15 @@ function TrackSectionScrollbarOverlay({
             : `var(--timeline-${section}-pane-height, ${height}px)`,
       }}
       role="scrollbar"
-      aria-label={`${section} track section scrollbar`}
+      aria-label={`${section[0]?.toUpperCase()}${section.slice(1)} track section scrollbar`}
       aria-controls="timeline-track-sections"
       aria-orientation="vertical"
       aria-valuemin={0}
       aria-valuemax={100}
-      tabIndex={-1}
+      aria-valuenow={0}
+      tabIndex={0}
       onPointerDown={handlePointerDown}
+      onKeyDown={handleKeyDown}
     >
       <div ref={railRef} className="absolute inset-y-1 inset-x-0.5 rounded-sm bg-secondary/70">
         <div
@@ -427,6 +488,75 @@ function TrackSectionScrollbarOverlay({
           className="absolute inset-x-0 rounded-sm bg-muted-foreground/55 hover:bg-muted-foreground/70 transition-colors cursor-grab active:cursor-grabbing active:bg-muted-foreground/75"
         />
       </div>
+    </div>
+  )
+}
+
+function TrackSectionScrollbars({
+  anyOverflow,
+  hasTrackSections,
+  videoSectionHasOverflow,
+  audioSectionHasOverflow,
+  videoPaneHeight,
+  audioPaneHeight,
+  singleSectionHeight,
+  videoTracksScrollRef,
+  audioTracksScrollRef,
+  allTracksScrollRef,
+}: {
+  anyOverflow: boolean
+  hasTrackSections: boolean
+  videoSectionHasOverflow: boolean
+  audioSectionHasOverflow: boolean
+  videoPaneHeight: number
+  audioPaneHeight: number
+  singleSectionHeight: number
+  videoTracksScrollRef?: React.RefObject<HTMLDivElement | null>
+  audioTracksScrollRef?: React.RefObject<HTMLDivElement | null>
+  allTracksScrollRef?: React.RefObject<HTMLDivElement | null>
+}) {
+  if (!anyOverflow) return null
+
+  return (
+    <div className="flex shrink-0 flex-col w-3 bg-background/80">
+      <div className="shrink-0" style={{ height: `${TIMELINE_RULER_HEIGHT}px` }} />
+      {hasTrackSections ? (
+        <>
+          {videoSectionHasOverflow ? (
+            <TrackSectionScrollbarOverlay
+              section="video"
+              height={videoPaneHeight}
+              scrollRef={videoTracksScrollRef}
+            />
+          ) : (
+            <div
+              aria-hidden="true"
+              className="shrink-0"
+              style={{ height: `var(--timeline-video-pane-height, ${videoPaneHeight}px)` }}
+            />
+          )}
+          <div className="shrink-0" style={{ height: `${TRACK_SECTION_DIVIDER_HEIGHT}px` }} />
+          {audioSectionHasOverflow ? (
+            <TrackSectionScrollbarOverlay
+              section="audio"
+              height={audioPaneHeight}
+              scrollRef={audioTracksScrollRef}
+            />
+          ) : (
+            <div
+              aria-hidden="true"
+              className="shrink-0"
+              style={{ height: `var(--timeline-audio-pane-height, ${audioPaneHeight}px)` }}
+            />
+          )}
+        </>
+      ) : (
+        <TrackSectionScrollbarOverlay
+          section="single"
+          height={singleSectionHeight}
+          scrollRef={allTracksScrollRef}
+        />
+      )}
     </div>
   )
 }
@@ -2323,33 +2453,18 @@ export const TimelineContent = memo(function TimelineContent({
         />
       </div>
 
-      {anyOverflow && (
-        <div className="flex shrink-0 flex-col w-3 bg-background/80">
-          {/* Ruler spacer */}
-          <div className="shrink-0" style={{ height: `${TIMELINE_RULER_HEIGHT}px` }} />
-          {hasTrackSections ? (
-            <>
-              <TrackSectionScrollbarOverlay
-                section="video"
-                height={videoPaneHeight}
-                scrollRef={videoTracksScrollRef}
-              />
-              <div className="shrink-0" style={{ height: `${TRACK_SECTION_DIVIDER_HEIGHT}px` }} />
-              <TrackSectionScrollbarOverlay
-                section="audio"
-                height={audioPaneHeight}
-                scrollRef={audioTracksScrollRef}
-              />
-            </>
-          ) : (
-            <TrackSectionScrollbarOverlay
-              section="single"
-              height={singleSectionHeight}
-              scrollRef={allTracksScrollRef}
-            />
-          )}
-        </div>
-      )}
+      <TrackSectionScrollbars
+        anyOverflow={anyOverflow}
+        hasTrackSections={hasTrackSections}
+        videoSectionHasOverflow={videoSectionHasOverflow}
+        audioSectionHasOverflow={audioSectionHasOverflow}
+        videoPaneHeight={videoPaneHeight}
+        audioPaneHeight={audioPaneHeight}
+        singleSectionHeight={singleSectionHeight}
+        videoTracksScrollRef={videoTracksScrollRef}
+        audioTracksScrollRef={audioTracksScrollRef}
+        allTracksScrollRef={allTracksScrollRef}
+      />
     </div>
   )
 })

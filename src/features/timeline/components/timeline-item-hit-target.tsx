@@ -20,7 +20,7 @@ export const TimelineItemHitTarget = memo(function TimelineItemHitTarget({
     <div
       data-item-id={item.id}
       data-timeline-hit-target="true"
-      aria-label={item.label}
+      aria-hidden="true"
       className="absolute inset-y-px rounded bg-transparent"
       style={{
         left: getFramePositionStyle(item.from),

@@ -64,6 +64,9 @@ import { useClipReadoutLabels } from './use-clip-readout-labels'
 import { useTimelineItemPointerHandlers } from './use-timeline-item-pointer-handlers'
 import { ClipFloatingLayer } from './clip-floating-layer'
 import { SharedRollingTrimHandle } from './shared-rolling-trim-handle'
+import { getLinkedItemIds } from '../../utils/linked-items'
+import { partitionItemMutationIdsByLock } from '../../utils/track-lock-invariants'
+import { formatTimecode } from '@/shared/utils/time-utils'
 const EMPTY_SEGMENT_OVERLAYS = [] as const
 const EMPTY_LINKED_ITEMS: TimelineItemType[] = []
 
@@ -149,6 +152,18 @@ export const TimelineItem = memo(function TimelineItem({
   const isLinked = useItemsStore(useCallback((s) => !!s.linkedItemsByItemId[item.id], [item.id]))
   const linkedItemsForCaptionOwnership = useItemsStore(
     useCallback((s) => s.linkedItemsByItemId[item.id] ?? EMPTY_LINKED_ITEMS, [item.id]),
+  )
+  const isEffectivelyLocked = useItemsStore(
+    useCallback(
+      (state) =>
+        trackLocked ||
+        partitionItemMutationIdsByLock({
+          items: state.items,
+          tracks: state.tracks,
+          itemIds: [item.id],
+        }).blockedIds.length > 0,
+      [item.id, trackLocked],
+    ),
   )
   // Lazy, items-keyed memo: legacy generated-caption detection rebuilds only
   // when the items array identity changes (not on every store mutation).
@@ -613,6 +628,27 @@ export const TimelineItem = memo(function TimelineItem({
       handleTrimStart,
       setPointerHint,
     })
+  const accessibleName = useMemo(() => {
+    const endFrame = Math.max(item.from, item.from + item.durationInFrames - 1)
+    return `Media ${item.label}, ${item.type} clip on track ${item.trackId}, time range ${formatTimecode(item.from, fps)} to ${formatTimecode(endFrame, fps)}`
+  }, [fps, item.durationInFrames, item.from, item.label, item.trackId, item.type])
+  const handleKeyDown = useCallback(
+    (event: React.KeyboardEvent<HTMLDivElement>) => {
+      if (event.target !== event.currentTarget) return
+      if (event.key !== 'Enter' && event.key !== ' ' && event.code !== 'Space') return
+
+      event.preventDefault()
+      event.stopPropagation()
+      if (isEffectivelyLocked) return
+
+      const timelineItems = useItemsStore.getState().items
+      const targetIds = useEditorStore.getState().linkedSelectionEnabled
+        ? getLinkedItemIds(timelineItems, item.id)
+        : [item.id]
+      useSelectionStore.getState().selectItems(targetIds)
+    },
+    [isEffectivelyLocked, item.id],
+  )
 
   // Cursor class based on state
   const cursorClass = getClipCursorClass({
@@ -959,14 +995,7 @@ export const TimelineItem = memo(function TimelineItem({
       >
         <div
           ref={transformRef}
-          data-timeline-item
           data-item-id={item.id}
-          data-timeline-start-frame={visualLeftFrame}
-          data-timeline-duration-frames={visualWidthFrames}
-          data-timeline-fps={fps}
-          data-timeline-content-inset-start-px={1}
-          data-timeline-content-inset-end-px={1}
-          data-selected={isSelected ? 'true' : undefined}
           data-compact-clip={useCompactClipShell ? 'true' : undefined}
           className={cn(
             'timeline-item @container absolute inset-y-px rounded overflow-visible group/timeline-item',
@@ -1028,118 +1057,136 @@ export const TimelineItem = memo(function TimelineItem({
           onDragLeave={handleEffectDragLeave}
           onDrop={handleEffectDrop}
         >
-          {/* Keep selection visible throughout drag so the moving cohort stays legible. */}
-          {isSelected && !trackLocked && (
-            <div className="timeline-selection-indicator absolute inset-0 rounded pointer-events-none z-20 border border-primary" />
-          )}
+          <div
+            role="button"
+            tabIndex={0}
+            aria-label={accessibleName}
+            aria-pressed={isSelected}
+            aria-disabled={isEffectivelyLocked || undefined}
+            data-timeline-item
+            data-item-id={item.id}
+            data-timeline-start-frame={visualLeftFrame}
+            data-timeline-duration-frames={visualWidthFrames}
+            data-timeline-fps={fps}
+            data-timeline-content-inset-start-px={1}
+            data-timeline-content-inset-end-px={1}
+            data-selected={isSelected ? 'true' : undefined}
+            className="absolute inset-0 rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-inset"
+            onKeyDown={handleKeyDown}
+          >
+            {/* Keep selection visible throughout drag so the moving cohort stays legible. */}
+            {isSelected && !trackLocked && (
+              <div className="timeline-selection-indicator absolute inset-0 rounded pointer-events-none z-20 border border-primary" />
+            )}
 
-          {isEffectDropTarget && (
-            <div className="absolute inset-0 rounded pointer-events-none z-20 border border-dashed border-sky-300/90 bg-sky-400/15 shadow-[inset_0_0_0_1px_rgba(125,211,252,0.35)]">
-              {multiEffectDropTargetCount > 1 && (
-                <div className="absolute top-1 right-1 rounded-full bg-sky-300/90 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide text-slate-950">
-                  {multiEffectDropTargetCount} clips
-                </div>
-              )}
-            </div>
-          )}
-
-          <div className="absolute inset-px rounded-[3px] overflow-hidden">
-            {!useCompactClipShell && (
-              <>
-                <SegmentStatusOverlays overlays={segmentOverlays} />
-
-                {isVisualFadeItem && (
-                  <div
-                    ref={videoControlsRef}
-                    className="absolute inset-x-0 bottom-0 pointer-events-none z-10"
-                    style={{ top: EDITOR_LAYOUT_CSS_VALUES.timelineClipLabelRowHeight }}
-                  >
-                    <svg
-                      className="absolute inset-0 h-full w-full"
-                      viewBox={`0 0 ${FADE_VIEWBOX_WIDTH} ${AUDIO_ENVELOPE_VIEWBOX_HEIGHT}`}
-                      preserveAspectRatio="none"
-                    >
-                      {videoFadeInRatio > 0 && (
-                        <path d={videoFadeInPath} fill="rgba(15,23,42,0.46)" />
-                      )}
-                      {videoFadeOutRatio > 0 && (
-                        <path d={videoFadeOutPath} fill="rgba(15,23,42,0.46)" />
-                      )}
-                    </svg>
+            {isEffectDropTarget && (
+              <div className="absolute inset-0 rounded pointer-events-none z-20 border border-dashed border-sky-300/90 bg-sky-400/15 shadow-[inset_0_0_0_1px_rgba(125,211,252,0.35)]">
+                {multiEffectDropTargetCount > 1 && (
+                  <div className="absolute top-1 right-1 rounded-full bg-sky-300/90 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide text-slate-950">
+                    {multiEffectDropTargetCount} clips
                   </div>
                 )}
+              </div>
+            )}
 
-                {item.type === 'audio' && (
-                  <div
-                    ref={audioControlsRef}
-                    className="absolute inset-x-0 bottom-0 pointer-events-none z-10"
-                    style={{ top: EDITOR_LAYOUT_CSS_VALUES.timelineClipLabelRowHeight }}
-                  >
+            <div className="absolute inset-px rounded-[3px] overflow-hidden">
+              {!useCompactClipShell && (
+                <>
+                  <SegmentStatusOverlays overlays={segmentOverlays} />
+
+                  {isVisualFadeItem && (
                     <div
-                      ref={volumeLineRef}
-                      className="absolute left-0 right-0 pointer-events-none"
-                      style={{
-                        height: '1px',
-                        top: `var(--timeline-audio-volume-line-y, ${audioVolumeLineYPercent}%)`,
-                        backgroundColor: audioVolumeLineStroke,
-                      }}
-                    />
-                    <svg
-                      className="absolute inset-0 h-full w-full"
-                      viewBox={`0 0 ${FADE_VIEWBOX_WIDTH} ${AUDIO_ENVELOPE_VIEWBOX_HEIGHT}`}
-                      preserveAspectRatio="none"
+                      ref={videoControlsRef}
+                      className="absolute inset-x-0 bottom-0 pointer-events-none z-10"
+                      style={{ top: EDITOR_LAYOUT_CSS_VALUES.timelineClipLabelRowHeight }}
                     >
-                      {audioFadeInRatio > 0 && (
-                        <path d={audioFadeInCurvePath} fill="rgba(0,0,0,0.5)" />
-                      )}
-                      {audioFadeOutRatio > 0 && (
-                        <path d={audioFadeOutCurvePath} fill="rgba(0,0,0,0.5)" />
-                      )}
-                    </svg>
-                  </div>
-                )}
-              </>
-            )}
+                      <svg
+                        className="absolute inset-0 h-full w-full"
+                        viewBox={`0 0 ${FADE_VIEWBOX_WIDTH} ${AUDIO_ENVELOPE_VIEWBOX_HEIGHT}`}
+                        preserveAspectRatio="none"
+                      >
+                        {videoFadeInRatio > 0 && (
+                          <path d={videoFadeInPath} fill="rgba(15,23,42,0.46)" />
+                        )}
+                        {videoFadeOutRatio > 0 && (
+                          <path d={videoFadeOutPath} fill="rgba(15,23,42,0.46)" />
+                        )}
+                      </svg>
+                    </div>
+                  )}
 
-            <ClipContent
-              item={contentVisualPreviewItem}
-              clipLeftFrames={visualLeftFrame}
-              clipWidthFrames={visualWidthFrames}
-              fps={fps}
-              isCompactWidth={isCompactWidth}
-              isLinked={isLinked}
-              preferImmediateRendering={preferImmediateContentRendering}
-              audioWaveformScale={audioVisualizationScale}
-              linkedSyncOffsetFrames={linkedSyncOffsetFrames}
-              isDetailEligible={isDetailEligible}
-            />
+                  {item.type === 'audio' && (
+                    <div
+                      ref={audioControlsRef}
+                      className="absolute inset-x-0 bottom-0 pointer-events-none z-10"
+                      style={{ top: EDITOR_LAYOUT_CSS_VALUES.timelineClipLabelRowHeight }}
+                    >
+                      <div
+                        ref={volumeLineRef}
+                        className="absolute left-0 right-0 pointer-events-none"
+                        style={{
+                          height: '1px',
+                          top: `var(--timeline-audio-volume-line-y, ${audioVolumeLineYPercent}%)`,
+                          backgroundColor: audioVolumeLineStroke,
+                        }}
+                      />
+                      <svg
+                        className="absolute inset-0 h-full w-full"
+                        viewBox={`0 0 ${FADE_VIEWBOX_WIDTH} ${AUDIO_ENVELOPE_VIEWBOX_HEIGHT}`}
+                        preserveAspectRatio="none"
+                      >
+                        {audioFadeInRatio > 0 && (
+                          <path d={audioFadeInCurvePath} fill="rgba(0,0,0,0.5)" />
+                        )}
+                        {audioFadeOutRatio > 0 && (
+                          <path d={audioFadeOutCurvePath} fill="rgba(0,0,0,0.5)" />
+                        )}
+                      </svg>
+                    </div>
+                  )}
+                </>
+              )}
 
-            {!useCompactClipShell && (
-              /* Status indicators */
-              <ClipIndicators
-                hasKeyframes={hasKeyframes}
-                keyframesExpanded={keyframesExpanded}
-                hasMotion={hasMotion}
-                currentSpeed={currentSpeed}
-                isReversed={item.isReversed === true}
-                reverseConformStatus={item.reverseConformStatus}
-                isStretching={isStretching}
-                stretchFeedback={stretchFeedback}
-                isBroken={isBroken}
-                hasMediaId={!!item.mediaId}
-                isMask={item.type === 'shape' ? (item.isMask ?? false) : false}
-                isShape={item.type === 'shape'}
-                onKeyframesToggle={() => {
-                  useSelectionStore.getState().toggleKeyframeLanes(item.id)
-                }}
-                onMotionOpen={() => {
-                  useSelectionStore.getState().selectItems([item.id])
-                  useEditorStore.getState().setRightSidebarOpen(true)
-                  useEditorStore.getState().setClipInspectorTab('motion')
-                }}
+              <ClipContent
+                item={contentVisualPreviewItem}
+                clipLeftFrames={visualLeftFrame}
+                clipWidthFrames={visualWidthFrames}
+                fps={fps}
+                isCompactWidth={isCompactWidth}
+                isLinked={isLinked}
+                preferImmediateRendering={preferImmediateContentRendering}
+                audioWaveformScale={audioVisualizationScale}
+                linkedSyncOffsetFrames={linkedSyncOffsetFrames}
+                isDetailEligible={isDetailEligible}
               />
-            )}
+            </div>
           </div>
+
+          {!useCompactClipShell && (
+            /* Status indicators stay outside the clip's button semantics. */
+            <ClipIndicators
+              hasKeyframes={hasKeyframes}
+              keyframesExpanded={keyframesExpanded}
+              hasMotion={hasMotion}
+              currentSpeed={currentSpeed}
+              isReversed={item.isReversed === true}
+              reverseConformStatus={item.reverseConformStatus}
+              isStretching={isStretching}
+              stretchFeedback={stretchFeedback}
+              isBroken={isBroken}
+              hasMediaId={!!item.mediaId}
+              isMask={item.type === 'shape' ? (item.isMask ?? false) : false}
+              isShape={item.type === 'shape'}
+              onKeyframesToggle={() => {
+                useSelectionStore.getState().toggleKeyframeLanes(item.id)
+              }}
+              onMotionOpen={() => {
+                useSelectionStore.getState().selectItems([item.id])
+                useEditorStore.getState().setRightSidebarOpen(true)
+                useEditorStore.getState().setClipInspectorTab('motion')
+              }}
+            />
+          )}
 
           {!useCompactClipShell && isVisualFadeItem && (
             <div

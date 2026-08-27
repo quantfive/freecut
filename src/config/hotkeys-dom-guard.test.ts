@@ -78,6 +78,7 @@ describe('global shortcut DOM guards', () => {
     ['native link', '<a href="/project" id="control">Project</a>'],
     ['summary', '<details><summary id="control">Details</summary></details>'],
     ['button role', '<div role="button" tabindex="0" id="control">Run</div>'],
+    ['scrollbar role', '<div role="scrollbar" tabindex="0" id="control"></div>'],
     ['menuitem role', '<div role="menuitem" tabindex="0" id="control">Open</div>'],
   ])('guards an interactive %s outside dialogs', (_name, markup) => {
     expect(dispatchFrom(markup, '#control', 'k')).toEqual({
@@ -90,6 +91,15 @@ describe('global shortcut DOM guards', () => {
     expect(
       dispatchFrom('<div role="dialog"><span id="control">Message</span></div>', '#control', 'j'),
     ).toEqual({ captureSawEvent: true, defaultPrevented: false })
+  })
+
+  it('guards plain descendants of a native dialog', () => {
+    expect(
+      dispatchFrom('<dialog open><span id="control">Message</span></dialog>', '#control', 'j'),
+    ).toEqual({
+      captureSawEvent: true,
+      defaultPrevented: false,
+    })
   })
 
   it('uses the nearest contenteditable value for inherited editing and false islands', () => {
@@ -115,6 +125,16 @@ describe('global shortcut DOM guards', () => {
       captureSawEvent: true,
       defaultPrevented: true,
     })
+  })
+
+  it('preserves explicit canvas opt-in inside a native dialog', () => {
+    expect(
+      dispatchFrom(
+        '<dialog open><canvas data-global-hotkeys="allow" id="timeline"></canvas></dialog>',
+        '#timeline',
+        'k',
+      ),
+    ).toEqual({ captureSawEvent: true, defaultPrevented: true })
   })
 
   it('allows an explicitly opted-in dialog control', () => {
