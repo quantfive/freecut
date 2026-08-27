@@ -5,8 +5,12 @@
 // shape on mocks without importing production code). End-to-end protection of
 // the full orchestrator remains the headless chrome e2e (headless/test.mjs).
 
-import { describe, it, expect } from 'vite-plus/test'
-import { runPipelinedFrameLoop } from './pipelined-frame-loop'
+import { describe, it, expect, vi } from 'vite-plus/test'
+import {
+  createPipelinedFrameLoopFailureState,
+  runPipelinedFrameLoop,
+  type PipelinedFrameLoopFailureState,
+} from './pipelined-frame-loop'
 
 interface Deferred {
   promise: Promise<void>
@@ -36,7 +40,7 @@ interface FakeSample {
 
 interface HarnessOptions {
   signal?: AbortSignal
-  getPendingError?: () => unknown
+  failureState?: PipelinedFrameLoopFailureState
   renderImpl?: (frame: number) => void | Promise<void>
   encodeImpl?: (sample: FakeSample, keyFrame: boolean) => Promise<void>
   closeImpl?: (sample: FakeSample) => void
@@ -46,15 +50,21 @@ interface HarnessOptions {
 function createHarness(totalFrames: number, opts: HarnessOptions = {}) {
   const events: string[] = []
   const samples: FakeSample[] = []
+  const failureState = opts.failureState ?? createPipelinedFrameLoopFailureState()
 
   const run = () =>
     runPipelinedFrameLoop<FakeSample>({
       totalFrames,
       signal: opts.signal,
-      getPendingError: opts.getPendingError,
-      renderFrame: async (frame) => {
+      failureState,
+      renderFrame: async (frame, reportFailure) => {
         events.push(`render-${frame}`)
-        await opts.renderImpl?.(frame)
+        try {
+          await opts.renderImpl?.(frame)
+        } catch (error) {
+          reportFailure(error)
+          throw error
+        }
       },
       captureSample: (frame) => {
         const sample: FakeSample = {
@@ -70,9 +80,11 @@ function createHarness(totalFrames: number, opts: HarnessOptions = {}) {
         events.push(`capture-${frame}`)
         return sample
       },
-      encodeSample: (sample, keyFrame) => {
+      encodeSample: (sample, keyFrame, reportFailure) => {
         events.push(`encode-start-${sample.frame}${keyFrame ? '-key' : ''}`)
-        return (opts.encodeImpl?.(sample, keyFrame) ?? Promise.resolve()).then(() => {
+        const encoding = opts.encodeImpl?.(sample, keyFrame) ?? Promise.resolve()
+        void encoding.catch(reportFailure)
+        return encoding.then(() => {
           events.push(`encode-end-${sample.frame}`)
         })
       },
@@ -85,7 +97,7 @@ function createHarness(totalFrames: number, opts: HarnessOptions = {}) {
       },
     })
 
-  return { events, samples, run }
+  return { events, samples, failureState, run }
 }
 
 const indexOf = (events: string[], event: string) => {
@@ -94,7 +106,139 @@ const indexOf = (events: string[], event: string) => {
   return index
 }
 
+type FailureSource = 'render' | 'encode' | 'abort' | 'audio'
+
+interface FailureOrderCase {
+  name: string
+  first: FailureSource
+  second: FailureSource
+  expected: FailureSource
+}
+
+const failureOrderCases: FailureOrderCase[] = [
+  { name: 'render first then abort', first: 'render', second: 'abort', expected: 'render' },
+  { name: 'render first then audio', first: 'render', second: 'audio', expected: 'render' },
+  { name: 'encode first then abort', first: 'encode', second: 'abort', expected: 'encode' },
+  { name: 'abort first then render', first: 'abort', second: 'render', expected: 'abort' },
+  { name: 'abort first then encode', first: 'abort', second: 'encode', expected: 'abort' },
+  { name: 'audio first then render', first: 'audio', second: 'render', expected: 'audio' },
+]
+
+const failureOrderMatrix = failureOrderCases.flatMap((testCase) => [
+  { ...testCase, timing: 'same turn' as const },
+  { ...testCase, timing: 'one microtask apart' as const },
+])
+
 describe('runPipelinedFrameLoop', () => {
+  it.each(failureOrderMatrix)(
+    'preserves source order: $name ($timing)',
+    async ({ first, second, expected, timing }) => {
+      const controller = new AbortController()
+      const render = deferred()
+      const encode = deferred()
+      const audio = deferred()
+      const errors: Record<FailureSource, unknown> = {
+        render: new Error('render source failed'),
+        encode: new Error('encode source failed'),
+        audio: new Error('audio source failed'),
+        abort: null,
+      }
+      const cleanupError = new Error('abort cleanup must not mask the primary failure')
+      const failureState = createPipelinedFrameLoopFailureState()
+      const observedAudio = audio.promise.then(
+        () => undefined,
+        (error: unknown) => failureState.reportFailure(error),
+      )
+      const unhandledRejections: unknown[] = []
+      const onUnhandledRejection = (reason: unknown) => unhandledRejections.push(reason)
+      const removeListener = vi.spyOn(controller.signal, 'removeEventListener')
+      process.on('unhandledRejection', onUnhandledRejection)
+
+      let renderSettled = false
+      let encodeSettled = false
+      let audioSettled = false
+      let outcome: Promise<unknown> | undefined
+
+      const fire = (source: FailureSource) => {
+        switch (source) {
+          case 'render':
+            renderSettled = true
+            render.reject(errors.render)
+            break
+          case 'encode':
+            encodeSettled = true
+            encode.reject(errors.encode)
+            break
+          case 'audio':
+            audioSettled = true
+            audio.reject(errors.audio)
+            break
+          case 'abort':
+            controller.abort()
+            break
+        }
+      }
+
+      try {
+        const { events, samples, run } = createHarness(2, {
+          signal: controller.signal,
+          failureState,
+          renderImpl: (frame) => (frame === 1 ? render.promise : undefined),
+          encodeImpl: () => encode.promise,
+          onAbortImpl: () => {
+            throw cleanupError
+          },
+        })
+
+        outcome = run().then(
+          () => null,
+          (error: unknown) => error,
+        )
+        await tick()
+        expect(events).toContain('render-1')
+
+        // Calls earlier in this list define same-turn ties. Promise reactions
+        // and the queued abort publication retain that source enqueue order.
+        fire(first)
+        if (timing === 'one microtask apart') await Promise.resolve()
+        fire(second)
+
+        if (!renderSettled) render.resolve()
+        if (!encodeSettled) encode.resolve()
+        if (!audioSettled) audio.resolve()
+
+        const error = await outcome
+        if (expected === 'abort') {
+          expect(error).toBeInstanceOf(DOMException)
+          expect((error as DOMException).name).toBe('AbortError')
+        } else {
+          expect(error).toBe(errors[expected])
+        }
+
+        await observedAudio
+        await tick()
+        expect(unhandledRejections).toEqual([])
+        expect(samples).toHaveLength(1)
+        expect(samples[0]?.closed).toBe(true)
+        expect(events).toContain('close-0')
+        expect(events.includes('abort-cancel')).toBe(controller.signal.aborted)
+        if (controller.signal.aborted) {
+          expect(indexOf(events, 'close-0')).toBeLessThan(indexOf(events, 'abort-cancel'))
+        }
+        expect(removeListener).toHaveBeenCalledWith('abort', expect.any(Function))
+      } finally {
+        controller.abort()
+        render.resolve()
+        encode.resolve()
+        audio.resolve()
+        await observedAudio
+        await outcome
+        removeListener.mockRestore()
+        process.off('unhandledRejection', onUnhandledRejection)
+      }
+    },
+  )
+
   it('encodes all frames in order and closes every sample', async () => {
     const { events, samples, run } = createHarness(5)
     await run()
@@ -229,12 +373,10 @@ describe('runPipelinedFrameLoop', () => {
     const unhandledRejections: unknown[] = []
     const onUnhandledRejection = (reason: unknown) => unhandledRejections.push(reason)
     process.on('unhandledRejection', onUnhandledRejection)
-    let pendingError: unknown
     let outcome: Promise<unknown> | undefined
 
     try {
-      const { events, samples, run } = createHarness(2, {
-        getPendingError: () => pendingError,
+      const { events, samples, failureState, run } = createHarness(2, {
         renderImpl: (frame) => (frame === 1 ? nextRender.promise : undefined),
         encodeImpl: () => encode.promise,
       })
@@ -246,7 +388,7 @@ describe('runPipelinedFrameLoop', () => {
       await tick()
       expect(events).toContain('render-1')
 
-      pendingError = audioError
+      failureState.reportFailure(audioError)
       encode.reject(encoderError)
       await tick()
       expect(unhandledRejections).toEqual([])
@@ -272,13 +414,11 @@ describe('runPipelinedFrameLoop', () => {
     const unhandledRejections: unknown[] = []
     const onUnhandledRejection = (reason: unknown) => unhandledRejections.push(reason)
     process.on('unhandledRejection', onUnhandledRejection)
-    let pendingError: unknown
     let outcome: Promise<unknown> | undefined
 
     try {
-      const { events, samples, run } = createHarness(2, {
+      const { events, samples, failureState, run } = createHarness(2, {
         signal: controller.signal,
-        getPendingError: () => pendingError,
         renderImpl: (frame) => (frame === 1 ? nextRender.promise : undefined),
         encodeImpl: () => encode.promise,
         closeImpl: () => {
@@ -297,7 +437,7 @@ describe('runPipelinedFrameLoop', () => {
       await tick()
       expect(events).toContain('render-1')
 
-      pendingError = audioError
+      failureState.reportFailure(audioError)
       controller.abort()
       nextRender.reject(renderError)
       await tick()
@@ -402,13 +542,13 @@ describe('runPipelinedFrameLoop', () => {
     const unhandledRejections: unknown[] = []
     const onUnhandledRejection = (reason: unknown) => unhandledRejections.push(reason)
     process.on('unhandledRejection', onUnhandledRejection)
-    let raised: unknown
+    const failureState = createPipelinedFrameLoopFailureState()
 
     try {
       const { events, samples, run } = createHarness(4, {
-        getPendingError: () => raised,
+        failureState,
         renderImpl: (frame) => {
-          if (frame === 1) raised = pendingError
+          if (frame === 1) failureState.reportFailure(pendingError)
         },
         encodeImpl: () => {
           const encode = deferred()
@@ -545,13 +685,17 @@ describe('runPipelinedFrameLoop', () => {
     const unhandledRejections: unknown[] = []
     const onUnhandledRejection = (reason: unknown) => unhandledRejections.push(reason)
     process.on('unhandledRejection', onUnhandledRejection)
-    let pendingError: unknown
     let outcome: Promise<unknown> | undefined
 
     try {
+      const audio = deferred()
+      const failureState = createPipelinedFrameLoopFailureState()
+      const observedAudio = audio.promise.catch((error: unknown) => {
+        failureState.reportFailure(error)
+      })
       const { events, samples, run } = createHarness(2, {
         signal: controller.signal,
-        getPendingError: () => pendingError,
+        failureState,
         renderImpl: (frame) => (frame === 1 ? nextRender.promise : undefined),
         encodeImpl: () => encode.promise,
         onAbortImpl: () => {
@@ -571,7 +715,7 @@ describe('runPipelinedFrameLoop', () => {
       expect(events).toContain('render-1')
 
       controller.abort()
-      pendingError = audioError
+      audio.reject(audioError)
       nextRender.reject(renderError)
       await tick()
       expect(settled).toBe(false)
@@ -583,6 +727,7 @@ describe('runPipelinedFrameLoop', () => {
       expect((error as DOMException).name).toBe('AbortError')
       expect(events).toContain('abort-cancel')
       expect(samples[0]?.closed).toBe(true)
+      await observedAudio
       await tick()
       expect(unhandledRejections).toEqual([])
     } finally {
@@ -596,11 +741,11 @@ describe('runPipelinedFrameLoop', () => {
 
   it('throws a pending error at the top of the next iteration', async () => {
     const pendingError = new Error('audio task failed')
-    let raised: unknown
+    const failureState = createPipelinedFrameLoopFailureState()
     const { events, run } = createHarness(5, {
-      getPendingError: () => raised,
+      failureState,
       renderImpl: (frame) => {
-        if (frame === 1) raised = pendingError
+        if (frame === 1) failureState.reportFailure(pendingError)
       },
     })
 
@@ -609,20 +754,20 @@ describe('runPipelinedFrameLoop', () => {
     expect(events).not.toContain('render-2')
   })
 
-  it('ignores falsy pending errors (truthiness semantics)', async () => {
-    for (const falsy of [undefined, '', 0, null]) {
-      const { samples, run } = createHarness(2, { getPendingError: () => falsy })
-      await run()
-      expect(samples).toHaveLength(2)
-    }
+  it('continues until an external source publishes a failure', async () => {
+    const { samples, run } = createHarness(2)
+    await run()
+    expect(samples).toHaveLength(2)
   })
 
   it('resolves immediately for zero frames without touching any callback', async () => {
     const controller = new AbortController()
     controller.abort()
+    const failureState = createPipelinedFrameLoopFailureState()
+    failureState.reportFailure(new Error('never checked'))
     const { events, run } = createHarness(0, {
       signal: controller.signal,
-      getPendingError: () => new Error('never checked'),
+      failureState,
     })
     await run()
     // Pre-loop abort/error checks are the caller's responsibility.

@@ -28,7 +28,7 @@ import { createExportOutputTarget } from './export-output-target'
 
 // Subsystems
 import { createCompositionRenderer } from './client-render-engine'
-import { runPipelinedFrameLoop } from './pipelined-frame-loop'
+import { createPipelinedFrameLoopFailureState, runPipelinedFrameLoop } from './pipelined-frame-loop'
 
 function getLog() {
   return createLogger('CanvasRenderOrchestrator')
@@ -714,6 +714,7 @@ export async function renderComposition(options: RenderEngineOptions): Promise<C
 
   let videoRenderingStarted = false
   let audioError: unknown
+  const frameLoopFailureState = createPipelinedFrameLoopFailureState()
   const reportAudioProgress = (completedSeconds: number, mode: 'copying' | 'processing') => {
     if (videoRenderingStarted) return
     const boundedSeconds = Math.min(durationSeconds, completedSeconds)
@@ -760,6 +761,7 @@ export async function renderComposition(options: RenderEngineOptions): Promise<C
       : null
   void audioTask?.catch((error: unknown) => {
     audioError = error
+    frameLoopFailureState.reportFailure(error)
   })
 
   onProgress({
@@ -787,21 +789,31 @@ export async function renderComposition(options: RenderEngineOptions): Promise<C
     await runPipelinedFrameLoop({
       totalFrames,
       signal,
-      getPendingError: () => audioError,
-      renderFrame: async (frame) => {
-        await renderer.renderFrame(frame)
-        // Scale to output resolution if needed
-        if (needsScaling) {
-          outputCtx.clearRect(0, 0, exportWidth, exportHeight)
-          outputCtx.drawImage(renderCanvas, 0, 0, exportWidth, exportHeight)
+      failureState: frameLoopFailureState,
+      renderFrame: async (frame, reportFailure) => {
+        try {
+          await renderer.renderFrame(frame)
+          // Scale to output resolution if needed
+          if (needsScaling) {
+            outputCtx.clearRect(0, 0, exportWidth, exportHeight)
+            outputCtx.drawImage(renderCanvas, 0, 0, exportWidth, exportHeight)
+          }
+        } catch (error) {
+          reportFailure(error)
+          throw error
         }
       },
       // VideoSampleSource does NOT close samples (unlike CanvasSource) — the
       // loop closes each sample to release the VideoFrame's GPU memory.
       captureSample: (frame) =>
         new VideoSample(outputCanvas, { timestamp: frame / fps, duration: 1 / fps }),
-      encodeSample: (sample, keyFrame) =>
-        keyFrame ? videoSource.add(sample, { keyFrame: true }) : videoSource.add(sample),
+      encodeSample: (sample, keyFrame, reportFailure) => {
+        const encoding = keyFrame
+          ? videoSource.add(sample, { keyFrame: true })
+          : videoSource.add(sample)
+        void encoding.catch(reportFailure)
+        return encoding
+      },
       onAbort: () => output.cancel(),
       onFrameProgress: (frame) => {
         onProgress({
