@@ -117,16 +117,16 @@ describe('host shortcut settings round trip', () => {
 
     harness.emit(
       createHostShortcutSettings({
-        SHUTTLE_REVERSE: 'a',
-        SHUTTLE_PAUSE: 's',
-        SHUTTLE_FORWARD: 'd',
+        SHUTTLE_REVERSE: 'q',
+        SHUTTLE_PAUSE: 'w',
+        SHUTTLE_FORWARD: 'e',
       }),
     )
 
     expect(useSettingsStore.getState().hotkeyOverrides).toEqual({
-      SHUTTLE_REVERSE: 'a',
-      SHUTTLE_PAUSE: 's',
-      SHUTTLE_FORWARD: 'd',
+      SHUTTLE_REVERSE: 'q',
+      SHUTTLE_PAUSE: 'w',
+      SHUTTLE_FORWARD: 'e',
     })
     expect(harness.notify).not.toHaveBeenCalled()
 
@@ -171,10 +171,10 @@ describe('host shortcut settings round trip', () => {
     const host = createShortcutHost(createHostShortcutSettings({ SHUTTLE_PAUSE: 'p' }))
     const unmount = await mountHostShortcutSettings(host.host)
     useSettingsStore.getState().setHotkeyBinding('SHUTTLE_PAUSE', 'x')
-    host.emit(createHostShortcutSettings({ SHUTTLE_PAUSE: 'y' }))
+    host.emit(createHostShortcutSettings({ SHUTTLE_PAUSE: 'w' }))
     await Promise.resolve()
     expect(host.setSettings).not.toHaveBeenCalled()
-    expect(useSettingsStore.getState().hotkeyOverrides).toEqual({ SHUTTLE_PAUSE: 'y' })
+    expect(useSettingsStore.getState().hotkeyOverrides).toEqual({ SHUTTLE_PAUSE: 'w' })
     unmount()
   })
 

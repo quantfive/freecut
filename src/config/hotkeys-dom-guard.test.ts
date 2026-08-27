@@ -1,7 +1,22 @@
 // @vitest-environment jsdom
 
-import { afterEach, describe, expect, it } from 'vite-plus/test'
-import { shouldIgnoreGlobalHotkey } from './hotkeys'
+import { createElement } from 'react'
+import { render, screen } from '@testing-library/react'
+import { useHotkeys } from 'react-hotkeys-hook'
+import { afterEach, describe, expect, it, vi } from 'vite-plus/test'
+import { HOTKEY_OPTIONS, shouldIgnoreGlobalHotkey } from './hotkeys'
+
+function CaptureHotkeyHarness({ onHotkey }: { onHotkey: () => void }) {
+  useHotkeys('k', onHotkey, { ...HOTKEY_OPTIONS, eventListenerOptions: { capture: true } }, [
+    onHotkey,
+  ])
+
+  return createElement(
+    'div',
+    { role: 'dialog' },
+    createElement('button', { type: 'button' }, 'Pause'),
+  )
+}
 
 describe('global shortcut DOM guards', () => {
   afterEach(() => {
@@ -55,6 +70,19 @@ describe('global shortcut DOM guards', () => {
     expect(result).toEqual({ captureSawEvent: true, defaultPrevented: true })
   })
 
+  it.each([
+    ['input', '<div role="dialog"><input data-global-hotkeys="allow" id="control" /></div>'],
+    [
+      'contenteditable',
+      '<div role="dialog"><div contenteditable="true" data-global-hotkeys="allow" id="control"></div></div>',
+    ],
+  ])('allows explicitly opted-in %s targets', (_name, markup) => {
+    expect(dispatchFrom(markup, '#control', 'j')).toEqual({
+      captureSawEvent: true,
+      defaultPrevented: true,
+    })
+  })
+
   it('preserves dialog K events without preventDefault or propagation swallowing', () => {
     document.body.innerHTML = '<div role="dialog"><button id="control">Pause</button></div>'
     const target = document.querySelector('#control') as HTMLButtonElement
@@ -73,6 +101,28 @@ describe('global shortcut DOM guards', () => {
     document.removeEventListener('keydown', captureListener, { capture: true })
     document.body.removeEventListener('keydown', bubble)
 
+    expect(event.defaultPrevented).toBe(false)
+    expect(bubble).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps the real capture-phase hotkey listener inert for dialog K events', () => {
+    const onHotkey = vi.fn()
+    const rendered = render(createElement(CaptureHotkeyHarness, { onHotkey }))
+    const target = screen.getByRole('button', { name: 'Pause' })
+    const bubble = vi.fn()
+    document.body.addEventListener('keydown', bubble)
+    const event = new KeyboardEvent('keydown', {
+      key: 'k',
+      code: 'KeyK',
+      bubbles: true,
+      cancelable: true,
+    })
+
+    target.dispatchEvent(event)
+
+    document.body.removeEventListener('keydown', bubble)
+    rendered.unmount()
+    expect(onHotkey).not.toHaveBeenCalled()
     expect(event.defaultPrevented).toBe(false)
     expect(bubble).toHaveBeenCalledTimes(1)
   })

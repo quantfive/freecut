@@ -862,29 +862,40 @@ function collectImportedOverrides(source: unknown): HotkeyImportResult {
     }
   }
 
-  const resolution = resolveHotkeyConfiguration(normalizedOverrides)
   return {
-    overrides: resolution.overrides,
+    overrides: normalizedOverrides,
     importedCommandCount,
     ignoredCommandCount,
     remappedCommandCount,
     sourceVersion: null,
+  }
+}
+
+function resolveHotkeyImportResult(result: HotkeyImportResult): HotkeyImportResult {
+  const resolution = resolveHotkeyConfiguration(result.overrides)
+  return {
+    ...result,
+    overrides: resolution.overrides,
     ...(resolution.warnings.length > 0 ? { conflictWarnings: resolution.warnings } : {}),
   }
 }
 
 function migrateLegacyHotkeyImport(result: HotkeyImportResult): HotkeyImportResult {
-  if (
-    (result.sourceVersion === null || result.sourceVersion < 2) &&
-    result.overrides.EDIT_KEYFRAME_ADD === 'k'
-  ) {
+  const hasLegacyKeyframeBinding =
+    result.overrides.EDIT_KEYFRAME_ADD === 'k' ||
+    result.conflictWarnings?.some(
+      (warning) => warning.command === 'EDIT_KEYFRAME_ADD' && warning.binding === 'k',
+    )
+
+  if ((result.sourceVersion === null || result.sourceVersion < 2) && hasLegacyKeyframeBinding) {
     const overrides = { ...result.overrides }
     delete overrides.EDIT_KEYFRAME_ADD
     const conflictWarnings = result.conflictWarnings?.filter(
       (warning) => warning.command !== 'EDIT_KEYFRAME_ADD',
     )
+    const { conflictWarnings: _discardedWarnings, ...resultWithoutWarnings } = result
     return {
-      ...result,
+      ...resultWithoutWarnings,
       overrides,
       ...(conflictWarnings && conflictWarnings.length > 0 ? { conflictWarnings } : {}),
     }
@@ -899,7 +910,7 @@ export function parseHotkeyImportDocument(source: unknown): HotkeyImportResult {
   }
 
   if (source.schema !== HOTKEY_EXPORT_SCHEMA) {
-    return migrateLegacyHotkeyImport(collectImportedOverrides(source))
+    return migrateLegacyHotkeyImport(resolveHotkeyImportResult(collectImportedOverrides(source)))
   }
 
   const sourceVersion = typeof source.version === 'number' ? source.version : null
@@ -973,8 +984,7 @@ export function parseHotkeyImportDocument(source: unknown): HotkeyImportResult {
 
 const GLOBAL_HOTKEY_OPT_IN = '[data-global-hotkeys="allow"]'
 const DIALOG_SELECTOR = '[role="dialog"], dialog'
-const DIALOG_CONTROL_SELECTOR =
-  'button, input, textarea, select, [role="button"], [contenteditable="true"], [contenteditable=""]'
+const FORM_CONTROL_SELECTOR = 'input, textarea, select'
 
 function isContentEditableTarget(target: Element): boolean {
   const editable = target.closest('[contenteditable]')
@@ -991,9 +1001,8 @@ export function shouldIgnoreGlobalHotkey(event: KeyboardEvent): boolean {
   if (typeof Element === 'undefined' || !(target instanceof Element)) return false
   if (target.closest(GLOBAL_HOTKEY_OPT_IN)) return false
   if (isContentEditableTarget(target)) return true
-
-  const dialog = target.closest(DIALOG_SELECTOR)
-  return dialog !== null && target.closest(DIALOG_CONTROL_SELECTOR) !== null
+  if (target.closest(FORM_CONTROL_SELECTOR)) return true
+  return target.closest(DIALOG_SELECTOR) !== null
 }
 
 /**
@@ -1001,8 +1010,10 @@ export function shouldIgnoreGlobalHotkey(event: KeyboardEvent): boolean {
  * Prevents shortcuts from firing in editable fields and dialog controls.
  */
 export const HOTKEY_OPTIONS = {
-  enableOnFormTags: false,
-  enableOnContentEditable: false,
+  // Route normally excluded targets through ignoreEventWhen so the explicit
+  // data-global-hotkeys="allow" escape hatch works for those targets too.
+  enableOnFormTags: true,
+  enableOnContentEditable: true,
   ignoreEventWhen: shouldIgnoreGlobalHotkey,
   preventDefault: true,
 } as const
