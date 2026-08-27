@@ -207,14 +207,7 @@ export function useTimelineItemPointerHandlers({
         selectItems(targetIds)
       }
     },
-    [
-      activeToolRef,
-      trackLocked,
-      item.durationInFrames,
-      item.from,
-      item.id,
-      smartTrimIntentRef,
-    ],
+    [activeToolRef, trackLocked, item.durationInFrames, item.from, item.id, smartTrimIntentRef],
   )
 
   // Double-click: open media in source monitor with clip's source range as I/O

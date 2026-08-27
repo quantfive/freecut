@@ -3,6 +3,32 @@ import { afterEach } from 'vite-plus/test'
 import '@/i18n'
 import { resetAutoKeyframeStore } from '@/features/keyframes/stores/auto-keyframe-store'
 
+function ensureTestLocalStorage(): void {
+  try {
+    if (typeof globalThis.localStorage !== 'undefined') return
+  } catch {
+    // Opaque jsdom origins can expose a throwing localStorage accessor.
+  }
+
+  const values = new Map<string, string>()
+  const storage: Storage = {
+    get length() {
+      return values.size
+    },
+    clear: () => values.clear(),
+    getItem: (key) => values.get(key) ?? null,
+    key: (index) => Array.from(values.keys())[index] ?? null,
+    removeItem: (key) => values.delete(key),
+    setItem: (key, value) => values.set(key, value),
+  }
+  Object.defineProperty(globalThis, 'localStorage', {
+    configurable: true,
+    value: storage,
+  })
+}
+
+ensureTestLocalStorage()
+
 // Mock ImageData for Canvas operations
 type TestGlobalWithImageData = typeof globalThis & { ImageData?: typeof ImageData }
 const testGlobal = globalThis as TestGlobalWithImageData
