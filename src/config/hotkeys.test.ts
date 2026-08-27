@@ -6,6 +6,7 @@ import {
   HOTKEY_EXPORT_SCHEMA,
   HOTKEY_EXPORT_VERSION,
   createHotkeyExportDocument,
+  doesHotkeyEventMatchBinding,
   findHotkeyConflicts,
   formatHotkeyBinding,
   getBrowserHostileHotkey,
@@ -16,6 +17,7 @@ import {
   parseHotkeyImportDocument,
   resolveHotkeyConfiguration,
   resolveHotkeys,
+  resolveRuntimeHotkeys,
   sanitizeHotkeyOverrides,
 } from './hotkeys'
 
@@ -146,6 +148,19 @@ describe('getHotkeyBindingFromEventData', () => {
         shiftKey: true,
       }),
     ).toBe('comma')
+  })
+})
+
+describe('doesHotkeyEventMatchBinding', () => {
+  const f10 = { key: 'F10', code: 'F10' }
+
+  it('distinguishes explicit meta and ctrl while keeping mod portable', () => {
+    expect(doesHotkeyEventMatchBinding({ ...f10, metaKey: true }, 'meta+f10')).toBe(true)
+    expect(doesHotkeyEventMatchBinding({ ...f10, metaKey: true }, 'ctrl+f10')).toBe(false)
+    expect(doesHotkeyEventMatchBinding({ ...f10, ctrlKey: true }, 'ctrl+f10')).toBe(true)
+    expect(doesHotkeyEventMatchBinding({ ...f10, ctrlKey: true }, 'meta+f10')).toBe(false)
+    expect(doesHotkeyEventMatchBinding({ ...f10, metaKey: true }, 'mod+f10')).toBe(true)
+    expect(doesHotkeyEventMatchBinding({ ...f10, ctrlKey: true }, 'mod+f10')).toBe(true)
   })
 })
 
@@ -298,6 +313,37 @@ describe('resolveHotkeyConfiguration', () => {
 
     expect(getRuntimeHotkeyBinding(bindings, 'JOIN_ITEMS')).toBe('mod+shift+j')
     expect(getRuntimeHotkeyBinding(bindings, 'MARK_IN', 'preview')).toBeNull()
+  })
+
+  it('uses declaration order even when a legacy binding map has a different key order', () => {
+    const bindings = {
+      ...resolveHotkeys(),
+      PLAY_PAUSE: 'meta+f10',
+      SHUTTLE_REVERSE: 'mod+f10',
+    }
+    const reordered = Object.fromEntries(Object.entries(bindings).toReversed()) as typeof bindings
+
+    expect(resolveRuntimeHotkeys(bindings)).toMatchObject({
+      PLAY_PAUSE: 'meta+f10',
+      SHUTTLE_REVERSE: '',
+    })
+    expect(resolveRuntimeHotkeys(reordered)).toMatchObject({
+      PLAY_PAUSE: 'meta+f10',
+      SHUTTLE_REVERSE: '',
+    })
+  })
+
+  it('keeps distinct explicit meta and ctrl runtime bindings reachable', () => {
+    const bindings = {
+      ...resolveHotkeys(),
+      PLAY_PAUSE: 'meta+f10',
+      SHUTTLE_REVERSE: 'ctrl+f10',
+    }
+
+    expect(resolveRuntimeHotkeys(bindings)).toMatchObject({
+      PLAY_PAUSE: 'meta+f10',
+      SHUTTLE_REVERSE: 'ctrl+f10',
+    })
   })
 
   it('keeps ordinary remaps whose direct and derived runtime chords are unique', () => {

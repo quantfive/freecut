@@ -53,7 +53,11 @@ import {
 } from '../utils/source-io'
 import { useMediaLibraryStore, getMediaType } from '@/features/preview/deps/media-library'
 import { useItemsStore } from '@/features/preview/deps/timeline-store'
-import { useResolvedHotkeys, useSettingsStore } from '@/features/preview/deps/settings'
+import {
+  useResolvedHotkeys,
+  useRuntimeHotkeys,
+  useSettingsStore,
+} from '@/features/preview/deps/settings'
 import { useEditorStore } from '@/shared/state/editor'
 import { useSourcePlayerStore } from '@/shared/state/source-player'
 import { getNextShuttleRate } from '@/shared/state/playback/shuttle'
@@ -71,7 +75,7 @@ import { formatTimecodeCompact } from '@/shared/utils/time-utils'
 import { getPreviewPixelSnapSize } from '../utils/preview-pixel-snap'
 import type { TimelineTrack } from '@/types/timeline'
 import { useBlobUrlEpoch } from '@/infrastructure/browser/blob-url-manager'
-import { formatHotkeyBinding, getHotkeyBindingFromEventData } from '@/config/hotkeys'
+import { doesHotkeyEventMatchBinding, formatHotkeyBinding } from '@/config/hotkeys'
 
 interface SourceMonitorProps {
   mediaId: string
@@ -209,6 +213,7 @@ const SourceMonitorContent = memo(function SourceMonitorContent({
   const media = useMediaLibraryStore((s) => s.mediaById[mediaId])
   const blobUrlEpoch = useBlobUrlEpoch(mediaId)
   const hotkeys = useResolvedHotkeys()
+  const runtimeHotkeys = useRuntimeHotkeys()
 
   // Sync current media ID into source player store for I/O points
   useEffect(() => {
@@ -287,6 +292,7 @@ const SourceMonitorContent = memo(function SourceMonitorContent({
             seekFrame={seekFrame}
             onClose={onClose}
             hotkeys={hotkeys}
+            runtimeHotkeys={runtimeHotkeys}
           />
         </VideoConfigProvider>
       </ClockBridgeProvider>
@@ -311,6 +317,7 @@ interface SourceMonitorInnerProps {
   seekFrame: number | null
   onClose?: () => void
   hotkeys: ReturnType<typeof useResolvedHotkeys>
+  runtimeHotkeys: ReturnType<typeof useRuntimeHotkeys>
 }
 
 function SourceMonitorInner({
@@ -328,6 +335,7 @@ function SourceMonitorInner({
   seekFrame,
   onClose,
   hotkeys,
+  runtimeHotkeys,
 }: SourceMonitorInnerProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const contentHostRef = useRef<HTMLDivElement>(null)
@@ -458,24 +466,23 @@ function SourceMonitorInner({
     (e: React.KeyboardEvent) => {
       if (!interactive) return
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return
-      const binding = getHotkeyBindingFromEventData(e)
       const { currentSourceFrame, setInPoint, setOutPoint, clearInOutPoints } =
         useSourcePlayerStore.getState()
-      if (binding === hotkeys.MARK_IN) {
+      if (doesHotkeyEventMatchBinding(e, runtimeHotkeys.MARK_IN)) {
         e.preventDefault()
         e.stopPropagation()
         setInPoint(currentSourceFrame)
-      } else if (binding === hotkeys.MARK_OUT) {
+      } else if (doesHotkeyEventMatchBinding(e, runtimeHotkeys.MARK_OUT)) {
         e.preventDefault()
         e.stopPropagation()
         setOutPoint(getExclusiveSourceOutPoint(currentSourceFrame, durationInFrames))
-      } else if (binding === hotkeys.CLEAR_IN_OUT) {
+      } else if (doesHotkeyEventMatchBinding(e, runtimeHotkeys.CLEAR_IN_OUT)) {
         e.preventDefault()
         e.stopPropagation()
         clearInOutPoints()
       }
     },
-    [durationInFrames, hotkeys, interactive],
+    [durationInFrames, interactive, runtimeHotkeys],
   )
 
   const handleMouseEnter = useCallback(() => {

@@ -4,4 +4,7 @@
  */
 
 export { useSettingsStore } from '@/features/settings/stores/settings-store'
-export { useResolvedHotkeys } from '@/features/settings/hooks/use-resolved-hotkeys'
+export {
+  useResolvedHotkeys,
+  useRuntimeHotkeys,
+} from '@/features/settings/hooks/use-resolved-hotkeys'

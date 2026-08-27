@@ -8,11 +8,11 @@ import { useTimelineStore } from '../../stores/timeline-store'
 import { useSelectionStore } from '@/shared/state/selection'
 import { HOTKEY_OPTIONS } from '@/config/hotkeys'
 import type { TimelineShortcutCallbacks } from '../use-timeline-shortcuts'
-import { useResolvedHotkeys } from '@/features/timeline/deps/settings'
+import { useRuntimeHotkeys } from '@/features/timeline/deps/settings'
 import { SLIP_SLIDE_TOOLS_ENABLED } from '../../constants'
 
 export function useToolShortcuts(callbacks: TimelineShortcutCallbacks) {
-  const hotkeys = useResolvedHotkeys()
+  const hotkeys = useRuntimeHotkeys()
   const activeTool = useSelectionStore((s) => s.activeTool)
   const setActiveTool = useSelectionStore((s) => s.setActiveTool)
 

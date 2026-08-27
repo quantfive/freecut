@@ -8,7 +8,7 @@ import { usePlaybackStore } from '@/shared/state/playback'
 import { useEditorStore } from '@/shared/state/editor'
 import { useTimelineStore } from '../../stores/timeline-store'
 import { useSelectionStore } from '@/shared/state/selection'
-import { HOTKEY_OPTIONS, getRuntimeHotkeyBinding } from '@/config/hotkeys'
+import { HOTKEY_OPTIONS } from '@/config/hotkeys'
 import { canJoinMultipleItems } from '@/features/timeline/utils/clip-utils'
 import { canLinkSelection, hasLinkedItems } from '@/features/timeline/utils/linked-items'
 import {
@@ -20,13 +20,12 @@ import {
 import type { TransformProperties } from '@/types/transform'
 import type { TimelineShortcutCallbacks } from '../use-timeline-shortcuts'
 import { useClearKeyframesDialogStore } from '@/shared/state/clear-keyframes-dialog'
-import { useResolvedHotkeys } from '@/features/timeline/deps/settings'
+import { useRuntimeHotkeys } from '@/features/timeline/deps/settings'
 import { useKeyframeSelectionStore } from '../../stores/keyframe-selection-store'
 import { useDeleteShortcuts } from './use-delete-shortcuts'
 
 export function useEditingShortcuts(callbacks: TimelineShortcutCallbacks) {
-  const hotkeys = useResolvedHotkeys()
-  const joinItemsBinding = getRuntimeHotkeyBinding(hotkeys, 'JOIN_ITEMS')
+  const hotkeys = useRuntimeHotkeys()
   const selectedItemIds = useSelectionStore((s) => s.selectedItemIds)
   const editKeyframePanelOpen = useSelectionStore((s) => s.editKeyframePanelOpen)
   const clearSelection = useSelectionStore((s) => s.clearSelection)
@@ -207,7 +206,7 @@ export function useEditingShortcuts(callbacks: TimelineShortcutCallbacks) {
 
   // Editing: Shift+J - Join selected clips
   useHotkeys(
-    joinItemsBinding ?? [],
+    hotkeys.JOIN_ITEMS,
     (event) => {
       if (selectedItemIds.length < 2) return
 
@@ -223,7 +222,7 @@ export function useEditingShortcuts(callbacks: TimelineShortcutCallbacks) {
       }
     },
     HOTKEY_OPTIONS,
-    [joinItemsBinding, selectedItemIds, items, joinItems],
+    [selectedItemIds, items, joinItems],
   )
 
   useHotkeys(

@@ -6,12 +6,13 @@ import { useHotkeys } from 'react-hotkeys-hook'
 import { HOTKEY_OPTIONS, getRuntimeHotkeyBinding } from '@/config/hotkeys'
 import { usePlaybackStore } from '@/shared/state/playback'
 import { useTimelineStore } from '../../stores/timeline-store'
-import { useResolvedHotkeys } from '@/features/timeline/deps/settings'
+import { useResolvedHotkeys, useRuntimeHotkeys } from '@/features/timeline/deps/settings'
 
 export function useInOutShortcuts() {
-  const hotkeys = useResolvedHotkeys()
-  const markInAtPreview = getRuntimeHotkeyBinding(hotkeys, 'MARK_IN', 'preview')
-  const markOutAtPreview = getRuntimeHotkeyBinding(hotkeys, 'MARK_OUT', 'preview')
+  const resolvedHotkeys = useResolvedHotkeys()
+  const hotkeys = useRuntimeHotkeys()
+  const markInAtPreview = getRuntimeHotkeyBinding(resolvedHotkeys, 'MARK_IN', 'preview')
+  const markOutAtPreview = getRuntimeHotkeyBinding(resolvedHotkeys, 'MARK_OUT', 'preview')
 
   useHotkeys(
     hotkeys.MARK_IN,

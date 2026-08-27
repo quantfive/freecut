@@ -90,6 +90,10 @@ const resolvedHotkeysState = vi.hoisted(() => ({
   },
 }))
 
+const runtimeHotkeysState = vi.hoisted(() => ({
+  hotkeys: { ...resolvedHotkeysState.hotkeys },
+}))
+
 vi.mock('@/features/preview/deps/player-context', () => ({
   PlayerEmitterProvider: ({ children }: { children: ReactNode }) => <>{children}</>,
   ClockBridgeProvider: ({ children }: { children: ReactNode }) => <>{children}</>,
@@ -190,6 +194,7 @@ vi.mock('@/features/preview/deps/settings', () => {
   return {
     useSettingsStore,
     useResolvedHotkeys: () => resolvedHotkeysState.hotkeys,
+    useRuntimeHotkeys: () => runtimeHotkeysState.hotkeys,
   }
 })
 
@@ -270,6 +275,7 @@ describe('SourceMonitor current media ownership', () => {
       INSERT_EDIT: 'comma',
       OVERWRITE_EDIT: 'period',
     }
+    runtimeHotkeysState.hotkeys = { ...resolvedHotkeysState.hotkeys }
   })
 
   it('updates visible shortcut labels after remap and reset', async () => {
@@ -281,6 +287,7 @@ describe('SourceMonitor current media ownership', () => {
       ...resolvedHotkeysState.hotkeys,
       MARK_IN: 'shift+f',
     }
+    runtimeHotkeysState.hotkeys = { ...resolvedHotkeysState.hotkeys }
     rendered.rerender(<SourceMonitor key="remapped" mediaId="media-1" />)
     expect(rendered.getByLabelText('Mark In (Shift + F)')).toBeInTheDocument()
 
@@ -292,11 +299,35 @@ describe('SourceMonitor current media ownership', () => {
     expect(rendered.getByLabelText('Mark In (I)')).toBeInTheDocument()
   })
 
+  it('keeps the raw local label while a losing runtime binding is disabled', async () => {
+    resolvedHotkeysState.hotkeys = {
+      ...resolvedHotkeysState.hotkeys,
+      MARK_IN: 'meta+f10',
+    }
+    runtimeHotkeysState.hotkeys = {
+      ...resolvedHotkeysState.hotkeys,
+      MARK_IN: '',
+    }
+    sourcePlayerStoreState.currentSourceFrame = 42
+    const rendered = render(<SourceMonitor mediaId="media-1" />)
+    await waitFor(() => expect(rendered.getByLabelText(/Mark In \(.+f10\)/i)).toBeInTheDocument())
+
+    fireEvent.keyDown(rendered.container.firstElementChild!, {
+      key: 'F10',
+      code: 'F10',
+      metaKey: true,
+    })
+
+    expect(sourcePlayerStoreState.setInPoint).not.toHaveBeenCalled()
+    expect(resolvedHotkeysState.hotkeys.MARK_IN).toBe('meta+f10')
+  })
+
   it('uses the same reactive binding for local source-monitor actions', async () => {
     resolvedHotkeysState.hotkeys = {
       ...resolvedHotkeysState.hotkeys,
       MARK_IN: 'shift+f',
     }
+    runtimeHotkeysState.hotkeys = { ...resolvedHotkeysState.hotkeys }
     sourcePlayerStoreState.currentSourceFrame = 42
     const rendered = render(<SourceMonitor mediaId="media-1" />)
     await waitFor(() => expect(rendered.getByLabelText('Mark In (Shift + F)')).toBeInTheDocument())
