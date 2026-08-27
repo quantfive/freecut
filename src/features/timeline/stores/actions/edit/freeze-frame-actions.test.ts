@@ -2,6 +2,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vite-plus/test'
 import type { AudioItem, TimelineItem, TimelineTrack } from '@/types/timeline'
+import type { Transition } from '@/types/transition'
 
 const mocks = vi.hoisted(() => ({
   acquire: vi.fn<(mediaId: string, blob: Blob) => string>(),
@@ -71,6 +72,7 @@ import {
   makeTimelineVideoItem,
 } from '../../../test-helpers'
 import { useItemsStore } from '../../items-store'
+import { useKeyframesStore } from '../../keyframes-store'
 import { useTimelineCommandStore } from '../../timeline-command-store'
 import { useTimelineSettingsStore } from '../../timeline-settings-store'
 import { useTransitionsStore } from '../../transitions-store'
@@ -118,6 +120,7 @@ function snapshot() {
     items: structuredClone(useItemsStore.getState().items),
     tracks: structuredClone(useItemsStore.getState().tracks),
     transitions: structuredClone(useTransitionsStore.getState().transitions),
+    keyframes: structuredClone(useKeyframesStore.getState().keyframes),
     selection: structuredClone(useSelectionStore.getState().selectedItemIds),
     dirty: useTimelineSettingsStore.getState().isDirty,
     undoDepth: useTimelineCommandStore.getState().undoStack.length,
@@ -130,6 +133,7 @@ function expectSnapshot(expected: ReturnType<typeof snapshot>): void {
   expect(useItemsStore.getState().items).toEqual(expected.items)
   expect(useItemsStore.getState().tracks).toEqual(expected.tracks)
   expect(useTransitionsStore.getState().transitions).toEqual(expected.transitions)
+  expect(useKeyframesStore.getState().keyframes).toEqual(expected.keyframes)
   expect(useSelectionStore.getState().selectedItemIds).toEqual(expected.selection)
   expect(useTimelineSettingsStore.getState().isDirty).toBe(expected.dirty)
   expect(useTimelineCommandStore.getState().undoStack).toHaveLength(expected.undoDepth)
@@ -160,6 +164,17 @@ describe('freeze-frame async atomicity', () => {
     useItemsStore.getState().setTracks([videoTrack()])
     useItemsStore.getState().setItems([video()])
     useTransitionsStore.getState().setTransitions([])
+    useKeyframesStore.getState().setKeyframes([
+      {
+        itemId: 'video',
+        properties: [
+          {
+            property: 'opacity',
+            keyframes: [{ id: 'sentinel-keyframe', frame: 10, value: 0.75, easing: 'linear' }],
+          },
+        ],
+      },
+    ])
     useSelectionStore.getState().clearSelection()
     useSelectionStore.getState().selectItems(['sentinel-selection'])
     useTimelineCommandStore.getState().clearHistory()
@@ -288,6 +303,32 @@ describe('freeze-frame async atomicity', () => {
     await deferred.started
 
     useItemsStore.getState()._addItem(video({ id: 'late-item', from: 120 }))
+    const before = snapshot()
+    deferred.release()
+
+    await expect(pending).resolves.toBe(false)
+    expectSnapshot(before)
+    expect(mocks.deleteMediaFromProject).toHaveBeenCalledWith('project-1', 'freeze-media')
+    expect(mocks.release).toHaveBeenCalledWith('freeze-media')
+  })
+
+  it('rejects relevant transition drift after persistence without touching keyframes', async () => {
+    useItemsStore.getState().setItems([video(), video({ id: 'right', from: 120 })])
+    const deferred = deferGeneratedImageImport()
+    const pending = insertFreezeFrame('video', 60)
+    await deferred.started
+
+    const transition: Transition = {
+      id: 'late-transition',
+      type: 'crossfade',
+      presentation: 'fade',
+      timing: 'linear',
+      leftClipId: 'video',
+      rightClipId: 'right',
+      trackId: 'video-track',
+      durationInFrames: 10,
+    }
+    useTransitionsStore.getState().setTransitions([transition])
     const before = snapshot()
     deferred.release()
 
