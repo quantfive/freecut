@@ -58,6 +58,38 @@ interface RecordedFailure {
   error: unknown
 }
 
+async function encodeAndCloseSample<S extends CloseableSample>(
+  sample: S,
+  keyFrame: boolean,
+  encodeSample: (sample: S, keyFrame: boolean) => Promise<void>,
+  recordEncodeFailure: (error: unknown) => void,
+  recordFailure: (error: unknown) => void,
+): Promise<EncodeSettlement> {
+  let failure: RecordedFailure | null = null
+  try {
+    await encodeSample(sample, keyFrame)
+  } catch (error) {
+    failure = { error }
+    recordEncodeFailure(error)
+  }
+
+  try {
+    // The encoder does NOT close samples. We must close to release the
+    // underlying frame's GPU memory, otherwise the browser throttles after
+    // ~8-16 outstanding frames.
+    sample.close()
+  } catch (error) {
+    // If encoding already failed, it happened before cleanup and remains the
+    // failure represented by this settlement.
+    if (!failure) {
+      failure = { error }
+      recordFailure(error)
+    }
+  }
+
+  return failure ? { status: 'rejected', reason: failure.error } : { status: 'fulfilled' }
+}
+
 export async function runPipelinedFrameLoop<S extends CloseableSample>(
   deps: PipelinedFrameLoopDeps<S>,
 ): Promise<void> {
@@ -124,9 +156,11 @@ export async function runPipelinedFrameLoop<S extends CloseableSample>(
     }
   }
 
-  const throwFirstFailure = (): void => {
+  const throwRecordedFailureAfterDrain = async () => {
     const failure = firstFailure
-    if (failure) throw failure.error
+    if (!failure) return
+    if (signal?.aborted) await runAbortCleanup()
+    throw failure.error
   }
 
   try {
@@ -143,8 +177,7 @@ export async function runPipelinedFrameLoop<S extends CloseableSample>(
       if (signal?.aborted) {
         recordFailure(getAbortError())
         await drainPendingEncode()
-        await runAbortCleanup()
-        throwFirstFailure()
+        await throwRecordedFailureAfterDrain()
       }
 
       // Render frame first — this overlaps with the previous frame's encode
@@ -156,10 +189,7 @@ export async function runPipelinedFrameLoop<S extends CloseableSample>(
       // sample. This ensures at most one encode is in flight and that frames
       // are fed to the encoder in order.
       await drainPendingEncode()
-      if (firstFailure) {
-        if (signal?.aborted) await runAbortCleanup()
-        throwFirstFailure()
-      }
+      await throwRecordedFailureAfterDrain()
 
       // Snapshot pixels into a sample. The capture copies pixel data
       // immediately — the surface is free for the next render.
@@ -168,45 +198,24 @@ export async function runPipelinedFrameLoop<S extends CloseableSample>(
       // Kick off encoding in the background. NOT awaited here — it runs
       // concurrently with the next iteration's renderFrame().
       const isKeyFrame = frame === 0
-      pendingEncode = (async (): Promise<EncodeSettlement> => {
-        let failure: RecordedFailure | null = null
-        try {
-          await encodeSample(sample, isKeyFrame)
-        } catch (error) {
-          failure = { error }
-          recordEncodeFailure(error)
-        }
-
-        try {
-          // The encoder does NOT close samples. We must close to release the
-          // underlying frame's GPU memory, otherwise the browser throttles
-          // after ~8-16 outstanding frames.
-          sample.close()
-        } catch (error) {
-          // If encoding already failed, it happened before cleanup and remains
-          // the failure represented by this settlement.
-          if (!failure) {
-            failure = { error }
-            recordFailure(error)
-          }
-        }
-
-        return failure ? { status: 'rejected', reason: failure.error } : { status: 'fulfilled' }
-      })()
+      pendingEncode = encodeAndCloseSample(
+        sample,
+        isKeyFrame,
+        encodeSample,
+        recordEncodeFailure,
+        recordFailure,
+      )
 
       onFrameProgress(frame)
     }
 
     // Drain the final in-flight encode before finalizing
     await drainPendingEncode()
-    if (firstFailure) {
-      if (signal?.aborted) await runAbortCleanup()
-      throwFirstFailure()
-    }
+    await throwRecordedFailureAfterDrain()
   } catch (primaryError) {
     recordFailure(primaryError)
     await drainPendingEncode()
-    if (signal?.aborted) await runAbortCleanup()
-    throwFirstFailure()
+    await throwRecordedFailureAfterDrain()
+    throw primaryError
   }
 }
