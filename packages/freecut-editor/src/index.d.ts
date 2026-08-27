@@ -1,5 +1,82 @@
 import type { ComponentType, ReactNode } from 'react'
 
+export type HotkeyKey =
+  | 'PLAY_PAUSE'
+  | 'SHUTTLE_REVERSE'
+  | 'SHUTTLE_PAUSE'
+  | 'SHUTTLE_FORWARD'
+  | 'PREVIOUS_FRAME'
+  | 'NEXT_FRAME'
+  | 'GO_TO_START'
+  | 'GO_TO_END'
+  | 'NEXT_SNAP_POINT'
+  | 'PREVIOUS_SNAP_POINT'
+  | 'SPLIT_AT_PLAYHEAD'
+  | 'SPLIT_AT_PLAYHEAD_ALT'
+  | 'JOIN_ITEMS'
+  | 'DELETE_SELECTED'
+  | 'DELETE_SELECTED_ALT'
+  | 'RIPPLE_DELETE'
+  | 'RIPPLE_DELETE_ALT'
+  | 'FREEZE_FRAME'
+  | 'LINK_AUDIO_VIDEO'
+  | 'UNLINK_AUDIO_VIDEO'
+  | 'TOGGLE_LINKED_SELECTION'
+  | 'NUDGE_LEFT'
+  | 'NUDGE_RIGHT'
+  | 'NUDGE_UP'
+  | 'NUDGE_DOWN'
+  | 'NUDGE_LEFT_LARGE'
+  | 'NUDGE_RIGHT_LARGE'
+  | 'NUDGE_UP_LARGE'
+  | 'NUDGE_DOWN_LARGE'
+  | 'UNDO'
+  | 'REDO'
+  | 'ZOOM_IN'
+  | 'ZOOM_OUT'
+  | 'ZOOM_TO_FIT'
+  | 'ZOOM_TO_100'
+  | 'ZOOM_TO_100_ALT'
+  | 'COPY'
+  | 'CUT'
+  | 'PASTE'
+  | 'SELECTION_TOOL'
+  | 'TRIM_EDIT_TOOL'
+  | 'RAZOR_TOOL'
+  | 'RATE_STRETCH_TOOL'
+  | 'SLIP_TOOL'
+  | 'SLIDE_TOOL'
+  | 'SAVE'
+  | 'EXPORT'
+  | 'TOGGLE_SNAP'
+  | 'TOGGLE_CANVAS_SNAP'
+  | 'OPEN_SCENE_BROWSER'
+  | 'WORKSPACE_EDIT'
+  | 'WORKSPACE_COLOR'
+  | 'WORKSPACE_ANIMATE'
+  | 'ADD_MARKER'
+  | 'REMOVE_MARKER'
+  | 'PREVIOUS_MARKER'
+  | 'NEXT_MARKER'
+  | 'CLEAR_KEYFRAMES'
+  | 'KEYFRAME_EDITOR_GRAPH'
+  | 'KEYFRAME_EDITOR_DOPESHEET'
+  | 'KEYFRAME_EDITOR_SPLIT'
+  | 'EDIT_KEYFRAME_ADD'
+  | 'KEYFRAME_PREVIOUS'
+  | 'KEYFRAME_NEXT'
+  | 'KEYFRAME_TOGGLE_AUTO'
+  | 'KEYFRAME_FIT'
+  | 'MARK_IN'
+  | 'MARK_OUT'
+  | 'CLEAR_IN_OUT'
+  | 'INSERT_EDIT'
+  | 'OVERWRITE_EDIT'
+
+export type HotkeyOverrideMap = Partial<Record<HotkeyKey, string>>
+
+export declare const HOTKEYS: Readonly<Record<HotkeyKey, string>>
+
 export type EditorCapability =
   | 'project.navigate'
   | 'project.save'
@@ -333,6 +410,25 @@ export interface EditorHostNavigation {
   back(): void
 }
 
+export declare const HOST_SHORTCUTS_SCHEMA: 'freecut-host-shortcuts'
+export declare const HOST_SHORTCUTS_VERSION: 1
+
+export interface HostShortcutSettings {
+  schema: typeof HOST_SHORTCUTS_SCHEMA
+  version: typeof HOST_SHORTCUTS_VERSION
+  overrides: HotkeyOverrideMap
+}
+
+export interface EditorShortcutPort {
+  getSettings(): Promise<HostShortcutSettings> | HostShortcutSettings
+  setSettings(settings: HostShortcutSettings): Promise<void> | void
+  subscribe?(listener: (settings: HostShortcutSettings) => void): () => void
+}
+
+export declare function createHostShortcutSettings(
+  overrides?: HotkeyOverrideMap,
+): HostShortcutSettings
+
 export interface EditorHost {
   readonly capabilities: EditorCapabilityMap
   load(): Promise<EmbeddedEditorSnapshot> | EmbeddedEditorSnapshot
@@ -340,6 +436,7 @@ export interface EditorHost {
     locator: MediaLocator,
   ): Promise<ResolvedMediaLocator | null> | ResolvedMediaLocator | null
   submitEdit(batch: EditCommandBatch): Promise<HostEditResult> | HostEditResult
+  shortcuts?: EditorShortcutPort
   transcript?: EditorTranscriptPort
   navigation?: EditorHostNavigation
   notify?(notice: HostNotice): void

@@ -1,6 +1,5 @@
-import { useHotkeys } from 'react-hotkeys-hook'
+import { useCommandHotkey } from '@/hooks/use-hotkey-registration'
 import { HOTKEY_OPTIONS } from '@/config/hotkeys'
-import { useResolvedHotkeys } from '@/features/editor/deps/settings'
 import { useEditorStore } from '@/shared/state/editor'
 
 import { useSceneBrowserStore } from '@/features/editor/deps/scene-browser'
@@ -24,12 +23,11 @@ interface EditorHotkeyCallbacks {
  * Uses react-hotkeys-hook with granular Zustand selectors
  */
 export function useEditorHotkeys(callbacks: EditorHotkeyCallbacks = {}) {
-  const hotkeys = useResolvedHotkeys()
   const enableLocalUi = callbacks.enableLocalUi ?? true
 
   // Save: Cmd/Ctrl+S
-  useHotkeys(
-    hotkeys.SAVE,
+  useCommandHotkey(
+    'SAVE',
     (event) => {
       event.preventDefault()
       if (callbacks.onSave) {
@@ -41,8 +39,8 @@ export function useEditorHotkeys(callbacks: EditorHotkeyCallbacks = {}) {
   )
 
   // Export: Cmd/Ctrl+Shift+E
-  useHotkeys(
-    hotkeys.EXPORT,
+  useCommandHotkey(
+    'EXPORT',
     (event) => {
       event.preventDefault()
       if (callbacks.onExport) {
@@ -56,8 +54,8 @@ export function useEditorHotkeys(callbacks: EditorHotkeyCallbacks = {}) {
   // Open Scene Browser: Cmd/Ctrl+Shift+F — capture phase because the
   // default browser binding is a no-op here but Chrome will still eat it
   // if our listener is in bubbling phase.
-  useHotkeys(
-    hotkeys.OPEN_SCENE_BROWSER,
+  useCommandHotkey(
+    'OPEN_SCENE_BROWSER',
     (event) => {
       if (!enableLocalUi) return
       event.preventDefault()
@@ -69,8 +67,8 @@ export function useEditorHotkeys(callbacks: EditorHotkeyCallbacks = {}) {
 
   // Workspace switching: Alt+1 (Edit), Alt+2 (Color), Alt+3 (Motion).
   // WORKSPACE_ANIMATE retains its persisted command id for shortcut migration.
-  useHotkeys(
-    hotkeys.WORKSPACE_EDIT,
+  useCommandHotkey(
+    'WORKSPACE_EDIT',
     (event) => {
       if (!enableLocalUi) return
       event.preventDefault()
@@ -80,8 +78,8 @@ export function useEditorHotkeys(callbacks: EditorHotkeyCallbacks = {}) {
     [enableLocalUi],
   )
 
-  useHotkeys(
-    hotkeys.WORKSPACE_COLOR,
+  useCommandHotkey(
+    'WORKSPACE_COLOR',
     (event) => {
       if (!enableLocalUi) return
       event.preventDefault()
@@ -91,8 +89,8 @@ export function useEditorHotkeys(callbacks: EditorHotkeyCallbacks = {}) {
     [enableLocalUi],
   )
 
-  useHotkeys(
-    hotkeys.WORKSPACE_ANIMATE,
+  useCommandHotkey(
+    'WORKSPACE_ANIMATE',
     (event) => {
       if (!enableLocalUi) return
       event.preventDefault()

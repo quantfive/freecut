@@ -16,10 +16,16 @@ const page = {
           kind: 'list',
           items: [
             'Play and pause with the preview controls or `Space`.',
+            'Use `J`, `K`, and `L` for reverse shuttle, pause, and forward shuttle. Repeated `J` or `L` presses increase shuttle speed.',
             'Step one frame at a time with `Left` and `Right` for frame-accurate checks.',
             'Jump to the start of the timeline with `Home` and the end with `End`.',
             'Read the timecode display to confirm the exact playhead position.',
           ],
+        },
+        {
+          kind: 'note',
+          tone: 'info',
+          text: 'When the pointer is over the Source Monitor, `J`, `K`, and `L` control the source. Otherwise they control the program timeline.',
         },
       ],
     },

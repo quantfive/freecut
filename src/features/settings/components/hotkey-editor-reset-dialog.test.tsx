@@ -36,6 +36,15 @@ function getButton(name: string): HTMLButtonElement {
   return button as HTMLButtonElement
 }
 
+function getButtonContaining(text: string): HTMLButtonElement {
+  const button = [...document.querySelectorAll('button')].find((candidate) =>
+    candidate.textContent?.includes(text),
+  )
+
+  expect(button).toBeTruthy()
+  return button as HTMLButtonElement
+}
+
 async function waitForText(text: string): Promise<HTMLElement> {
   for (let attempt = 0; attempt < 10; attempt += 1) {
     const element = [...document.querySelectorAll('body *')].find(
@@ -120,35 +129,48 @@ describe('HotkeyEditor reset all confirmation', () => {
     })
   })
 
-  it('restores partial conflict overwrites when capture is cancelled', async () => {
-    useSettingsStore.setState({
-      hotkeyOverrides: {
-        PLAY_PAUSE: 'shift+k',
-        PREVIOUS_FRAME: 'right',
-      },
+  it('repairs duplicate overrides before presenting conflict choices', async () => {
+    useSettingsStore.getState().replaceHotkeyOverrides({
+      PLAY_PAUSE: 'shift+space',
+      PREVIOUS_FRAME: 'right',
+    })
+
+    expect(useSettingsStore.getState().hotkeyOverrides).toEqual({
+      PLAY_PAUSE: 'shift+space',
     })
 
     click(getButton('Record'))
     await waitForText('Listening')
     keyDown('ArrowRight', 'ArrowRight')
 
-    await waitForBodyText('Conflicts with Previous frame')
     await waitForBodyText('Conflicts with Next frame')
-    click(getButton('Overwrite'))
-    await new Promise((resolve) => setTimeout(resolve, 0))
-
-    expect(useSettingsStore.getState().hotkeyOverrides).not.toEqual({
-      PLAY_PAUSE: 'shift+k',
-      PREVIOUS_FRAME: 'right',
-    })
+    expect(document.body.textContent).not.toContain('Conflicts with Previous frame')
 
     keyDown('Escape', 'Escape')
     await new Promise((resolve) => setTimeout(resolve, 0))
 
     expect(useSettingsStore.getState().hotkeyOverrides).toEqual({
-      PLAY_PAUSE: 'shift+k',
-      PREVIOUS_FRAME: 'right',
+      PLAY_PAUSE: 'shift+space',
     })
+  })
+
+  it('displays and rejects a conflict caused by the derived Shift preview chord', async () => {
+    const searchInput = document.querySelector(
+      'input[placeholder="Search commands or shortcuts"]',
+    ) as HTMLInputElement | null
+    expect(searchInput).toBeTruthy()
+    changeInput(searchInput!, 'mark in')
+    await waitForText('1 result')
+    click(getButtonContaining('Mark In point'))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    click(getButton('Record'))
+    await waitForText('Listening')
+    keyDown('j', 'KeyJ')
+
+    await waitForBodyText('Conflicts with Join selected clips')
+    expect(getButton('Save').disabled).toBe(true)
+    expect(useSettingsStore.getState().hotkeyOverrides).toEqual({ PLAY_PAUSE: 'shift+k' })
   })
 
   it('keeps unbind explicit and disables it once the selected command is unassigned', async () => {

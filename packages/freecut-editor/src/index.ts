@@ -1,7 +1,11 @@
 export { FreeCutEditorSurface } from '@/features/editor/host/editor-surface'
 export { EditorHostProvider } from '@/features/editor/host/context-provider'
+export { HOTKEYS } from '@/config/hotkeys'
+export type { HotkeyKey, HotkeyOverrideMap } from '@/config/hotkeys'
 export {
   DEFAULT_HOST_CAPABILITIES,
+  HOST_SHORTCUTS_SCHEMA,
+  HOST_SHORTCUTS_VERSION,
   MAX_TRANSCRIPT_COMMAND_TEXT_BYTES,
   MAX_TRANSCRIPT_CURSOR_LENGTH,
   MAX_TRANSCRIPT_DURATION_US,
@@ -11,6 +15,7 @@ export {
   MAX_TRANSCRIPT_SELECTIONS,
   SUPPORTED_HOST_COMMANDS,
   capabilityForCommand,
+  createHostShortcutSettings,
   createLocalEditorHost,
   isHostCapabilityEnabled,
 } from '@/features/editor/host/contract'
@@ -21,6 +26,7 @@ export type {
   EditorCapabilityMap,
   EditorHost,
   EditorHostNavigation,
+  EditorShortcutPort,
   EmbeddedEditorAsset,
   EmbeddedEditorProject,
   EmbeddedEditorSnapshot,
@@ -30,6 +36,7 @@ export type {
   HostEditResult,
   HostMediaKind,
   HostNotice,
+  HostShortcutSettings,
   HostTranscriptCommandAction,
   HostTranscriptCommandPreview,
   HostTranscriptCommandPreviewRequest,

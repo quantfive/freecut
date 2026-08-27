@@ -7,6 +7,8 @@ import {
   ContextMenuTrigger,
 } from '@/components/ui/context-menu'
 import { cn } from '@/shared/ui/cn'
+import { formatHotkeyBinding } from '@/config/hotkeys'
+import { useResolvedHotkeys } from '@/features/timeline/deps/settings'
 import type { SmartTrimIntent } from '../../utils/smart-trim-zones'
 import {
   CONSTRAINED_COLORS,
@@ -93,6 +95,8 @@ export const TrimHandles = memo(function TrimHandles({
   onJoinLeft,
   onJoinRight,
 }: TrimHandlesProps) {
+  const hotkeys = useResolvedHotkeys()
+  const joinShortcutLabel = formatHotkeyBinding(hotkeys.JOIN_ITEMS)
   const isRollingStart = smartTrimIntent === 'roll-start'
   const isRollingEnd = smartTrimIntent === 'roll-end'
   const isNeighborRollStart = rollHoverEdge === 'start'
@@ -196,7 +200,7 @@ export const TrimHandles = memo(function TrimHandles({
         <ContextMenuContent>
           <ContextMenuItem onClick={onJoinLeft}>
             Join
-            <ContextMenuShortcut>J</ContextMenuShortcut>
+            <ContextMenuShortcut>{joinShortcutLabel}</ContextMenuShortcut>
           </ContextMenuItem>
         </ContextMenuContent>
       </ContextMenu>
@@ -258,7 +262,7 @@ export const TrimHandles = memo(function TrimHandles({
         <ContextMenuContent>
           <ContextMenuItem onClick={onJoinRight}>
             Join
-            <ContextMenuShortcut>J</ContextMenuShortcut>
+            <ContextMenuShortcut>{joinShortcutLabel}</ContextMenuShortcut>
           </ContextMenuItem>
         </ContextMenuContent>
       </ContextMenu>

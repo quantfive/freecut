@@ -1,5 +1,6 @@
-import { fireEvent, render, screen } from '@testing-library/react'
-import { describe, expect, it, vi } from 'vite-plus/test'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vite-plus/test'
+import { useSettingsStore } from '@/features/timeline/deps/settings'
 import { TrimHandles } from './trim-handles'
 import { VideoFadeHandles } from './video-fade-handles'
 import { AudioFadeHandles } from './audio-fade-handles'
@@ -27,6 +28,20 @@ describe('TrimHandles', () => {
     onJoinRight: vi.fn(),
   }
 
+  const originalPlatform = Object.getOwnPropertyDescriptor(window.navigator, 'platform')
+
+  beforeEach(() => {
+    useSettingsStore.getState().resetHotkeys()
+  })
+
+  afterEach(() => {
+    if (originalPlatform) {
+      Object.defineProperty(window.navigator, 'platform', originalPlatform)
+    } else {
+      delete (window.navigator as { platform?: string }).platform
+    }
+  })
+
   it('fires onTrimStart on mousedown when the left handle is visible', () => {
     const onTrimStart = vi.fn()
     render(<TrimHandles {...defaultProps} hoveredEdge="start" onTrimStart={onTrimStart} />)
@@ -51,6 +66,34 @@ describe('TrimHandles', () => {
     expect(rightHandle).toBeTruthy()
     fireEvent.mouseDown(rightHandle!)
     expect(onTrimStart).toHaveBeenCalledWith(expect.any(Object), 'end')
+  })
+
+  it('updates the trim join menu from the live Windows shortcut binding', async () => {
+    Object.defineProperty(window.navigator, 'platform', { configurable: true, value: 'Win32' })
+    const { container } = render(
+      <TrimHandles {...defaultProps} hoveredEdge="start" hasJoinableLeft onJoinLeft={vi.fn()} />,
+    )
+    const leftHandle = container.querySelector('[class*="left-0"]')
+    expect(leftHandle).toBeTruthy()
+    fireEvent.contextMenu(leftHandle!)
+    expect(await screen.findByText('Shift + J')).toBeInTheDocument()
+
+    useSettingsStore.getState().setHotkeyBinding('JOIN_ITEMS', 'mod+alt+j')
+
+    await waitFor(() => expect(screen.getByText('Ctrl + Alt + J')).toBeInTheDocument())
+  })
+
+  it('formats a remapped trim join shortcut for macOS', async () => {
+    Object.defineProperty(window.navigator, 'platform', { configurable: true, value: 'MacIntel' })
+    useSettingsStore.getState().setHotkeyBinding('JOIN_ITEMS', 'mod+alt+j')
+    const { container } = render(
+      <TrimHandles {...defaultProps} hoveredEdge="end" hasJoinableRight onJoinRight={vi.fn()} />,
+    )
+    const rightHandle = container.querySelector('[class*="right-0"]')
+    expect(rightHandle).toBeTruthy()
+    fireEvent.contextMenu(rightHandle!)
+
+    expect(await screen.findByText('Cmd + Option + J')).toBeInTheDocument()
   })
 })
 

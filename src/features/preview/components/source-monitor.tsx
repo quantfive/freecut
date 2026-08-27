@@ -70,6 +70,9 @@ import {
 import { formatTimecodeCompact } from '@/shared/utils/time-utils'
 import { getPreviewPixelSnapSize } from '../utils/preview-pixel-snap'
 import type { TimelineTrack } from '@/types/timeline'
+import { doesHotkeyEventMatchBinding, formatHotkeyBinding } from '@/config/hotkeys'
+import { useCommandHotkeyBinding } from '@/hooks/use-hotkey-registration'
+import { useResolvedHotkeys } from '@/features/preview/deps/settings'
 
 interface SourceMonitorProps {
   mediaId: string
@@ -205,6 +208,7 @@ const SourceMonitorContent = memo(function SourceMonitorContent({
 }: SourceMonitorProps) {
   const [blobUrl, setBlobUrl] = useState<string>('')
   const media = useMediaLibraryStore((s) => s.mediaById[mediaId])
+  const hotkeys = useResolvedHotkeys()
 
   // Sync current media ID into source player store for I/O points
   useEffect(() => {
@@ -253,7 +257,6 @@ const SourceMonitorContent = memo(function SourceMonitorContent({
   const mediaWidth = media.width || 640
   const mediaHeight = media.height || 360
   const durationInFrames = mediaType === 'image' ? 1 : Math.max(1, Math.round(media.duration * fps))
-
   return (
     <PlayerEmitterProvider>
       <ClockBridgeProvider fps={fps} durationInFrames={durationInFrames} onVolumeChange={() => {}}>
@@ -277,6 +280,7 @@ const SourceMonitorContent = memo(function SourceMonitorContent({
             interactive={interactive}
             seekFrame={seekFrame}
             onClose={onClose}
+            hotkeys={hotkeys}
           />
         </VideoConfigProvider>
       </ClockBridgeProvider>
@@ -300,6 +304,7 @@ interface SourceMonitorInnerProps {
   interactive: boolean
   seekFrame: number | null
   onClose?: () => void
+  hotkeys: ReturnType<typeof useResolvedHotkeys>
 }
 
 function SourceMonitorInner({
@@ -316,6 +321,7 @@ function SourceMonitorInner({
   interactive,
   seekFrame,
   onClose,
+  hotkeys,
 }: SourceMonitorInnerProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const contentHostRef = useRef<HTMLDivElement>(null)
@@ -440,6 +446,9 @@ function SourceMonitorInner({
   }, [interactive, setHoveredPanel, setPlayerMethods])
 
   // Handle I/O shortcuts locally on this element (not global useHotkeys)
+  const markInHotkey = useCommandHotkeyBinding('MARK_IN')
+  const markOutHotkey = useCommandHotkeyBinding('MARK_OUT')
+  const clearInOutHotkey = useCommandHotkeyBinding('CLEAR_IN_OUT')
   const wrapperRef = useRef<HTMLDivElement>(null)
   const hadFocusRef = useRef(false)
   const handleKeyDown = useCallback(
@@ -448,21 +457,21 @@ function SourceMonitorInner({
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return
       const { currentSourceFrame, setInPoint, setOutPoint, clearInOutPoints } =
         useSourcePlayerStore.getState()
-      if (e.key === 'i' || e.key === 'I') {
+      if (doesHotkeyEventMatchBinding(e, markInHotkey)) {
         e.preventDefault()
         e.stopPropagation()
         setInPoint(currentSourceFrame)
-      } else if (e.key === 'o' || e.key === 'O') {
+      } else if (doesHotkeyEventMatchBinding(e, markOutHotkey)) {
         e.preventDefault()
         e.stopPropagation()
         setOutPoint(getExclusiveSourceOutPoint(currentSourceFrame, durationInFrames))
-      } else if (e.altKey && (e.key === 'x' || e.key === 'X')) {
+      } else if (doesHotkeyEventMatchBinding(e, clearInOutHotkey)) {
         e.preventDefault()
         e.stopPropagation()
         clearInOutPoints()
       }
     },
-    [durationInFrames, interactive],
+    [clearInOutHotkey, durationInFrames, interactive, markInHotkey, markOutHotkey],
   )
 
   const handleMouseEnter = useCallback(() => {
@@ -544,6 +553,7 @@ function SourceMonitorInner({
         hasAudio={hasAudio}
         interactive={interactive}
         seekFrame={seekFrame}
+        hotkeys={hotkeys}
       />
     </div>
   )
@@ -558,6 +568,7 @@ function SourcePlaybackControls({
   hasAudio,
   interactive,
   seekFrame,
+  hotkeys,
 }: {
   durationInFrames: number
   fps: number
@@ -565,6 +576,7 @@ function SourcePlaybackControls({
   hasAudio: boolean
   interactive: boolean
   seekFrame: number | null
+  hotkeys: ReturnType<typeof useResolvedHotkeys>
 }) {
   const clock = useClock()
   const player = usePlayer(durationInFrames)
@@ -587,6 +599,7 @@ function SourcePlaybackControls({
   const currentTimeRef = useRef<HTMLSpanElement>(null)
   const outPointRef = useRef<number | null>(useSourcePlayerStore.getState().outPoint)
   const [showFrames, setShowFrames] = useState(false)
+  const shortcutLabel = (binding: string) => formatHotkeyBinding(binding)
   const showFramesRef = useRef(showFrames)
   showFramesRef.current = showFrames
 
@@ -1289,12 +1302,12 @@ function SourcePlaybackControls({
                     height: EDITOR_LAYOUT_CSS_VALUES.toolbarButtonSize,
                   }}
                   onClick={handleMarkIn}
-                  aria-label="Mark In (I)"
+                  aria-label={`Mark In (${shortcutLabel(hotkeys.MARK_IN)})`}
                 >
                   <ArrowLeftToLine className="w-3 h-3" />
                 </Button>
               </TooltipTrigger>
-              <TooltipContent side="top">Mark In (I)</TooltipContent>
+              <TooltipContent side="top">Mark In ({shortcutLabel(hotkeys.MARK_IN)})</TooltipContent>
             </Tooltip>
             <Tooltip>
               <TooltipTrigger asChild>
@@ -1306,12 +1319,14 @@ function SourcePlaybackControls({
                     height: EDITOR_LAYOUT_CSS_VALUES.toolbarButtonSize,
                   }}
                   onClick={handleMarkOut}
-                  aria-label="Mark Out (O)"
+                  aria-label={`Mark Out (${shortcutLabel(hotkeys.MARK_OUT)})`}
                 >
                   <ArrowRightToLine className="w-3 h-3" />
                 </Button>
               </TooltipTrigger>
-              <TooltipContent side="top">Mark Out (O)</TooltipContent>
+              <TooltipContent side="top">
+                Mark Out ({shortcutLabel(hotkeys.MARK_OUT)})
+              </TooltipContent>
             </Tooltip>
             <Tooltip>
               <TooltipTrigger asChild>
@@ -1323,12 +1338,14 @@ function SourcePlaybackControls({
                     height: EDITOR_LAYOUT_CSS_VALUES.toolbarButtonSize,
                   }}
                   onClick={handleClearIO}
-                  aria-label="Clear In/Out (Alt+X)"
+                  aria-label={`Clear In/Out (${shortcutLabel(hotkeys.CLEAR_IN_OUT)})`}
                 >
                   <XCircle className="w-3 h-3" />
                 </Button>
               </TooltipTrigger>
-              <TooltipContent side="top">Clear In/Out (Alt+X)</TooltipContent>
+              <TooltipContent side="top">
+                Clear In/Out ({shortcutLabel(hotkeys.CLEAR_IN_OUT)})
+              </TooltipContent>
             </Tooltip>
           </div>
         )}
@@ -1371,12 +1388,14 @@ function SourcePlaybackControls({
                   height: EDITOR_LAYOUT_CSS_VALUES.toolbarButtonSize,
                 }}
                 onClick={handleGoToStart}
-                aria-label="Go to start (Home)"
+                aria-label={`Go to start (${shortcutLabel(hotkeys.GO_TO_START)})`}
               >
                 <SkipBack className="w-3.5 h-3.5" />
               </Button>
             </TooltipTrigger>
-            <TooltipContent side="top">Go to start (Home)</TooltipContent>
+            <TooltipContent side="top">
+              Go to start ({shortcutLabel(hotkeys.GO_TO_START)})
+            </TooltipContent>
           </Tooltip>
           <Tooltip>
             <TooltipTrigger asChild>
@@ -1388,12 +1407,14 @@ function SourcePlaybackControls({
                   height: EDITOR_LAYOUT_CSS_VALUES.toolbarButtonSize,
                 }}
                 onClick={handleStepBack}
-                aria-label="Previous frame (Left Arrow)"
+                aria-label={`Previous frame (${shortcutLabel(hotkeys.PREVIOUS_FRAME)})`}
               >
                 <ChevronLeft className="w-3.5 h-3.5" />
               </Button>
             </TooltipTrigger>
-            <TooltipContent side="top">Previous frame (Left Arrow)</TooltipContent>
+            <TooltipContent side="top">
+              Previous frame ({shortcutLabel(hotkeys.PREVIOUS_FRAME)})
+            </TooltipContent>
           </Tooltip>
           <Tooltip>
             <TooltipTrigger asChild>
@@ -1404,7 +1425,7 @@ function SourcePlaybackControls({
                   height: EDITOR_LAYOUT_CSS_VALUES.toolbarButtonSize,
                 }}
                 onClick={handleTogglePlayback}
-                aria-label={playing ? 'Pause (Space)' : 'Play (Space)'}
+                aria-label={`${playing ? 'Pause' : 'Play'} (${shortcutLabel(hotkeys.PLAY_PAUSE)})`}
               >
                 {playing ? (
                   <Pause className="w-3.5 h-3.5" />
@@ -1413,7 +1434,9 @@ function SourcePlaybackControls({
                 )}
               </Button>
             </TooltipTrigger>
-            <TooltipContent side="top">{playing ? 'Pause' : 'Play'} (Space)</TooltipContent>
+            <TooltipContent side="top">
+              {playing ? 'Pause' : 'Play'} ({shortcutLabel(hotkeys.PLAY_PAUSE)})
+            </TooltipContent>
           </Tooltip>
           <Tooltip>
             <TooltipTrigger asChild>
@@ -1425,12 +1448,14 @@ function SourcePlaybackControls({
                   height: EDITOR_LAYOUT_CSS_VALUES.toolbarButtonSize,
                 }}
                 onClick={handleStepForward}
-                aria-label="Next frame (Right Arrow)"
+                aria-label={`Next frame (${shortcutLabel(hotkeys.NEXT_FRAME)})`}
               >
                 <ChevronRight className="w-3.5 h-3.5" />
               </Button>
             </TooltipTrigger>
-            <TooltipContent side="top">Next frame (Right Arrow)</TooltipContent>
+            <TooltipContent side="top">
+              Next frame ({shortcutLabel(hotkeys.NEXT_FRAME)})
+            </TooltipContent>
           </Tooltip>
           <Tooltip>
             <TooltipTrigger asChild>
@@ -1442,12 +1467,14 @@ function SourcePlaybackControls({
                   height: EDITOR_LAYOUT_CSS_VALUES.toolbarButtonSize,
                 }}
                 onClick={handleGoToEnd}
-                aria-label="Go to end (End)"
+                aria-label={`Go to end (${shortcutLabel(hotkeys.GO_TO_END)})`}
               >
                 <SkipForward className="w-3.5 h-3.5" />
               </Button>
             </TooltipTrigger>
-            <TooltipContent side="top">Go to end (End)</TooltipContent>
+            <TooltipContent side="top">
+              Go to end ({shortcutLabel(hotkeys.GO_TO_END)})
+            </TooltipContent>
           </Tooltip>
         </div>
 
@@ -1545,12 +1572,14 @@ function SourcePlaybackControls({
                     height: EDITOR_LAYOUT_CSS_VALUES.toolbarButtonSize,
                   }}
                   onClick={() => performInsertEdit()}
-                  aria-label="Insert (,)"
+                  aria-label={`Insert (${shortcutLabel(hotkeys.INSERT_EDIT)})`}
                 >
                   <ArrowDownToLine className="w-3.5 h-3.5" />
                 </Button>
               </TooltipTrigger>
-              <TooltipContent side="top">Insert (,)</TooltipContent>
+              <TooltipContent side="top">
+                Insert ({shortcutLabel(hotkeys.INSERT_EDIT)})
+              </TooltipContent>
             </Tooltip>
             <Tooltip>
               <TooltipTrigger asChild>
@@ -1562,12 +1591,14 @@ function SourcePlaybackControls({
                     height: EDITOR_LAYOUT_CSS_VALUES.toolbarButtonSize,
                   }}
                   onClick={() => performOverwriteEdit()}
-                  aria-label="Overwrite (.)"
+                  aria-label={`Overwrite (${shortcutLabel(hotkeys.OVERWRITE_EDIT)})`}
                 >
                   <Replace className="w-3.5 h-3.5" />
                 </Button>
               </TooltipTrigger>
-              <TooltipContent side="top">Overwrite (.)</TooltipContent>
+              <TooltipContent side="top">
+                Overwrite ({shortcutLabel(hotkeys.OVERWRITE_EDIT)})
+              </TooltipContent>
             </Tooltip>
           </div>
         ) : (

@@ -2,7 +2,7 @@
  * Clipboard shortcuts: Ctrl+C (copy), Ctrl+X (cut), Ctrl+V (paste).
  */
 
-import { useHotkeys } from 'react-hotkeys-hook'
+import { useCommandHotkey } from '@/hooks/use-hotkey-registration'
 import { toast } from 'sonner'
 import { usePlaybackStore } from '@/shared/state/playback'
 import { useTimelineStore } from '../../stores/timeline-store'
@@ -15,7 +15,6 @@ import { useKeyframeSelectionStore } from '../../stores/keyframe-selection-store
 import { HOTKEY_OPTIONS } from '@/config/hotkeys'
 import type { Transition } from '@/types/transition'
 import type { TimelineItem } from '@/types/timeline'
-import { useResolvedHotkeys } from '@/features/timeline/deps/settings'
 import {
   isCompositionWrapperItem,
   wouldCreateCompositionCycle,
@@ -64,7 +63,6 @@ function revealPastedItems(itemIds: readonly string[]): void {
 }
 
 export function useClipboardShortcuts() {
-  const hotkeys = useResolvedHotkeys()
   const selectedItemIds = useSelectionStore((s) => s.selectedItemIds)
   const selectedTransitionId = useSelectionStore((s) => s.selectedTransitionId)
   const selectedKeyframes = useKeyframeSelectionStore((s) => s.selectedKeyframes)
@@ -87,8 +85,8 @@ export function useClipboardShortcuts() {
   }
 
   // Clipboard: Ctrl+C - Copy selected transition properties or timeline items
-  useHotkeys(
-    hotkeys.COPY,
+  useCommandHotkey(
+    'COPY',
     (event) => {
       // Transcript editor copies the selected words instead of the clip.
       if (handleTranscriptClipboardCopy(false)) {
@@ -134,8 +132,8 @@ export function useClipboardShortcuts() {
   )
 
   // Clipboard: Ctrl+X - Cut selected items immediately
-  useHotkeys(
-    hotkeys.CUT,
+  useCommandHotkey(
+    'CUT',
     (event) => {
       // Transcript editor cuts the selected words instead of the clip.
       if (handleTranscriptClipboardCopy(true)) {
@@ -161,8 +159,8 @@ export function useClipboardShortcuts() {
   )
 
   // Clipboard: Ctrl+V - Paste transition properties or timeline items
-  useHotkeys(
-    hotkeys.PASTE,
+  useCommandHotkey(
+    'PASTE',
     (event) => {
       if (selectedTransitionId && transitionClipboard) {
         event.preventDefault()

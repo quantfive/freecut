@@ -12,7 +12,7 @@ import { DEFAULT_EDITOR_DENSITY_PRESET, normalizeEditorDensityPreset } from '@/c
 import {
   HOTKEYS,
   normalizeHotkeyBinding,
-  sanitizeHotkeyOverrides,
+  resolveHotkeyConfiguration,
   type HotkeyKey,
   type HotkeyOverrideMap,
 } from '@/config/hotkeys'
@@ -219,44 +219,44 @@ export const useSettingsStore = create<SettingsStore>()(
         set((state) => {
           const normalizedBinding = normalizeHotkeyBinding(binding)
           if (!normalizedBinding || normalizedBinding === HOTKEYS[key]) {
-            if (!(key in state.hotkeyOverrides)) {
-              return state
-            }
-
             const remainingOverrides = { ...state.hotkeyOverrides }
             delete remainingOverrides[key]
-            return { hotkeyOverrides: remainingOverrides }
+            const resolved = resolveHotkeyConfiguration(remainingOverrides).overrides
+            return areHotkeyOverridesEqual(state.hotkeyOverrides, resolved)
+              ? state
+              : { hotkeyOverrides: resolved }
           }
 
-          if (state.hotkeyOverrides[key] === normalizedBinding) {
+          const resolution = resolveHotkeyConfiguration({
+            ...state.hotkeyOverrides,
+            [key]: normalizedBinding,
+          })
+          if (resolution.warnings.length > 0) {
+            return state
+          }
+          const nextOverrides = resolution.overrides
+
+          if (areHotkeyOverridesEqual(state.hotkeyOverrides, nextOverrides)) {
             return state
           }
 
-          return {
-            hotkeyOverrides: {
-              ...state.hotkeyOverrides,
-              [key]: normalizedBinding,
-            },
-          }
+          return { hotkeyOverrides: nextOverrides }
         }),
 
       unbindHotkeyBinding: (key) =>
         set((state) => {
-          if (state.hotkeyOverrides[key] === '') {
-            return state
-          }
-
-          return {
-            hotkeyOverrides: {
-              ...state.hotkeyOverrides,
-              [key]: '',
-            },
-          }
+          const resolved = resolveHotkeyConfiguration({
+            ...state.hotkeyOverrides,
+            [key]: '',
+          }).overrides
+          return areHotkeyOverridesEqual(state.hotkeyOverrides, resolved)
+            ? state
+            : { hotkeyOverrides: resolved }
         }),
 
       replaceHotkeyOverrides: (overrides) =>
         set((state) => {
-          const normalizedOverrides = sanitizeHotkeyOverrides(overrides)
+          const normalizedOverrides = resolveHotkeyConfiguration(overrides).overrides
 
           if (areHotkeyOverridesEqual(state.hotkeyOverrides, normalizedOverrides)) {
             return state
@@ -267,13 +267,12 @@ export const useSettingsStore = create<SettingsStore>()(
 
       resetHotkeyBinding: (key) =>
         set((state) => {
-          if (!(key in state.hotkeyOverrides)) {
-            return state
-          }
-
           const remainingOverrides = { ...state.hotkeyOverrides }
           delete remainingOverrides[key]
-          return { hotkeyOverrides: remainingOverrides }
+          const resolved = resolveHotkeyConfiguration(remainingOverrides).overrides
+          return areHotkeyOverridesEqual(state.hotkeyOverrides, resolved)
+            ? state
+            : { hotkeyOverrides: resolved }
         }),
 
       resetHotkeys: () =>
@@ -318,7 +317,7 @@ export const useSettingsStore = create<SettingsStore>()(
           ...currentState,
           ...typedState,
           defaultWhisperModel: normalizeSelectableWhisperModel(typedState.defaultWhisperModel),
-          hotkeyOverrides: sanitizeHotkeyOverrides(typedState.hotkeyOverrides),
+          hotkeyOverrides: resolveHotkeyConfiguration(typedState.hotkeyOverrides).overrides,
           editorDensity: normalizeEditorDensityPreset(typedState.editorDensity),
           captioningIntervalUnit,
           captioningIntervalValue: clampCaptioningIntervalValue(

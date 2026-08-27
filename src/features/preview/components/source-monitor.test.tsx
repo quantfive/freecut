@@ -63,6 +63,30 @@ const clockState = vi.hoisted(() => ({
   playbackRate: 1,
 }))
 
+const resolvedHotkeysState = vi.hoisted(() => ({
+  hotkeys: {
+    MARK_IN: 'i',
+    MARK_OUT: 'o',
+    CLEAR_IN_OUT: 'alt+x',
+    GO_TO_START: 'home',
+    PREVIOUS_FRAME: 'left',
+    PLAY_PAUSE: 'space',
+    NEXT_FRAME: 'right',
+    GO_TO_END: 'end',
+    INSERT_EDIT: 'comma',
+    OVERWRITE_EDIT: 'period',
+  },
+}))
+
+const runtimeHotkeysState = vi.hoisted(() => ({
+  hotkeys: { ...resolvedHotkeysState.hotkeys },
+}))
+
+vi.mock('@/hooks/use-runtime-hotkey-binding', () => ({
+  useRuntimeHotkeyBinding: (command: keyof typeof runtimeHotkeysState.hotkeys) =>
+    runtimeHotkeysState.hotkeys[command] ?? '',
+}))
+
 vi.mock('@/features/preview/deps/player-context', () => ({
   PlayerEmitterProvider: ({ children }: { children: ReactNode }) => <>{children}</>,
   ClockBridgeProvider: ({ children }: { children: ReactNode }) => <>{children}</>,
@@ -133,7 +157,11 @@ vi.mock('@/features/preview/deps/settings', () => {
     { getState: () => settingsState },
   )
 
-  return { useSettingsStore }
+  return {
+    useSettingsStore,
+    useResolvedHotkeys: () => resolvedHotkeysState.hotkeys,
+    useRuntimeHotkeys: () => runtimeHotkeysState.hotkeys,
+  }
 })
 
 vi.mock('@/shared/state/editor', () => {
@@ -195,6 +223,99 @@ describe('SourceMonitor current media ownership', () => {
     editorStoreState.sourcePreviewMediaId = 'media-1'
     clockState.currentFrame = 0
     clockState.isPlaying = false
+    resolvedHotkeysState.hotkeys = {
+      MARK_IN: 'i',
+      MARK_OUT: 'o',
+      CLEAR_IN_OUT: 'alt+x',
+      GO_TO_START: 'home',
+      PREVIOUS_FRAME: 'left',
+      PLAY_PAUSE: 'space',
+      NEXT_FRAME: 'right',
+      GO_TO_END: 'end',
+      INSERT_EDIT: 'comma',
+      OVERWRITE_EDIT: 'period',
+    }
+    runtimeHotkeysState.hotkeys = { ...resolvedHotkeysState.hotkeys }
+  })
+
+  it('updates visible shortcut labels after remap and reset', async () => {
+    const rendered = render(<SourceMonitor mediaId="media-1" />)
+
+    await waitFor(() => expect(rendered.getByLabelText('Mark In (I)')).toBeInTheDocument())
+
+    resolvedHotkeysState.hotkeys = {
+      ...resolvedHotkeysState.hotkeys,
+      MARK_IN: 'shift+f',
+    }
+    runtimeHotkeysState.hotkeys = { ...resolvedHotkeysState.hotkeys }
+    rendered.rerender(<SourceMonitor key="remapped" mediaId="media-1" />)
+    expect(rendered.getByLabelText('Mark In (Shift + F)')).toBeInTheDocument()
+
+    resolvedHotkeysState.hotkeys = {
+      ...resolvedHotkeysState.hotkeys,
+      MARK_IN: 'i',
+    }
+    rendered.rerender(<SourceMonitor key="reset" mediaId="media-1" />)
+    expect(rendered.getByLabelText('Mark In (I)')).toBeInTheDocument()
+  })
+
+  it('keeps the raw local label while a losing runtime binding is disabled', async () => {
+    resolvedHotkeysState.hotkeys = {
+      ...resolvedHotkeysState.hotkeys,
+      MARK_IN: 'meta+f10',
+    }
+    runtimeHotkeysState.hotkeys = {
+      ...resolvedHotkeysState.hotkeys,
+      MARK_IN: '',
+    }
+    sourcePlayerStoreState.currentSourceFrame = 42
+    const rendered = render(<SourceMonitor mediaId="media-1" />)
+    await waitFor(() => expect(rendered.getByLabelText(/Mark In \(.+f10\)/i)).toBeInTheDocument())
+
+    fireEvent.keyDown(rendered.container.firstElementChild!, {
+      key: 'F10',
+      code: 'F10',
+      metaKey: true,
+    })
+
+    expect(sourcePlayerStoreState.setInPoint).not.toHaveBeenCalled()
+    expect(resolvedHotkeysState.hotkeys.MARK_IN).toBe('meta+f10')
+  })
+
+  it('uses the same reactive binding for local source-monitor actions', async () => {
+    resolvedHotkeysState.hotkeys = {
+      ...resolvedHotkeysState.hotkeys,
+      MARK_IN: 'shift+f',
+    }
+    runtimeHotkeysState.hotkeys = { ...resolvedHotkeysState.hotkeys }
+    sourcePlayerStoreState.currentSourceFrame = 42
+    const rendered = render(<SourceMonitor mediaId="media-1" />)
+    await waitFor(() => expect(rendered.getByLabelText('Mark In (Shift + F)')).toBeInTheDocument())
+    const monitor = rendered.container.firstElementChild!
+
+    fireEvent.keyDown(monitor, { key: 'i', code: 'KeyI' })
+    expect(sourcePlayerStoreState.setInPoint).not.toHaveBeenCalled()
+
+    fireEvent.keyDown(monitor, { key: 'F', code: 'KeyF', shiftKey: true })
+    expect(sourcePlayerStoreState.setInPoint).toHaveBeenCalledWith(42)
+  })
+
+  it('uses macOS modifier names in visible shortcut labels', async () => {
+    const originalPlatform = navigator.platform
+    Object.defineProperty(navigator, 'platform', { configurable: true, value: 'MacIntel' })
+    resolvedHotkeysState.hotkeys = {
+      ...resolvedHotkeysState.hotkeys,
+      CLEAR_IN_OUT: 'alt+x',
+    }
+
+    try {
+      const rendered = render(<SourceMonitor mediaId="media-1" />)
+      await waitFor(() =>
+        expect(rendered.getByLabelText('Clear In/Out (Option + X)')).toBeInTheDocument(),
+      )
+    } finally {
+      Object.defineProperty(navigator, 'platform', { configurable: true, value: originalPlatform })
+    }
   })
 
   it('does not release the current media during the initial Strict Mode remount', async () => {
