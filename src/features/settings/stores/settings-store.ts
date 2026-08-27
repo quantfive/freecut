@@ -13,7 +13,6 @@ import {
   HOTKEYS,
   normalizeHotkeyBinding,
   resolveHotkeyConfiguration,
-  sanitizeHotkeyOverrides,
   type HotkeyKey,
   type HotkeyOverrideMap,
 } from '@/config/hotkeys'
@@ -254,7 +253,7 @@ export const useSettingsStore = create<SettingsStore>()(
 
       replaceHotkeyOverrides: (overrides) =>
         set((state) => {
-          const normalizedOverrides = sanitizeHotkeyOverrides(overrides)
+          const normalizedOverrides = resolveHotkeyConfiguration(overrides).overrides
 
           if (areHotkeyOverridesEqual(state.hotkeyOverrides, normalizedOverrides)) {
             return state
@@ -315,7 +314,7 @@ export const useSettingsStore = create<SettingsStore>()(
           ...currentState,
           ...typedState,
           defaultWhisperModel: normalizeSelectableWhisperModel(typedState.defaultWhisperModel),
-          hotkeyOverrides: sanitizeHotkeyOverrides(typedState.hotkeyOverrides),
+          hotkeyOverrides: resolveHotkeyConfiguration(typedState.hotkeyOverrides).overrides,
           editorDensity: normalizeEditorDensityPreset(typedState.editorDensity),
           captioningIntervalUnit,
           captioningIntervalValue: clampCaptioningIntervalValue(

@@ -421,11 +421,10 @@ function getHotkeyPlatform(platformValue?: string): HotkeyPlatform {
 }
 
 export function resolveHotkeyConfiguration(overrides: unknown = {}): HotkeyResolution {
-  const requested = normalizeHotkeyOverrides(overrides)
+  const requested = sanitizeHotkeyOverrides(overrides)
   const commandKeys = Object.keys(HOTKEYS) as HotkeyKey[]
   const rejectedOverrides = new Set<HotkeyKey>()
-  let bindings = {} as HotkeyBindingMap
-  const effectiveOverrides: HotkeyOverrideMap = {}
+  let bindings = createResolvedHotkeyBindings(commandKeys, requested, rejectedOverrides)
   const warnings: HotkeyConflictWarning[] = []
 
   // Resolve the complete candidate map before assigning priority. This accepts
@@ -433,52 +432,62 @@ export function resolveHotkeyConfiguration(overrides: unknown = {}): HotkeyResol
   // the participating custom binding(s) back to their unique canonical defaults.
   // Re-run because one fallback can expose a collision with another custom value.
   while (true) {
-    bindings = Object.fromEntries(
-      commandKeys.map((key) => [
-        key,
-        !rejectedOverrides.has(key) && key in requested ? requested[key]! : HOTKEYS[key],
-      ]),
-    ) as HotkeyBindingMap
-
-    const conflicts = Object.values(getHotkeyConflictMap(bindings)).filter(
-      (commands) => commands.length > 1,
-    )
+    const conflicts = getDuplicateHotkeyCommandGroups(bindings)
     if (conflicts.length === 0) break
 
-    let rejectedInPass = false
-    for (const commands of conflicts) {
-      for (const key of commands) {
-        if (rejectedOverrides.has(key) || !(key in requested)) continue
-
-        const requestedBinding = requested[key]!
-        if (requestedBinding === HOTKEYS[key]) continue
-
-        const conflictingCommand = commands.find((command) => command !== key)!
-        rejectedOverrides.add(key)
-        warnings.push({
-          code: 'duplicate_binding',
-          command: key,
-          binding: normalizeHotkeyBinding(requestedBinding),
-          resolution: 'fallback',
-          conflictingCommand,
-        })
-        rejectedInPass = true
-      }
-    }
-
-    if (!rejectedInPass) {
+    const passWarnings = createConflictFallbackWarnings(conflicts, requested, rejectedOverrides)
+    if (passWarnings.length === 0) {
       throw new Error('Default keyboard shortcut bindings must be unique')
     }
+    for (const warning of passWarnings) rejectedOverrides.add(warning.command)
+    warnings.push(...passWarnings)
+    bindings = createResolvedHotkeyBindings(commandKeys, requested, rejectedOverrides)
   }
 
-  for (const key of commandKeys) {
-    const binding = bindings[key]
-    if (binding !== HOTKEYS[key]) {
-      effectiveOverrides[key] = binding
-    }
-  }
+  return { bindings, overrides: getEffectiveHotkeyOverrides(bindings), warnings }
+}
 
-  return { bindings, overrides: effectiveOverrides, warnings }
+function createResolvedHotkeyBindings(
+  commandKeys: HotkeyKey[],
+  requested: HotkeyOverrideMap,
+  rejected: Set<HotkeyKey>,
+): HotkeyBindingMap {
+  return Object.fromEntries(
+    commandKeys.map((key) => [
+      key,
+      !rejected.has(key) && key in requested ? requested[key]! : HOTKEYS[key],
+    ]),
+  ) as HotkeyBindingMap
+}
+
+function getDuplicateHotkeyCommandGroups(bindings: HotkeyBindingMap): HotkeyKey[][] {
+  return Object.values(getHotkeyConflictMap(bindings)).filter((commands) => commands.length > 1)
+}
+
+function createConflictFallbackWarnings(
+  conflicts: HotkeyKey[][],
+  requested: HotkeyOverrideMap,
+  rejected: Set<HotkeyKey>,
+): HotkeyConflictWarning[] {
+  return conflicts.flatMap((commands) =>
+    commands
+      .filter((key) => !rejected.has(key) && key in requested && requested[key] !== HOTKEYS[key])
+      .map((key) => ({
+        code: 'duplicate_binding' as const,
+        command: key,
+        binding: normalizeHotkeyBinding(requested[key]!),
+        resolution: 'fallback' as const,
+        conflictingCommand: commands.find((command) => command !== key)!,
+      })),
+  )
+}
+
+function getEffectiveHotkeyOverrides(bindings: HotkeyBindingMap): HotkeyOverrideMap {
+  return Object.fromEntries(
+    (Object.keys(HOTKEYS) as HotkeyKey[])
+      .filter((key) => bindings[key] !== HOTKEYS[key])
+      .map((key) => [key, bindings[key]]),
+  )
 }
 
 export function resolveHotkeys(overrides: HotkeyOverrideMap = {}): HotkeyBindingMap {
@@ -604,10 +613,6 @@ export function normalizeHotkeyBinding(binding: string): string {
 }
 
 export function sanitizeHotkeyOverrides(overrides: unknown): HotkeyOverrideMap {
-  return resolveHotkeyConfiguration(overrides).overrides
-}
-
-function normalizeHotkeyOverrides(overrides: unknown): HotkeyOverrideMap {
   if (!overrides || typeof overrides !== 'object') {
     return {}
   }
@@ -779,7 +784,7 @@ export function findHotkeyConflicts(
 export function createHotkeyExportDocument(
   overrides: HotkeyOverrideMap = {},
 ): HotkeyExportDocument {
-  const normalizedOverrides = sanitizeHotkeyOverrides(overrides)
+  const normalizedOverrides = resolveHotkeyConfiguration(overrides).overrides
   const bindings = resolveHotkeys(normalizedOverrides)
   const commandKeys = Object.keys(HOTKEYS) as HotkeyKey[]
 
