@@ -4,6 +4,8 @@ import { useSettingsStore } from '@/features/timeline/deps/settings'
 import { usePlaybackStore } from '@/shared/state/playback'
 import { useSourcePlayerStore } from '@/shared/state/source-player'
 import type { SourcePlayerMethods } from '@/shared/state/source-player/types'
+import type { VideoItem } from '@/types/timeline'
+import { useItemsStore } from '../../stores/items-store'
 import { usePlaybackShortcuts } from './use-playback-shortcuts'
 
 function PlaybackShortcutHarness() {
@@ -11,7 +13,7 @@ function PlaybackShortcutHarness() {
   return <input aria-label="Editable title" />
 }
 
-function sourcePlayerMethods(): SourcePlayerMethods {
+function sourcePlayerMethods(durationInFrames = 300): SourcePlayerMethods {
   return {
     toggle: vi.fn(),
     pause: vi.fn(),
@@ -21,7 +23,20 @@ function sourcePlayerMethods(): SourcePlayerMethods {
     seek: vi.fn(),
     frameBack: vi.fn(),
     frameForward: vi.fn(),
-    getDurationInFrames: vi.fn(() => 300),
+    getDurationInFrames: vi.fn(() => durationInFrames),
+  }
+}
+
+function videoItem(overrides: Partial<VideoItem> = {}): VideoItem {
+  return {
+    id: 'clip-1',
+    type: 'video',
+    trackId: 'track-1',
+    from: 10,
+    durationInFrames: 5,
+    label: 'Clip',
+    src: 'clip.mp4',
+    ...overrides,
   }
 }
 
@@ -40,6 +55,9 @@ describe('usePlaybackShortcuts transport routing', () => {
       hoveredPanel: null,
       playerMethods: null,
     })
+    useItemsStore
+      .getState()
+      .setItems([videoItem(), videoItem({ id: 'clip-2', from: 0, durationInFrames: 7 })])
   })
 
   it('routes J, K, and L to reverse, pause, and forward program transport', () => {
@@ -131,5 +149,37 @@ describe('usePlaybackShortcuts transport routing', () => {
       playbackRate: -1,
       transportMode: 'shuttle',
     })
+  })
+
+  it('clamps timeline ArrowRight to the final valid frame', () => {
+    usePlaybackStore.setState({ currentFrame: 13 })
+    render(<PlaybackShortcutHarness />)
+
+    fireEvent.keyDown(document, { key: 'ArrowRight', code: 'ArrowRight' })
+    expect(usePlaybackStore.getState().currentFrame).toBe(14)
+
+    fireEvent.keyDown(document, { key: 'ArrowRight', code: 'ArrowRight' })
+    expect(usePlaybackStore.getState().currentFrame).toBe(14)
+  })
+
+  it('seeks timeline End to the maximum inclusive item frame, or zero when empty', () => {
+    render(<PlaybackShortcutHarness />)
+
+    fireEvent.keyDown(document, { key: 'End', code: 'End' })
+    expect(usePlaybackStore.getState().currentFrame).toBe(14)
+
+    useItemsStore.getState().setItems([])
+    fireEvent.keyDown(document, { key: 'End', code: 'End' })
+    expect(usePlaybackStore.getState().currentFrame).toBe(0)
+  })
+
+  it('clamps source-player End to a nonnegative frame', () => {
+    const playerMethods = sourcePlayerMethods(0)
+    useSourcePlayerStore.setState({ hoveredPanel: 'source', playerMethods })
+    render(<PlaybackShortcutHarness />)
+
+    fireEvent.keyDown(document, { key: 'End', code: 'End' })
+
+    expect(playerMethods.seek).toHaveBeenCalledWith(0)
   })
 })

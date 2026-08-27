@@ -350,9 +350,13 @@ describe('TimelineHeader zoom slider', () => {
         name: 'Trim Edit Tool (W) · Ripple: Shift-drag · Roll: Alt-drag',
       }),
     ).toHaveAttribute('data-tooltip', 'Trim Edit Tool (W) · Ripple: Shift-drag · Roll: Alt-drag')
-    expect(
-      screen.getByRole('button', { name: 'Razor Tool (E) · Split: Shift + X' }),
-    ).toHaveAttribute('data-tooltip', 'Razor Tool (E) · Split: Shift + X')
+    const razor = screen.getByRole('button', {
+      name: /Razor Tool \(E\).*Shift \+ X.*Alt \+ C/,
+    })
+    expect(razor).toHaveAttribute(
+      'data-tooltip',
+      expect.stringMatching(/Razor Tool \(E\).*Shift \+ X.*Alt \+ C/),
+    )
     expect(screen.getByRole('button', { name: 'Rate Stretch Tool (D)' })).toHaveAttribute(
       'data-tooltip',
       'Rate Stretch Tool (D)',

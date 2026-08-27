@@ -507,6 +507,12 @@ export const TimelineHeader = memo(function TimelineHeader({
       t('timeline.header.splitAtPlayheadHint', { shortcut: splitAtPlayheadShortcut }),
     )
   }
+  const splitAtPlayheadAlternateShortcut = formatHotkeyBinding(hotkeys.SPLIT_AT_PLAYHEAD_ALT)
+  if (splitAtPlayheadAlternateShortcut) {
+    razorToolTooltipParts.push(
+      `${t('projects.settings.hotkeys.items.splitAtPlayhead')} (${splitAtPlayheadAlternateShortcut})`,
+    )
+  }
   const razorToolTooltip = razorToolTooltipParts.join(' · ')
   const rateStretchToolTooltip = labelWithShortcut(
     t('timeline.header.rateStretchToolTooltip'),
