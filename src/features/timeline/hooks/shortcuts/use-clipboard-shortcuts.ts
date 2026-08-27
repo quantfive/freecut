@@ -14,13 +14,14 @@ import { useCompositionsStore } from '../../stores/compositions-store'
 import { useKeyframeSelectionStore } from '../../stores/keyframe-selection-store'
 import { HOTKEY_OPTIONS } from '@/config/hotkeys'
 import type { Transition } from '@/types/transition'
-import type { TimelineItem } from '@/types/timeline'
+import type { TimelineItem, TimelineTrack } from '@/types/timeline'
 import { useResolvedHotkeys } from '@/features/timeline/deps/settings'
 import {
   isCompositionWrapperItem,
   wouldCreateCompositionCycle,
 } from '../../utils/composition-graph'
 import { handleTranscriptClipboardCopy } from '../../utils/transcript-copy-bridge'
+import { getTrackKind } from '../../utils/classic-tracks'
 
 interface PastePlacementPlan {
   itemData: Omit<TimelineItem, 'id'>
@@ -57,6 +58,66 @@ function hasInternalPlacementOverlap(plans: PastePlacementPlan[]): boolean {
       ),
     ),
   )
+}
+
+type PasteTrackKind = 'video' | 'audio'
+
+function getPasteTrackKind(item: Omit<TimelineItem, 'id'>): PasteTrackKind {
+  return item.type === 'audio' ? 'audio' : 'video'
+}
+
+function isCompatiblePasteTrack(track: TimelineTrack, kind: PasteTrackKind): boolean {
+  const trackKind = getTrackKind(track)
+  return kind === 'audio' ? trackKind === 'audio' : trackKind !== 'audio'
+}
+
+function getPasteDestinationTrackIds(tracks: TimelineTrack[], kind: PasteTrackKind): string[] {
+  return tracks
+    .filter((track) => !track.isGroup && isCompatiblePasteTrack(track, kind))
+    .sort((left, right) => left.order - right.order)
+    .map((track) => track.id)
+}
+
+function buildPasteTrackPlan(
+  pasteItems: Array<Omit<TimelineItem, 'id'>>,
+  tracks: TimelineTrack[],
+  activeTrackId: string | null,
+): Map<number, string> {
+  const sourceTrackIndexes = new Map<string, number>()
+  const nextSourceIndex: Record<PasteTrackKind, number> = { video: 0, audio: 0 }
+  const destinationTrackIds: Record<PasteTrackKind, string[]> = {
+    video: getPasteDestinationTrackIds(tracks, 'video'),
+    audio: getPasteDestinationTrackIds(tracks, 'audio'),
+  }
+  const preserveSourceTracks = new Set(pasteItems.map((item) => item.trackId)).size > 1
+  const plan = new Map<number, string>()
+
+  for (const [sourceIndex, itemData] of pasteItems.entries()) {
+    const kind = getPasteTrackKind(itemData)
+    const sourceTrackId = itemData.trackId
+    let sourceLane = sourceTrackIndexes.get(sourceTrackId)
+    if (sourceLane === undefined) {
+      sourceLane = nextSourceIndex[kind]++
+      sourceTrackIndexes.set(sourceTrackId, sourceLane)
+    }
+
+    const exactTrack = tracks.find(
+      (track) => track.id === sourceTrackId && isCompatiblePasteTrack(track, kind),
+    )
+    const activeTrack = tracks.find(
+      (track) => track.id === activeTrackId && isCompatiblePasteTrack(track, kind),
+    )
+    const candidates = destinationTrackIds[kind]
+    const targetTrackId = preserveSourceTracks
+      ? (exactTrack?.id ?? candidates[sourceLane] ?? candidates[0] ?? activeTrack?.id)
+      : (activeTrack?.id ?? exactTrack?.id ?? candidates[sourceLane] ?? candidates[0])
+
+    if (targetTrackId) {
+      plan.set(sourceIndex, targetTrackId)
+    }
+  }
+
+  return plan
 }
 
 function findSharedPlacementShift(
@@ -266,27 +327,21 @@ export function useClipboardShortcuts() {
               )
         if (pasteItems.length === 0) return
 
-        // When the clipboard spans more than one source track (e.g. a linked
-        // video+audio pair copied from the transcript), preserve each item's own
-        // track so the pair lands on video/audio tracks separately. A
-        // single-track copy still pastes onto the active track as before.
-        const preserveSourceTracks = new Set(pasteItems.map((item) => item.trackId)).size > 1
-
-        const placementPlans = pasteItems.map((itemData, sourceIndex): PastePlacementPlan => {
-          let targetTrackId = preserveSourceTracks ? itemData.trackId : activeTrackId
-          if (!targetTrackId || !tracks.some((t) => t.id === targetTrackId)) {
-            targetTrackId = itemData.trackId
-          }
-          const trackExists = tracks.some((t) => t.id === targetTrackId)
-          if (!trackExists && tracks.length > 0) {
-            targetTrackId = tracks[0]!.id
-          }
-          return {
-            itemData,
-            targetTrackId,
-            desiredFrom: currentFrame + itemData.from,
-            sourceIndex,
-          }
+        // Resolve every source lane by media section/kind. Exact IDs win when
+        // they survive in this sequence; otherwise the source lane ordinal is
+        // mapped to the corresponding destination lane. This keeps linked A/V
+        // members in separate sections even when both source IDs are absent.
+        const trackPlan = buildPasteTrackPlan(pasteItems, tracks, activeTrackId)
+        const placementPlans = pasteItems.flatMap((itemData, sourceIndex) => {
+          const targetTrackId = trackPlan.get(sourceIndex)
+          return targetTrackId
+            ? [{
+                itemData,
+                targetTrackId,
+                desiredFrom: currentFrame + itemData.from,
+                sourceIndex,
+              }]
+            : []
         })
 
         // Keep an ordinary multi-item paste as one rigid block. If invalid or
