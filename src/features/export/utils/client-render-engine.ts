@@ -74,7 +74,10 @@ import {
   type SubComposition,
 } from '@/features/export/deps/timeline-compositions'
 import { doesMaskAffectTrack } from '@/shared/utils/mask-scope'
-import type { FrameInvalidationRequest } from '@/shared/utils/frame-invalidation'
+import {
+  normalizeFrameRanges,
+  type FrameInvalidationRequest,
+} from '@/shared/utils/frame-invalidation'
 import { collectReachableCompositionIdsFromTracks } from '@/features/export/deps/timeline-compositions'
 import { appendVirtualTranscriptCaptionTrack } from '@/features/export/deps/caption-items'
 
@@ -105,6 +108,10 @@ import {
 } from './render-path-optimizer'
 import { ReverseVideoFrameCache } from './reverse-video-frame-cache'
 import { resolveReverseConformedVideoItem } from '@/shared/utils/reverse-conform-item'
+import {
+  getMediaSourceBindingFingerprint,
+  getTimelineSourceMappingFingerprint,
+} from '@/shared/utils/timeline-source-mapping'
 import { resolveCompositionSourceFrame } from './render-span'
 import {
   itemHasEnabledGpuEffect,
@@ -868,6 +875,8 @@ export async function createCompositionRenderer(
   const videoExtractors = new Map<string, VideoFrameSource>()
   const videoSourceByItemId = new Map<string, string>()
   const videoMediaIdByItemId = new Map<string, string | undefined>()
+  const videoMediaBindingByItemId = new Map<string, string>()
+  const videoSourceMappingByItemId = new Map<string, string>()
   const videoRegistrationGenerationByItem = new Map<string, number>()
   const videoExtractorGenerationByItem = new Map<string, number>()
   const videoItemIdsBySource = new Map<string, Set<string>>()
@@ -888,7 +897,7 @@ export async function createCompositionRenderer(
     const prevSrc = videoSourceByItemId.get(itemId)
     if (prevSrc && prevSrc !== src) {
       bumpVideoRegistrationGeneration(itemId)
-      scrubbingCache?.invalidateVideoFrames()
+      scrubbingCache?.invalidateVideoFrames(itemId)
       const prevSet = videoItemIdsBySource.get(prevSrc)
       prevSet?.delete(itemId)
       if (prevSet && prevSet.size === 0) {
@@ -938,6 +947,8 @@ export async function createCompositionRenderer(
         const videoItem = item as VideoItem
         videoItemsById.set(item.id, videoItem)
         videoMediaIdByItemId.set(item.id, videoItem.mediaId)
+        videoMediaBindingByItemId.set(item.id, getMediaSourceBindingFingerprint(videoItem))
+        videoSourceMappingByItemId.set(item.id, getTimelineSourceMappingFingerprint(videoItem, fps))
         videoRegistrationGenerationByItem.set(item.id, 0)
         if (videoItem.src) {
           getLog().debug('Registering shared video extractor', {
@@ -1195,7 +1206,7 @@ export async function createCompositionRenderer(
 
   function resetVideoItemRegistrationForMediaChange(itemId: string): void {
     bumpVideoRegistrationGeneration(itemId)
-    scrubbingCache?.invalidateVideoFrames()
+    scrubbingCache?.invalidateVideoFrames(itemId)
     useMediabunny.delete(itemId)
     mediabunnyDisabledItems.delete(itemId)
     mediabunnyFailureCountByItem.delete(itemId)
@@ -1215,31 +1226,93 @@ export async function createCompositionRenderer(
     videoElements.delete(itemId)
   }
 
-  function syncVideoItemRegistration(videoItem: VideoItem): void {
+  function getVideoItemFrameInvalidation(
+    previousItem: VideoItem | undefined,
+    nextItem: VideoItem,
+  ): FrameInvalidationRequest | undefined {
+    const ranges = normalizeFrameRanges(
+      [previousItem, nextItem].flatMap((item) => {
+        if (!item) return []
+        const startFrame = Math.trunc(item.from)
+        const endFrame = Math.trunc(item.from + item.durationInFrames)
+        return Number.isFinite(startFrame) && Number.isFinite(endFrame) && endFrame > startFrame
+          ? [{ startFrame, endFrame }]
+          : []
+      }),
+    )
+    return ranges.length > 0 ? { ranges } : undefined
+  }
+
+  function invalidateVideoItemRenderCaches(
+    previousItem: VideoItem | undefined,
+    nextItem: VideoItem,
+  ): void {
+    const request = getVideoItemFrameInvalidation(previousItem, nextItem)
+    frameSceneRevision += 1
+    frameSceneCache.invalidate(request)
+    scrubbingCache?.invalidate(request)
+    scrubbingCache?.invalidateVideoFrames(nextItem.id)
+  }
+
+  function syncVideoItemIdentity(videoItem: VideoItem): boolean {
+    const previousItem = videoItemsById.get(videoItem.id)
     const hadMediaIdentity = videoMediaIdByItemId.has(videoItem.id)
     const previousMediaId = videoMediaIdByItemId.get(videoItem.id)
     const mediaIdentityChanged = hadMediaIdentity && previousMediaId !== videoItem.mediaId
+    const previousMediaBinding = videoMediaBindingByItemId.get(videoItem.id)
+    const nextMediaBinding = getMediaSourceBindingFingerprint(videoItem)
+    const mediaBindingChanged =
+      previousMediaBinding !== undefined && previousMediaBinding !== nextMediaBinding
+    const previousSourceMapping = videoSourceMappingByItemId.get(videoItem.id)
+    const nextSourceMapping = getTimelineSourceMappingFingerprint(videoItem, fps)
+    const sourceMappingChanged =
+      previousSourceMapping !== undefined && previousSourceMapping !== nextSourceMapping
+
+    if (mediaBindingChanged || sourceMappingChanged) {
+      invalidateVideoItemRenderCaches(previousItem, videoItem)
+    }
+
     videoMediaIdByItemId.set(videoItem.id, videoItem.mediaId)
+    videoMediaBindingByItemId.set(videoItem.id, nextMediaBinding)
+    videoSourceMappingByItemId.set(videoItem.id, nextSourceMapping)
     videoItemsById.set(videoItem.id, videoItem)
 
-    if (mediaIdentityChanged) resetVideoItemRegistrationForMediaChange(videoItem.id)
+    return mediaIdentityChanged
+  }
 
+  function syncVideoItemSource(videoItem: VideoItem): void {
     if (!videoItem.src) return
 
     const prevSrc = videoSourceByItemId.get(videoItem.id)
-    if (prevSrc !== videoItem.src) {
-      // Tier 2 is keyed by item id and source time. An authoritative host
-      // refresh can retain the item id while replacing its media, so frames
-      // decoded from the old source must not survive the rebind.
-      scrubbingCache?.invalidateVideoFrames()
-      useMediabunny.delete(videoItem.id)
-      mediabunnyDisabledItems.delete(videoItem.id)
-      mediabunnyFailureCountByItem.delete(videoItem.id)
-      mediabunnyInitFailureCountByItem.delete(videoItem.id)
-      inFlightInitByItem.delete(videoItem.id)
-      registerVideoItem(videoItem.id, videoItem.src)
-      if (hasDom && !previewStrictDecode) {
-        bindFallbackVideoElement(videoItem.id, videoItem.src)
+    if (prevSrc === videoItem.src) return
+
+    // Tier 2 is keyed by item id and source time. An authoritative host
+    // refresh can retain the item id while replacing its media, so frames
+    // decoded from the old source must not survive the rebind.
+    scrubbingCache?.invalidateVideoFrames(videoItem.id)
+    useMediabunny.delete(videoItem.id)
+    mediabunnyDisabledItems.delete(videoItem.id)
+    mediabunnyFailureCountByItem.delete(videoItem.id)
+    mediabunnyInitFailureCountByItem.delete(videoItem.id)
+    inFlightInitByItem.delete(videoItem.id)
+    registerVideoItem(videoItem.id, videoItem.src)
+    if (hasDom && !previewStrictDecode) {
+      bindFallbackVideoElement(videoItem.id, videoItem.src)
+    }
+  }
+
+  function syncVideoItemRegistration(videoItem: VideoItem): void {
+    const mediaIdentityChanged = syncVideoItemIdentity(videoItem)
+
+    if (mediaIdentityChanged) resetVideoItemRegistrationForMediaChange(videoItem.id)
+    syncVideoItemSource(videoItem)
+  }
+
+  function syncLiveRootVideoRegistrations(): void {
+    if (!getLiveItemSnapshot) return
+    for (const track of tracks) {
+      for (const item of track.items ?? []) {
+        if (item.type === 'video') getCurrentItem(item)
       }
     }
   }
@@ -1510,7 +1583,10 @@ export async function createCompositionRenderer(
 
   const videoItemMatchesCurrentIdentity = (itemId: string, item: VideoItem): boolean => {
     const currentItem = videoItemsById.get(itemId)
-    return !currentItem || (currentItem.mediaId === item.mediaId && currentItem.src === item.src)
+    return (
+      !currentItem ||
+      getMediaSourceBindingFingerprint(currentItem) === getMediaSourceBindingFingerprint(item)
+    )
   }
 
   const hasCurrentVideoExtractor = (itemId: string, generation: number): boolean =>
@@ -2084,9 +2160,17 @@ export async function createCompositionRenderer(
       activePreviewFramePending = false
       activePreviewFallbackUsed = false
       itemRenderContext.previewRootTimelineFrame = frame
+      // A long-lived preview renderer intentionally survives trim/retime edits.
+      // Synchronize those live bindings before consulting timeline-frame caches.
+      syncLiveRootVideoRegistrations()
+      const renderContentRevision = frameSceneRevision
       const isSupersededActivePreviewFrame = () =>
         renderMode === 'preview' &&
         itemRenderContext.isActivePreviewFrameSuperseded?.(frame) === true
+      const isRenderContentStale = () => {
+        syncLiveRootVideoRegistrations()
+        return frameSceneRevision !== renderContentRevision
+      }
       const abortActivePreviewRender = () => {
         if (!lastRenderAborted) {
           recordScrubPerf(frame, 'aborted', scrubPerfStartMs)
@@ -2145,7 +2229,7 @@ export async function createCompositionRenderer(
       // hot path — the await only runs the frame after an override edit.
       if (renderMode === 'preview' && lottieItems.length > 0 && lottieOverridesAreStale()) {
         await ensureLottieOverridesFresh()
-        if (isSupersededActivePreviewFrame()) {
+        if (isSupersededActivePreviewFrame() || isRenderContentStale()) {
           abortActivePreviewRender()
           return
         }
@@ -2435,7 +2519,11 @@ export async function createCompositionRenderer(
           }
         }
 
-        if (isSupersededActivePreviewFrame() || activePreviewFramePending) {
+        if (
+          isSupersededActivePreviewFrame() ||
+          isRenderContentStale() ||
+          activePreviewFramePending
+        ) {
           abortActivePreviewRender()
           return
         }
@@ -2589,7 +2677,11 @@ export async function createCompositionRenderer(
           }
         }
 
-        if (isSupersededActivePreviewFrame() || activePreviewFramePending) {
+        if (
+          isSupersededActivePreviewFrame() ||
+          isRenderContentStale() ||
+          activePreviewFramePending
+        ) {
           for (const result of results) {
             if (!result) continue
             for (const pooledCanvas of result.poolCanvases) {
@@ -2632,6 +2724,12 @@ export async function createCompositionRenderer(
           renderItemWithEffects,
         })
         scrubPerfCompositeEndMs = scrubPerfStartMs >= 0 ? performance.now() : -1
+      }
+
+      if (isRenderContentStale()) {
+        canvasPool.release(contentCanvas)
+        abortActivePreviewRender()
+        return
       }
 
       // Log occlusion culling stats periodically (only in development)
@@ -2932,6 +3030,11 @@ export async function createCompositionRenderer(
       videoSourceByItemId.clear()
       videoItemIdsBySource.clear()
       videoItemsById.clear()
+      videoMediaIdByItemId.clear()
+      videoMediaBindingByItemId.clear()
+      videoSourceMappingByItemId.clear()
+      videoRegistrationGenerationByItem.clear()
+      videoExtractorGenerationByItem.clear()
       useMediabunny.clear()
       mediabunnyFailureCountByItem.clear()
       mediabunnyInitFailureCountByItem.clear()

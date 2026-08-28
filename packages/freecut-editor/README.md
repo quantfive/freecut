@@ -69,6 +69,11 @@ shortcut editor, including J/K/L transport. UI changes call `setSettings`, and
 host or agent changes can flow back through `subscribe`, so embedded shortcut
 configuration never becomes a UI-only setting.
 
+As of 0.3.10, an authoritative snapshot may retain a timeline item ID and media
+binding while changing its source range. The mounted program monitor adopts the
+new source mapping in place and keeps video and audio timing aligned; hosts do
+not need to remount the surface to clear preview state.
+
 This package is built from a specific FreeCut commit. To create the local
 consumer artifact from a clean checkout, run:
 
@@ -126,5 +131,5 @@ Consumers install the exact published version and keep it pinned in their
 lockfile:
 
 ```bash
-npm install @quantfive/freecut-editor-surface@0.3.0
+npm install @quantfive/freecut-editor-surface@0.3.10
 ```

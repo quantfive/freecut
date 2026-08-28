@@ -252,6 +252,15 @@ class VideoFrameCache {
     return total
   }
 
+  delete(itemId: string): void {
+    const entries = this.cache.get(itemId)
+    if (!entries) return
+    for (const entry of entries) {
+      entry.frame.close()
+    }
+    this.cache.delete(itemId)
+  }
+
   clear(): void {
     for (const entries of this.cache.values()) {
       for (const entry of entries) {
@@ -430,6 +439,8 @@ export class ScrubbingCache {
   private ramGeneration = 0
   private disposed = false
   private videoFrameGeneration = 0
+  private videoFrameGenerationCounter = 0
+  private videoFrameGenerationByItem = new Map<string, number>()
   private pendingRamFrames = new Map<number, number>()
   private invalidatedPendingRamFrames = new Set<number>()
 
@@ -539,8 +550,10 @@ export class ScrubbingCache {
   }
 
   /** Generation token used to fence asynchronous decodes across source rebinds. */
-  getVideoFrameGeneration(): number {
-    return this.videoFrameGeneration
+  getVideoFrameGeneration(itemId?: string): number {
+    return itemId === undefined
+      ? this.videoFrameGeneration
+      : (this.videoFrameGenerationByItem.get(itemId) ?? this.videoFrameGeneration)
   }
 
   /** Cache a decoded video frame for a specific item. */
@@ -548,9 +561,9 @@ export class ScrubbingCache {
     itemId: string,
     frame: Tier2VideoFrame,
     sourceTime: number,
-    expectedGeneration = this.videoFrameGeneration,
+    expectedGeneration = this.getVideoFrameGeneration(itemId),
   ): void {
-    if (expectedGeneration !== this.videoFrameGeneration || this.disposed) {
+    if (expectedGeneration !== this.getVideoFrameGeneration(itemId) || this.disposed) {
       frame.close()
       return
     }
@@ -679,9 +692,17 @@ export class ScrubbingCache {
     this.tier3.deleteMatching(shouldDeleteFrame)
   }
 
-  /** Clear Tier 2 (per-video last-frame). Call when timeline items change. */
-  invalidateVideoFrames(): void {
-    this.videoFrameGeneration += 1
+  /** Clear one retained item's decoded frames, or every item after a global rebind. */
+  invalidateVideoFrames(itemId?: string): void {
+    if (itemId !== undefined) {
+      this.videoFrameGenerationCounter += 1
+      this.videoFrameGenerationByItem.set(itemId, this.videoFrameGenerationCounter)
+      this.tier2.delete(itemId)
+      return
+    }
+    this.videoFrameGenerationCounter += 1
+    this.videoFrameGeneration = this.videoFrameGenerationCounter
+    this.videoFrameGenerationByItem.clear()
     this.tier2.clear()
   }
 
@@ -713,6 +734,7 @@ export class ScrubbingCache {
     this.invalidateAllPendingRamFrames()
     this.tier1.clear()
     this.tier2.clear()
+    this.videoFrameGenerationByItem.clear()
     this.tier3.clear()
     this.blitCanvas = null
     this.blitCtx = null

@@ -270,6 +270,21 @@ describe('ScrubbingCache tier 2 video frames', () => {
     expect(cache.getVideoFrameEntry('item-1')).toBeUndefined()
   })
 
+  it('invalidates only the retained item whose source mapping changed', () => {
+    const cache = new ScrubbingCache()
+    const changedFrame = createMockFrame()
+    const reusableFrame = createMockFrame()
+
+    cache.putVideoFrame('changed-item', changedFrame, 3)
+    cache.putVideoFrame('reusable-item', reusableFrame, 3)
+    cache.invalidateVideoFrames('changed-item')
+
+    expect(changedFrame.close).toHaveBeenCalledTimes(1)
+    expect(cache.getVideoFrameEntry('changed-item')).toBeUndefined()
+    expect(reusableFrame.close).not.toHaveBeenCalled()
+    expect(cache.getVideoFrameEntry('reusable-item')?.frame).toBe(reusableFrame)
+  })
+
   it('rejects an old-source decode that completes after invalidation', () => {
     const cache = new ScrubbingCache()
     const oldGeneration = cache.getVideoFrameGeneration()
@@ -277,6 +292,19 @@ describe('ScrubbingCache tier 2 video frames', () => {
 
     cache.invalidateVideoFrames()
     cache.putVideoFrame('item-1', lateFrame, 1.0, oldGeneration)
+
+    expect(lateFrame.close).toHaveBeenCalledTimes(1)
+    expect(cache.getVideoFrameEntry('item-1')).toBeUndefined()
+  })
+
+  it('keeps per-item and global generations collision-free', () => {
+    const cache = new ScrubbingCache()
+    cache.invalidateVideoFrames('item-1')
+    const perItemGeneration = cache.getVideoFrameGeneration('item-1')
+    const lateFrame = createMockFrame()
+
+    cache.invalidateVideoFrames()
+    cache.putVideoFrame('item-1', lateFrame, 1, perItemGeneration)
 
     expect(lateFrame.close).toHaveBeenCalledTimes(1)
     expect(cache.getVideoFrameEntry('item-1')).toBeUndefined()

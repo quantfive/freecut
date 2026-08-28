@@ -205,11 +205,7 @@ describe('getStableVideoRenderSignature', () => {
 
     expect(signature).toMatchObject({
       id: 'clip-1',
-      speed: 1,
-      sourceStart: 5,
-      sourceEnd: 65,
-      from: 10,
-      durationInFrames: 60,
+      sourceMappingFingerprint: '[10,60,5,65,120,30,1,false,0]',
       trackVisible: true,
       muted: false,
       cropLeft: 0.1,
@@ -237,6 +233,10 @@ describe('areGroupPropsEqual', () => {
     ['speed', { speed: 1.25 }],
     ['sourceStart', { sourceStart: 12 }],
     ['sourceEnd', { sourceEnd: 72 }],
+    ['sourceFps', { sourceFps: 60 }],
+    ['sourceDuration', { sourceDuration: 240 }],
+    ['reverse', { isReversed: true }],
+    ['reverse conform local start', { reverseConformLocalStart: 12 }],
     ['from', { from: 12 }],
     ['durationInFrames', { durationInFrames: 72 }],
     ['trackVisible', { trackVisible: false }],
@@ -330,9 +330,6 @@ describe('areGroupPropsEqual', () => {
       'effects',
       { effects: [{ id: 'effect-1', type: 'gpu-effect', effectId: 'gpu-blur', params: {} }] },
     ],
-    ['sourceFps', { sourceFps: 24 }],
-    ['sourceDuration', { sourceDuration: 240 }],
-    ['isReversed', { isReversed: true }],
     ['reverseConformPath', { reverseConformPath: '/cache/reverse.mp4' }],
   ])('documents current comparator gap: %s does not invalidate yet', (_name, overrides) => {
     expectComparatorResult(overrides as Partial<StableVideoSequenceItem>, true)

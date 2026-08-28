@@ -37,6 +37,9 @@
       ],
       "fixed": [
         {
+          "title": "Retained clips now refresh picture and audio together when a host changes their source range"
+        },
+        {
           "title": "A clear \"project not found\" screen with copyable details instead of a crash"
         },
         {

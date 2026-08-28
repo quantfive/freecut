@@ -16,7 +16,11 @@ export function getSourceFrameInfo(
 ): SourceFrameInfo {
   const sourceFps = item.sourceFps ?? timelineFps
   const sourceRate = item.speed ?? 1
-  const sourceStart = item.sourceStart ?? 0
+  const legacyOffset = 'offset' in item ? item.offset : undefined
+  const sourceStart = item.sourceStart ?? item.trimStart ?? legacyOffset ?? 0
+  const derivedSourceEnd =
+    sourceStart + (item.durationInFrames * sourceRate * sourceFps) / timelineFps
+  const reverseSourceEnd = item.sourceEnd ?? derivedSourceEnd
 
   const sourceTime = getVideoTargetTimeSeconds(
     sourceStart,
@@ -25,6 +29,8 @@ export function getSourceFrameInfo(
     sourceRate,
     timelineFps,
     0,
+    item.isReversed === true,
+    reverseSourceEnd,
   )
   const sourceFrame = Math.max(0, Math.round(sourceTime * sourceFps))
 

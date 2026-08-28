@@ -19,6 +19,7 @@ All notable changes to FreeCut. Weekly CalVer: `YYYY.MM.DD` = the Monday of the 
 - Keyframes pushed outside a clip are flagged with one-click cleanup
 
 ### Fixed
+- Retained clips now refresh picture and audio together when a host changes their source range
 - A clear "project not found" screen with copyable details instead of a crash
 - Captions keep their transcript boundaries when edited
 - Playhead stays locked to the cursor during edge scrolling
