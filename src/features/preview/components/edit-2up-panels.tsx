@@ -19,6 +19,10 @@ import {
   getActivePreviewVideoFrameEntry,
 } from '@/features/preview/utils/preview-scrubbing-cache-bridge'
 import type { TimelineItem } from '@/types/timeline'
+import {
+  areTimelineSourceMappingsEqual,
+  getMediaSourceBindingFingerprint,
+} from '@/shared/utils/timeline-source-mapping'
 import { resolveMediaUrl, resolveProxyUrl } from '../utils/media-resolver'
 import {
   computeFittedMediaSize,
@@ -784,7 +788,8 @@ function LegacySeekVideoFrame({ item, sourceTime, onFailure }: LegacySeekVideoFr
 const areVideoFramePropsEqual = (prev: VideoFrameProps, next: VideoFrameProps) =>
   prev.sourceTime === next.sourceTime &&
   prev.item.id === next.item.id &&
-  prev.item.mediaId === next.item.mediaId
+  getMediaSourceBindingFingerprint(prev.item) === getMediaSourceBindingFingerprint(next.item) &&
+  areTimelineSourceMappingsEqual(prev.item, next.item)
 
 export const VideoFrame = memo(VideoFrameImpl, areVideoFramePropsEqual)
 

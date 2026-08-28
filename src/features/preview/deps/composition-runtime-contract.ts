@@ -21,6 +21,7 @@ export {
 } from '@/runtime/composition-runtime/utils/corner-pin'
 export { getBestDomVideoElementForItem } from '@/runtime/composition-runtime/utils/dom-video-element-registry'
 export {
+  getAudioTargetTimeSeconds,
   getVideoTargetTimeSeconds,
   snapSourceTime,
 } from '@/runtime/composition-runtime/utils/video-timing'

@@ -1,6 +1,7 @@
 import { act, render, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vite-plus/test'
 import { shouldIssueCoalescedReverseVideoSeek } from '../utils/video-sync-plan'
+import { getAudioTargetTimeSeconds } from '../utils/video-timing'
 import { VideoContent } from './video-content'
 
 const testState = vi.hoisted(() => ({
@@ -27,6 +28,9 @@ const testState = vi.hoisted(() => ({
   },
   timelineState: {
     keyframes: [] as unknown[],
+  },
+  mediaLibraryState: {
+    mediaById: {} as Record<string, unknown>,
   },
 }))
 
@@ -111,6 +115,7 @@ vi.mock('@/runtime/composition-runtime/deps/stores', () => ({
   usePlaybackStore: createStoreHook(testState.playbackState),
   useGizmoStore: createStoreHook(testState.gizmoState),
   useTimelineStore: createStoreHook(testState.timelineState),
+  useMediaLibraryStore: createStoreHook(testState.mediaLibraryState),
 }))
 
 vi.mock('../hooks/use-player-compat', () => ({
@@ -215,6 +220,45 @@ describe('VideoContent pooled handoff', () => {
     expect(releaseClipMock).not.toHaveBeenCalled()
   })
 
+  it('seeks a retained mounted item to its new source range in audio-aligned time', async () => {
+    const pooledElement = createMockVideoElement()
+    acquireForClipMock.mockReturnValue(pooledElement)
+
+    const renderItem = (sourceStart: number, sourceEnd: number) => (
+      <VideoContent
+        item={{
+          id: 'retained-clip',
+          type: 'video',
+          trackId: 'track-1',
+          from: 0,
+          durationInFrames: 30,
+          label: 'Retained clip',
+          mediaId: 'media-1',
+          src: 'blob:test',
+          sourceStart,
+          sourceEnd,
+          _poolClipId: 'retained-origin',
+        }}
+        muted={false}
+        safeTrimBefore={sourceStart}
+        reverseSourceEnd={sourceEnd}
+        playbackRate={1}
+        sourceFps={30}
+        audioEqStages={[]}
+      />
+    )
+
+    const { rerender } = render(renderItem(0, 30))
+    await waitFor(() => expect(pooledElement.currentTime).toBeCloseTo(0))
+
+    rerender(renderItem(90, 120))
+
+    const expectedAudioTime = getAudioTargetTimeSeconds(90, 30, 0, 1, 30, false, 120)
+    await waitFor(() => expect(pooledElement.currentTime).toBeCloseTo(expectedAudioTime))
+    expect(expectedAudioTime).toBeCloseTo(3)
+    expect(acquireForClipMock).toHaveBeenCalledTimes(1)
+  })
+
   it('keeps a decoder pre-warm single-flight and restores its paused source time', async () => {
     vi.useFakeTimers()
     playbackState.isPlaying = false
@@ -280,9 +324,7 @@ describe('VideoContent pooled handoff', () => {
     vi.useFakeTimers()
     playbackState.isPlaying = false
     const pooledElement = createMockVideoElement()
-    pooledElement.getClientRects = vi.fn(
-      () => ({ length: 1 }) as unknown as DOMRectList,
-    )
+    pooledElement.getClientRects = vi.fn(() => ({ length: 1 }) as unknown as DOMRectList)
     acquireForClipMock.mockReturnValue(pooledElement)
 
     const rendered = render(

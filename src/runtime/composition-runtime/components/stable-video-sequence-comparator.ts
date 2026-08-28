@@ -8,6 +8,7 @@ import {
   getAudioEqSettings,
 } from '@/shared/utils/audio-eq'
 import type { StableVideoGroup } from '../utils/video-scene'
+import { getTimelineSourceMappingFingerprint } from '@/shared/utils/timeline-source-mapping'
 export type StableVideoSequenceComparatorItem = VideoItem & {
   zIndex: number
   muted: boolean
@@ -21,11 +22,7 @@ export type StableVideoSequenceComparatorItem = VideoItem & {
 
 type StableVideoRenderBaseSignature = {
   id: string
-  speed: number | undefined
-  sourceStart: number | undefined
-  sourceEnd: number | undefined
-  from: number
-  durationInFrames: number
+  sourceMappingFingerprint: string
   trackVisible: boolean
   muted: boolean
   cropLeft: number
@@ -56,11 +53,7 @@ function getStableVideoRenderBaseSignature(
 ): StableVideoRenderBaseSignature {
   return {
     id: item.id,
-    speed: item.speed,
-    sourceStart: item.sourceStart,
-    sourceEnd: item.sourceEnd,
-    from: item.from,
-    durationInFrames: item.durationInFrames,
+    sourceMappingFingerprint: getTimelineSourceMappingFingerprint(item),
     trackVisible: item.trackVisible,
     muted: item.muted,
     cropLeft: item.crop?.left ?? 0,
@@ -102,11 +95,7 @@ function areStableVideoRenderBaseSignaturesEqual(
 ): boolean {
   return (
     prevSignature.id === nextSignature.id &&
-    prevSignature.speed === nextSignature.speed &&
-    prevSignature.sourceStart === nextSignature.sourceStart &&
-    prevSignature.sourceEnd === nextSignature.sourceEnd &&
-    prevSignature.from === nextSignature.from &&
-    prevSignature.durationInFrames === nextSignature.durationInFrames &&
+    prevSignature.sourceMappingFingerprint === nextSignature.sourceMappingFingerprint &&
     prevSignature.trackVisible === nextSignature.trackVisible &&
     prevSignature.muted === nextSignature.muted &&
     prevSignature.cropLeft === nextSignature.cropLeft &&

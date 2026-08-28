@@ -5,6 +5,7 @@ import {
   clearObjectUrlRegistry,
   registerObjectUrl,
 } from '@/infrastructure/browser/object-url-registry'
+import { setWorkspaceRoot } from '@/infrastructure/storage/workspace-fs/root'
 
 const getLevelMock = vi.fn()
 const deleteMock = vi.fn()
@@ -12,6 +13,13 @@ const getCachedRangeMock = vi.fn()
 const saveRangeMock = vi.fn()
 const generateMultiResolutionMock = vi.fn(() => [])
 const saveMock = vi.fn(async () => undefined)
+const getWaveformMock = vi.fn(async () => undefined)
+const getWaveformRecordMock = vi.fn(async () => undefined)
+const getWaveformMetaMock = vi.fn(async () => undefined)
+const getWaveformBinsMock = vi.fn(async () => [])
+const saveWaveformBinMock = vi.fn(async () => undefined)
+const saveWaveformMetaMock = vi.fn(async () => undefined)
+const deleteWaveformMock = vi.fn(async () => undefined)
 
 vi.mock('./waveform-opfs-storage', () => ({
   chooseLevelForZoom: vi.fn(() => 0),
@@ -27,13 +35,13 @@ vi.mock('./waveform-opfs-storage', () => ({
 }))
 
 vi.mock('@/infrastructure/storage', () => ({
-  getWaveform: vi.fn(async () => undefined),
-  getWaveformRecord: vi.fn(async () => undefined),
-  getWaveformMeta: vi.fn(async () => undefined),
-  getWaveformBins: vi.fn(async () => []),
-  saveWaveformBin: vi.fn(async () => undefined),
-  saveWaveformMeta: vi.fn(async () => undefined),
-  deleteWaveform: vi.fn(async () => undefined),
+  getWaveform: getWaveformMock,
+  getWaveformRecord: getWaveformRecordMock,
+  getWaveformMeta: getWaveformMetaMock,
+  getWaveformBins: getWaveformBinsMock,
+  saveWaveformBin: saveWaveformBinMock,
+  saveWaveformMeta: saveWaveformMetaMock,
+  deleteWaveform: deleteWaveformMock,
 }))
 
 describe('waveformCache', () => {
@@ -46,14 +54,102 @@ describe('waveformCache', () => {
     deleteMock.mockReset()
     generateMultiResolutionMock.mockClear()
     saveMock.mockClear()
+    getWaveformMock.mockReset().mockResolvedValue(undefined)
+    getWaveformRecordMock.mockReset().mockResolvedValue(undefined)
+    getWaveformMetaMock.mockReset().mockResolvedValue(undefined)
+    getWaveformBinsMock.mockReset().mockResolvedValue([])
+    saveWaveformBinMock.mockReset().mockResolvedValue(undefined)
+    saveWaveformMetaMock.mockReset().mockResolvedValue(undefined)
+    deleteWaveformMock.mockReset().mockResolvedValue(undefined)
+    setWorkspaceRoot(null)
     clearObjectUrlRegistry()
   })
 
   afterEach(async () => {
     const { waveformCache } = await import('./waveform-cache')
     waveformCache.clearAll()
+    setWorkspaceRoot(null)
     vi.restoreAllMocks()
     vi.unstubAllGlobals()
+  })
+
+  it('analyzes and caches host-mounted media without workspace persistence warnings', async () => {
+    getLevelMock.mockResolvedValue(null)
+    const persistenceFailure = new Error('workspace persistence should not be called')
+    for (const storageMock of [
+      getWaveformMock,
+      getWaveformRecordMock,
+      getWaveformMetaMock,
+      getWaveformBinsMock,
+      saveWaveformBinMock,
+      saveWaveformMetaMock,
+      deleteWaveformMock,
+    ]) {
+      storageMock.mockRejectedValue(persistenceFailure)
+    }
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({ arrayBuffer: async () => new ArrayBuffer(8) })),
+    )
+
+    const close = vi.fn(async () => undefined)
+    const decodeAudioData = vi.fn(async () => ({
+      duration: 1,
+      numberOfChannels: 1,
+      length: 4,
+      getChannelData: () => new Float32Array([0, 0.5, -0.25, 1]),
+    }))
+    vi.stubGlobal(
+      'AudioContext',
+      vi.fn(function AudioContextMock() {
+        return { close, decodeAudioData }
+      }),
+    )
+
+    const { waveformCache } = await import('./waveform-cache')
+    const waveform = await waveformCache.getWaveform(
+      'host-mounted-media',
+      'blob:http://localhost/host-mounted',
+    )
+    const cached = await waveformCache.getCachedWaveform('host-mounted-media')
+
+    expect(decodeAudioData).toHaveBeenCalledTimes(1)
+    expect(waveform.peaks.length).toBe(500)
+    expect(cached).toBe(waveform)
+    expect(generateMultiResolutionMock).toHaveBeenCalledOnce()
+    await vi.waitFor(() => expect(saveMock).toHaveBeenCalledOnce())
+    for (const storageMock of [
+      getWaveformMock,
+      getWaveformRecordMock,
+      getWaveformMetaMock,
+      getWaveformBinsMock,
+      saveWaveformBinMock,
+      saveWaveformMetaMock,
+      deleteWaveformMock,
+    ]) {
+      expect(storageMock).not.toHaveBeenCalled()
+    }
+    expect(warn).not.toHaveBeenCalled()
+    expect(error).not.toHaveBeenCalled()
+  })
+
+  it('keeps configured workspace persistence failures observable', async () => {
+    setWorkspaceRoot({ name: 'workspace' } as FileSystemDirectoryHandle)
+    const persistenceFailure = new Error('configured workspace read failed')
+    getWaveformMetaMock.mockRejectedValueOnce(persistenceFailure)
+    getLevelMock.mockResolvedValue(null)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+
+    const { waveformCache } = await import('./waveform-cache')
+    await expect(waveformCache.getCachedWaveform('configured-workspace-media')).resolves.toBeNull()
+
+    expect(getWaveformMetaMock).toHaveBeenCalledWith('configured-workspace-media')
+    expect(warn).toHaveBeenCalledWith(
+      '[WaveformCache] Failed to load binned waveform from IndexedDB: configured-workspace-media',
+      persistenceFailure,
+    )
   })
 
   it('preserves stereo channel metadata when loading from OPFS', async () => {
