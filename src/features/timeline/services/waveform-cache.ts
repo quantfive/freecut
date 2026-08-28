@@ -12,6 +12,7 @@
 
 import { createLogger } from '@/shared/logging/logger'
 import { createManagedWorker } from '@/shared/utils/managed-worker'
+import { getWorkspaceRoot } from '@/infrastructure/storage/workspace-fs/root'
 import {
   getObjectUrlBlob,
   getObjectUrlDirectFileMetadata,
@@ -432,6 +433,11 @@ class WaveformCacheService {
     duration: number,
     channels: number,
   ): Promise<void> {
+    // Embedded host surfaces intentionally run without WorkspaceGate. Keep
+    // their waveform analysis in memory/OPFS and skip the workspace-backed
+    // durability tier instead of turning the expected missing root into noise.
+    if (!getWorkspaceRoot()) return
+
     await deleteWaveformFromIndexedDB(mediaId).catch((e) => {
       logger.debug('Failed to clear waveform before persist:', mediaId, e)
     })
@@ -476,9 +482,13 @@ class WaveformCacheService {
    * 3) Legacy IndexedDB single-record waveform
    */
   private async loadFromStorage(mediaId: string): Promise<CachedWaveform | null> {
-    // Try binned IndexedDB first (new progressive format).
+    const hasWorkspaceRoot = getWorkspaceRoot() !== null
+
+    // Try binned workspace persistence first (new progressive format). The
+    // host-backed editor has no workspace root by design, so this entire tier
+    // is an expected miss there; OPFS remains available below.
     try {
-      const meta = await getWaveformMetaFromIndexedDB(mediaId)
+      const meta = hasWorkspaceRoot ? await getWaveformMetaFromIndexedDB(mediaId) : undefined
       if (meta) {
         if (meta.sampleRate !== SAMPLES_PER_SECOND) {
           logger.debug(
@@ -555,7 +565,9 @@ class WaveformCacheService {
 
       // If bins exist but meta completion marker is missing, treat as interrupted decode.
       // Do not fall back to potentially stale legacy/OPFS data for this media.
-      const firstBin = await getWaveformRecordFromIndexedDB(`${mediaId}:bin:0`)
+      const firstBin = hasWorkspaceRoot
+        ? await getWaveformRecordFromIndexedDB(`${mediaId}:bin:0`)
+        : undefined
       if (firstBin && 'kind' in firstBin && firstBin.kind === 'bin') {
         logger.warn(`Partial waveform bins detected without meta for ${mediaId}; regenerating`)
         await deleteWaveformFromIndexedDB(mediaId).catch((e) => {
@@ -601,9 +613,10 @@ class WaveformCacheService {
       })
     }
 
-    // Fallback: Try legacy IndexedDB and migrate.
+    // Fallback: try the legacy workspace record and migrate. Like the binned
+    // tier, absence of a workspace root is an expected host-mode miss.
     try {
-      const stored = await getLegacyWaveformFromIndexedDB(mediaId)
+      const stored = hasWorkspaceRoot ? await getLegacyWaveformFromIndexedDB(mediaId) : undefined
 
       if (stored && stored.peaks) {
         if (stored.sampleRate !== SAMPLES_PER_SECOND) {
@@ -691,7 +704,9 @@ class WaveformCacheService {
   ): Promise<CachedWaveform> {
     const worker = this.getWorker()
     const samplesPerSecond = options.samplesPerSecond ?? SAMPLES_PER_SECOND
-    const persistBins = options.persistBins ?? samplesPerSecond === SAMPLES_PER_SECOND
+    const persistBins =
+      getWorkspaceRoot() !== null &&
+      (options.persistBins ?? samplesPerSecond === SAMPLES_PER_SECOND)
     const persistOPFS = options.persistOPFS ?? true
     const timeoutMs = options.timeoutMs ?? 90_000
     const updateMemoryCache = options.updateMemoryCache ?? true
@@ -1482,10 +1497,13 @@ class WaveformCacheService {
 
     // Clear from OPFS
     await waveformOPFSStorage.delete(mediaId)
-    // Also clear IndexedDB waveform bins/meta (and legacy single record).
-    await deleteWaveformFromIndexedDB(mediaId).catch((e) => {
-      logger.debug('Failed to clear waveform from IndexedDB during cache clear:', mediaId, e)
-    })
+    // Also clear workspace waveform bins/meta (and legacy single record) when
+    // that persistence tier exists for this mounted surface.
+    if (getWorkspaceRoot()) {
+      await deleteWaveformFromIndexedDB(mediaId).catch((e) => {
+        logger.debug('Failed to clear waveform from IndexedDB during cache clear:', mediaId, e)
+      })
+    }
   }
 
   /**

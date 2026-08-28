@@ -7,6 +7,15 @@ import { resolve } from 'node:path'
 
 const generatedSourceRangeMedia = resolve('tests/browser/.source-range-generated.webm')
 
+declare global {
+  interface Window {
+    __freecutSourceRangeFixture: {
+      pushRangeB(): void
+      getLoadCount(): number
+    }
+  }
+}
+
 test.beforeAll(() => {
   execFileSync('ffmpeg', [
     '-hide_banner',
@@ -107,7 +116,26 @@ async function openAndCloseDrawer(page: Page, name: 'Media' | 'Properties' | 'Me
 
 test('retained host item switches generated picture and audio source range without remount', async ({
   page,
-}) => {
+}, testInfo) => {
+  const consoleProblems: string[] = []
+  const pageErrors: string[] = []
+  const networkFailures: string[] = []
+  const badResponses: string[] = []
+  page.on('console', (message) => {
+    if (message.type() === 'warning' || message.type() === 'error') {
+      consoleProblems.push(`${message.type()}: ${message.text()}`)
+    }
+  })
+  page.on('pageerror', (error) => pageErrors.push(error.message))
+  page.on('requestfailed', (request) => {
+    networkFailures.push(`${request.method()} ${request.url()}: ${request.failure()?.errorText}`)
+  })
+  page.on('response', (response) => {
+    if (response.status() >= 400) {
+      badResponses.push(`${response.status()} ${response.url()}`)
+    }
+  })
+
   await page.setViewportSize({ width: 1200, height: 800 })
   await page.goto('/tests/browser/source-range-host.html')
   const program = page.locator('[aria-label="Program monitor"]')
@@ -129,14 +157,81 @@ test('retained host item switches generated picture and audio source range witho
   const retainedVideo = await program.locator('video').evaluateHandle((video) => video)
   expect(await page.evaluate(() => window.__freecutSourceRangeFixture.getLoadCount())).toBe(1)
 
+  const analyzerHandle = await program
+    .locator('video')
+    .evaluateHandle(async (video: HTMLVideoElement) => {
+      const context = new AudioContext()
+      const analyzer = context.createAnalyser()
+      analyzer.fftSize = 4096
+      analyzer.smoothingTimeConstant = 0
+      const stream = (
+        video as HTMLVideoElement & {
+          captureStream(): MediaStream
+        }
+      ).captureStream()
+      const source = context.createMediaStreamSource(stream)
+      source.connect(analyzer)
+      await context.resume()
+      return { analyzer, context, source, stream }
+    })
+  const readDominantFrequency = () =>
+    analyzerHandle.evaluate(({ analyzer, context }) => {
+      const spectrum = new Float32Array(analyzer.frequencyBinCount)
+      analyzer.getFloatFrequencyData(spectrum)
+      const hzPerBin = context.sampleRate / analyzer.fftSize
+      const firstBin = Math.ceil(100 / hzPerBin)
+      const lastBin = Math.floor(1_500 / hzPerBin)
+      let peakBin = firstBin
+      let peakDb = Number.NEGATIVE_INFINITY
+      for (let index = firstBin; index <= lastBin; index++) {
+        if (spectrum[index]! > peakDb) {
+          peakDb = spectrum[index]!
+          peakBin = index
+        }
+      }
+      return peakDb > -100 ? peakBin * hzPerBin : 0
+    })
+
+  await page.getByRole('button', { name: 'Play', exact: true }).click()
+  await expect.poll(readDominantFrequency).toBeGreaterThan(400)
+  const beforeFrequency = await readDominantFrequency()
+  expect(beforeFrequency).toBeLessThan(500)
+  await page.getByRole('button', { name: 'Pause', exact: true }).click()
+
   await page.evaluate(() => window.__freecutSourceRangeFixture.pushRangeB())
 
   await expect.poll(async () => (await readProgramMedia()).blue).toBeGreaterThan(180)
   await expect.poll(async () => (await readProgramMedia()).currentTime).toBeGreaterThan(1.9)
+  await page.getByRole('button', { name: 'Play', exact: true }).click()
+  await expect.poll(readDominantFrequency).toBeGreaterThan(830)
+  const afterFrequency = await readDominantFrequency()
+  expect(afterFrequency).toBeLessThan(930)
   expect(
     await program.locator('video').evaluate((video, previous) => video === previous, retainedVideo),
   ).toBe(true)
   expect(await page.evaluate(() => window.__freecutSourceRangeFixture.getLoadCount())).toBe(1)
+  await page.waitForTimeout(500)
+
+  expect(consoleProblems).toEqual([])
+  expect(pageErrors).toEqual([])
+  expect(networkFailures).toEqual([])
+  expect(badResponses).toEqual([])
+  await testInfo.attach('source-range-observations', {
+    body: Buffer.from(
+      JSON.stringify({
+        beforeFrequency,
+        afterFrequency,
+        loadCount: await page.evaluate(() => window.__freecutSourceRangeFixture.getLoadCount()),
+        consoleProblems: consoleProblems.length,
+        pageErrors: pageErrors.length,
+        networkFailures: networkFailures.length,
+        badResponses: badResponses.length,
+      }),
+    ),
+    contentType: 'application/json',
+  })
+  await analyzerHandle.evaluate(({ context }) => context.close())
+  await analyzerHandle.dispose()
   await retainedVideo.dispose()
 })
 
