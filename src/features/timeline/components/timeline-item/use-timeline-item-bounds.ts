@@ -1,7 +1,8 @@
 import { useMemo } from 'react'
 import type { TimelineItem as TimelineItemType } from '@/types/timeline'
+import { projectTrimItem } from '@/shared/timeline/trim-preview'
 import { frameToPixelsNow } from '../../utils/zoom-conversions'
-import { isMediaItem, timelineToSourceFrames } from '../../utils/source-calculations'
+import { isMediaItem } from '../../utils/source-calculations'
 import { computeSlideContinuitySourceDelta } from '../../utils/slide-utils'
 
 interface RateStretchVisualFeedback {
@@ -99,38 +100,30 @@ export function useTimelineItemBounds({
 
   const contentPreviewItem = useMemo<TimelineItemType>(() => {
     let nextItem = previewBaseItem
-    let previewStartTrimDelta = 0
-    let previewEndTrimDelta = 0
-    let previewDurationDelta = 0
 
-    if (isTrimming && trimHandle) {
-      if (trimHandle === 'start') {
-        previewStartTrimDelta += trimDelta
-        previewDurationDelta += -trimDelta
-      } else {
-        previewEndTrimDelta += trimDelta
-        previewDurationDelta += trimDelta
-      }
+    if (isTrimming && trimHandle && trimDelta !== 0) {
+      nextItem = projectTrimItem(nextItem, trimHandle, trimDelta, {
+        timelineFps: fps,
+        positioning: trimHandle === 'start' && rippleEdgeDelta !== 0 ? 'anchor-start' : 'standard',
+      })
     }
 
     if (rollingEditDelta !== 0) {
-      if (rollingEditHandle === 'end') {
-        previewStartTrimDelta += rollingEditDelta
-        previewDurationDelta += -rollingEditDelta
-      } else if (rollingEditHandle === 'start') {
-        previewEndTrimDelta += rollingEditDelta
-        previewDurationDelta += rollingEditDelta
+      const rollingNeighborHandle = rollingEditHandle === 'end' ? 'start' : 'end'
+      if (rollingEditHandle) {
+        nextItem = projectTrimItem(nextItem, rollingNeighborHandle, rollingEditDelta, {
+          timelineFps: fps,
+        })
       }
     }
 
     if (slideNeighborSide && slideNeighborDelta !== 0) {
-      if (slideNeighborSide === 'right') {
-        previewStartTrimDelta += slideNeighborDelta
-        previewDurationDelta += -slideNeighborDelta
-      } else {
-        previewEndTrimDelta += slideNeighborDelta
-        previewDurationDelta += slideNeighborDelta
-      }
+      nextItem = projectTrimItem(
+        nextItem,
+        slideNeighborSide === 'right' ? 'start' : 'end',
+        slideNeighborDelta,
+        { timelineFps: fps },
+      )
     }
 
     if (isMediaItem(nextItem) && slideEditOffset !== 0) {
@@ -164,47 +157,6 @@ export function useTimelineItemBounds({
       }
     }
 
-    const isCompositionWrapper =
-      nextItem.type === 'composition' || (nextItem.type === 'audio' && !!nextItem.compositionId)
-
-    const supportsStartTrimSourceShift =
-      previewBaseItem.type === 'video' || previewBaseItem.type === 'audio' || isCompositionWrapper
-    if (supportsStartTrimSourceShift && previewStartTrimDelta !== 0) {
-      const sourceFramesDelta = timelineToSourceFrames(
-        previewStartTrimDelta,
-        nextItem.speed ?? 1,
-        fps,
-        effectiveSourceFps,
-      )
-      nextItem = {
-        ...nextItem,
-        sourceStart: Math.max(0, (nextItem.sourceStart ?? 0) + sourceFramesDelta),
-      }
-    }
-
-    if (previewDurationDelta !== 0) {
-      nextItem = {
-        ...nextItem,
-        durationInFrames: Math.max(1, nextItem.durationInFrames + previewDurationDelta),
-      }
-    }
-
-    if (isCompositionWrapper && previewEndTrimDelta !== 0 && nextItem.sourceEnd !== undefined) {
-      const endSourceFramesDelta = timelineToSourceFrames(
-        previewEndTrimDelta,
-        nextItem.speed ?? 1,
-        fps,
-        effectiveSourceFps,
-      )
-      nextItem = {
-        ...nextItem,
-        sourceEnd: Math.max(
-          (nextItem.sourceStart ?? 0) + 1,
-          nextItem.sourceEnd + endSourceFramesDelta,
-        ),
-      }
-    }
-
     return nextItem
   }, [
     previewBaseItem,
@@ -220,7 +172,7 @@ export function useTimelineItemBounds({
     slideLeftNeighborForSlidItem,
     slideRightNeighborForSlidItem,
     fps,
-    effectiveSourceFps,
+    rippleEdgeDelta,
   ])
 
   const preferImmediateContentRendering =

@@ -2,6 +2,12 @@ import { useState, useCallback, useRef, useEffect } from 'react'
 import type { TimelineItem } from '@/types/timeline'
 import { commitPreviewFrameToCurrentFrame } from '@/shared/state/playback'
 import { useEditorStore } from '@/shared/state/editor'
+import { useTrimPreviewStore } from '@/shared/state/trim-preview'
+import {
+  projectTrimOperation,
+  type TrimPreviewMode,
+  type TrimProjection,
+} from '@/shared/timeline/trim-preview'
 import { toast } from 'sonner'
 import type { SnapTarget } from '../types/drag'
 import { useTimelineStore } from '../stores/timeline-store'
@@ -69,8 +75,81 @@ interface TrimState {
 
 const TRIM_EDGE_ALIGNMENT_EPSILON = 1e-6
 
+function createIdleTrimState(): TrimState {
+  return {
+    isTrimming: false,
+    handle: null,
+    startX: 0,
+    initialFrom: 0,
+    initialDuration: 0,
+    currentDelta: 0,
+    isRollingEdit: false,
+    isRippleEdit: false,
+    neighborId: null,
+    forcedMode: null,
+    isConstrained: false,
+    constraintLabel: null,
+    destroyTransitionAtHandle: false,
+    trimmedItemIds: [],
+  }
+}
+
 function areTrimEdgesAligned(left: number, right: number): boolean {
   return Math.abs(left - right) <= TRIM_EDGE_ALIGNMENT_EPSILON
+}
+
+function getRippleDownstreamItemIds(
+  currentItem: TimelineItem,
+  allItems: readonly TimelineItem[],
+  transitions: ReadonlyArray<{ leftClipId: string; rightClipId: string }>,
+): Set<string> {
+  const currentEnd = currentItem.from + currentItem.durationInFrames
+  const downstreamItemIds = new Set<string>()
+
+  for (const other of allItems) {
+    if (
+      other.id !== currentItem.id &&
+      other.trackId === currentItem.trackId &&
+      other.from >= currentEnd
+    ) {
+      downstreamItemIds.add(other.id)
+    }
+  }
+
+  for (const transition of transitions) {
+    if (transition.leftClipId === currentItem.id) {
+      downstreamItemIds.add(transition.rightClipId)
+    }
+  }
+
+  return downstreamItemIds
+}
+
+function mergeTrimProjectionUpdates(
+  projection: TrimProjection,
+  items: readonly TimelineItem[],
+  updates: readonly PreviewItemUpdate[],
+): TrimProjection {
+  if (updates.length === 0) return projection
+
+  const updatesById = new Map(
+    projection.timeline.updates.map((candidate) => [candidate.id, candidate]),
+  )
+  for (const update of updates) {
+    const item = items.find((candidate) => candidate.id === update.id)
+    if (!item) continue
+    updatesById.set(update.id, { ...item, ...update } as TimelineItem)
+  }
+
+  return {
+    ...projection,
+    timeline: {
+      ...projection.timeline,
+      updates: items
+        .map((item) => updatesById.get(item.id))
+        .filter((item): item is TimelineItem => item !== undefined),
+    },
+  }
 }
 
 /**
@@ -105,22 +184,7 @@ export function useTimelineTrim(
     item.id,
   )
 
-  const [trimState, setTrimState] = useState<TrimState>({
-    isTrimming: false,
-    handle: null,
-    startX: 0,
-    initialFrom: 0,
-    initialDuration: 0,
-    currentDelta: 0,
-    isRollingEdit: false,
-    isRippleEdit: false,
-    neighborId: null,
-    forcedMode: null,
-    isConstrained: false,
-    constraintLabel: null,
-    destroyTransitionAtHandle: false,
-    trimmedItemIds: [],
-  })
+  const [trimState, setTrimState] = useState<TrimState>(createIdleTrimState)
 
   const trimStateRef = useRef(trimState)
   trimStateRef.current = trimState
@@ -446,23 +510,9 @@ export function useTimelineTrim(
           rippleStore.handle !== handle ||
           rippleStore.trackId !== currentItem.trackId
         ) {
-          // Compute downstream item IDs once — includes transition-connected
-          // neighbors whose `from` may be before the trimmed clip's end (overlap model).
-          const currentEnd = currentItem.from + currentItem.durationInFrames
-          const dsIds = new Set<string>()
-          for (const other of allItems) {
-            if (
-              other.id !== currentItem.id &&
-              other.trackId === currentItem.trackId &&
-              other.from >= currentEnd
-            ) {
-              dsIds.add(other.id)
-            }
-          }
-          // Transition-connected neighbors in the overlap model
-          for (const t of transitions) {
-            if (t.leftClipId === currentItem.id) dsIds.add(t.rightClipId)
-          }
+          // Include transition-connected neighbors whose `from` may be before
+          // the trimmed clip's end in the overlap model.
+          const dsIds = getRippleDownstreamItemIds(currentItem, allItems, transitions)
           rippleStore.setPreview({
             trimmedItemId: item.id,
             handle: handle!,
@@ -649,6 +699,37 @@ export function useTimelineTrim(
 
       useLinkedEditPreviewStore.getState().setUpdates(linkedPreviewUpdates)
 
+      const trimMode: TrimPreviewMode = isRolling ? 'rolling' : isRippleEdit ? 'ripple' : 'trim'
+      const projection = projectTrimOperation({
+        items: allItems,
+        itemId: currentItem.id,
+        handle: handle!,
+        mode: trimMode,
+        deltaFrames,
+        neighborId,
+        trimmedItemIds: normalTrimItems.map((trimItem) => trimItem.id),
+        downstreamItemIds: useRippleEditPreviewStore.getState().downstreamItemIds,
+        timelineFps: fps,
+      })
+      if (projection) {
+        const transitionIdsToRemove =
+          trimStateRef.current.destroyTransitionAtHandle && handle
+            ? transitions
+                .filter((transition) =>
+                  handle === 'start'
+                    ? transition.rightClipId === currentItem.id
+                    : transition.leftClipId === currentItem.id,
+                )
+                .map((transition) => transition.id)
+            : []
+        useTrimPreviewStore.getState().setPreview({
+          projection: mergeTrimProjectionUpdates(projection, allItems, linkedPreviewUpdates),
+          constrained: isConstrained,
+          constraintLabel,
+          transitionIdsToRemove,
+        })
+      }
+
       if (
         deltaFrames !== trimStateRef.current.currentDelta ||
         isRolling !== trimStateRef.current.isRollingEdit ||
@@ -686,6 +767,33 @@ export function useTimelineTrim(
       getItemFromStore,
     ],
   )
+
+  const clearTrimPresentation = useCallback(() => {
+    useRollingEditPreviewStore.getState().clearPreview()
+    useRippleEditPreviewStore.getState().clearPreview()
+    useTransitionBreakPreviewStore.getState().clearPreview()
+    useLinkedEditPreviewStore.getState().clear()
+    useTrimPreviewStore.getState().clearPreview()
+
+    setActiveSnapTarget(null)
+    setDragState(null)
+    prevSnapTargetRef.current = null
+    magneticSnapTargetsRef.current = []
+    altKeyRef.current = false
+    shiftKeyRef.current = false
+  }, [setActiveSnapTarget, setDragState])
+
+  const resetTrimState = useCallback(() => {
+    const idleState = createIdleTrimState()
+    trimStateRef.current = idleState
+    setTrimState(idleState)
+  }, [])
+
+  const handleTrimCancel = useCallback(() => {
+    if (!trimStateRef.current.isTrimming) return
+    clearTrimPresentation()
+    resetTrimState()
+  }, [clearTrimPresentation, resetTrimState])
 
   // Mouse up handler - commits changes to store (single update)
   const handleMouseUp = useCallback(() => {
@@ -734,42 +842,10 @@ export function useTimelineTrim(
         }
       }
 
-      // Clear rolling edit preview
-      useRollingEditPreviewStore.getState().clearPreview()
-
-      // Clear ripple edit preview
-      useRippleEditPreviewStore.getState().clearPreview()
-      useTransitionBreakPreviewStore.getState().clearPreview()
-      useLinkedEditPreviewStore.getState().clear()
-
-      // Clear drag state (including snap indicator)
-      setActiveSnapTarget(null)
-      setDragState(null)
-      prevSnapTargetRef.current = null
-      magneticSnapTargetsRef.current = []
-
-      // Reset modifier key refs
-      altKeyRef.current = false
-      shiftKeyRef.current = false
-
-      setTrimState({
-        isTrimming: false,
-        handle: null,
-        startX: 0,
-        initialFrom: 0,
-        initialDuration: 0,
-        currentDelta: 0,
-        isRollingEdit: false,
-        isRippleEdit: false,
-        neighborId: null,
-        forcedMode: null,
-        isConstrained: false,
-        constraintLabel: null,
-        destroyTransitionAtHandle: false,
-        trimmedItemIds: [],
-      })
+      clearTrimPresentation()
+      resetTrimState()
     }
-  }, [item.id, setActiveSnapTarget, setDragState])
+  }, [clearTrimPresentation, item.id, resetTrimState])
 
   // Setup and cleanup mouse event listeners
   useEffect(() => {
@@ -780,6 +856,12 @@ export function useTimelineTrim(
         handleMouseUp()
       }
       const handleKeyDown = (e: KeyboardEvent) => {
+        if (e.key === 'Escape') {
+          e.preventDefault()
+          coalescedMouseMove.cancel()
+          handleTrimCancel()
+          return
+        }
         if (e.key === 'Alt') {
           e.preventDefault() // Prevent browser menu activation on Windows
           altKeyRef.current = true
@@ -792,25 +874,37 @@ export function useTimelineTrim(
         if (e.key === 'Alt') altKeyRef.current = false
         if (e.key === 'Shift') shiftKeyRef.current = false
       }
+      const handlePointerCancel = () => {
+        coalescedMouseMove.cancel()
+        handleTrimCancel()
+      }
 
       window.addEventListener('mousemove', coalescedMouseMove.queue)
       window.addEventListener('mouseup', handleCoalescedMouseUp)
+      window.addEventListener('pointercancel', handlePointerCancel)
+      window.addEventListener('blur', handlePointerCancel)
       window.addEventListener('keydown', handleKeyDown)
       window.addEventListener('keyup', handleKeyUp)
 
       return () => {
         window.removeEventListener('mousemove', coalescedMouseMove.queue)
         window.removeEventListener('mouseup', handleCoalescedMouseUp)
+        window.removeEventListener('pointercancel', handlePointerCancel)
+        window.removeEventListener('blur', handlePointerCancel)
         coalescedMouseMove.cancel()
         window.removeEventListener('keydown', handleKeyDown)
         window.removeEventListener('keyup', handleKeyUp)
-        useRollingEditPreviewStore.getState().clearPreview()
-        useTransitionBreakPreviewStore.getState().clearPreview()
-        useLinkedEditPreviewStore.getState().clear()
+        clearTrimPresentation()
         magneticSnapTargetsRef.current = []
       }
     }
-  }, [trimState.isTrimming, handleMouseMove, handleMouseUp])
+  }, [
+    trimState.isTrimming,
+    clearTrimPresentation,
+    handleMouseMove,
+    handleMouseUp,
+    handleTrimCancel,
+  ])
 
   // Start trim drag
   const handleTrimStart = useCallback(
@@ -923,6 +1017,40 @@ export function useTimelineTrim(
         trimmedItemIds,
       })
 
+      const initialTrimMode: TrimPreviewMode = wantsRolling
+        ? 'rolling'
+        : wantsRipple
+          ? 'ripple'
+          : 'trim'
+      const initialProjection = projectTrimOperation({
+        items: allItems,
+        itemId: currentItem.id,
+        handle,
+        mode: initialTrimMode,
+        deltaFrames: 0,
+        neighborId,
+        trimmedItemIds,
+        downstreamItemIds: getRippleDownstreamItemIds(currentItem, allItems, transitions),
+        timelineFps: fps,
+      })
+      if (initialProjection) {
+        const transitionIdsToRemove = destroyTransitionAtHandle
+          ? transitions
+              .filter((transition) =>
+                handle === 'start'
+                  ? transition.rightClipId === currentItem.id
+                  : transition.leftClipId === currentItem.id,
+              )
+              .map((transition) => transition.id)
+          : []
+        useTrimPreviewStore.getState().setPreview({
+          projection: initialProjection,
+          constrained: false,
+          constraintLabel: null,
+          transitionIdsToRemove,
+        })
+      }
+
       if (wantsRolling && neighborId) {
         useRollingEditPreviewStore.getState().setPreview({
           trimmedItemId: item.id,
@@ -948,6 +1076,7 @@ export function useTimelineTrim(
       trackLocked,
       getItemFromStore,
       getMagneticSnapTargets,
+      fps,
       item.id,
       setActiveSnapTarget,
       setDragState,

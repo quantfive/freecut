@@ -56,6 +56,15 @@ interface PreviewStageProps {
   perfPanel?: ReactNode
   comparisonOverlay?: ReactNode
   overlayControls?: ReactNode
+  trimPreview?: {
+    handle: 'start' | 'end'
+    deltaFrames: number
+    editPointBeforeFrame: number
+    editPointAfterFrame: number
+    constrained: boolean
+    constraintLabel: string | null
+    totalFrames: number
+  } | null
 }
 
 function canObservePlaybackPresentation(watchGeneration: number, generation: number): boolean {
@@ -68,6 +77,102 @@ function canObservePlaybackPresentation(watchGeneration: number, generation: num
 
 function supportsVideoFrameCallback(video: HTMLVideoElement): boolean {
   return typeof video.requestVideoFrameCallback === 'function'
+}
+
+type TrimPreviewPresentationData = NonNullable<PreviewStageProps['trimPreview']>
+
+interface ResolvedTrimPreviewPresentationData {
+  edge: 'left' | 'right'
+  maskPercent: number
+  maskBorderWidth: string
+  maskBackground: string
+  deltaLabel: string
+  constrainedAttr: 'true' | undefined
+}
+
+function resolveTrimPreviewPresentationData(
+  trimPreview: TrimPreviewPresentationData | null,
+): ResolvedTrimPreviewPresentationData | null {
+  if (!trimPreview) return null
+
+  const isStart = trimPreview.handle === 'start'
+  const deltaLabel = `${trimPreview.deltaFrames > 0 ? '+' : ''}${trimPreview.deltaFrames}f`
+  const constraintSuffix =
+    trimPreview.constrained && trimPreview.constraintLabel
+      ? ` · ${trimPreview.constraintLabel}`
+      : ''
+
+  return {
+    edge: isStart ? 'left' : 'right',
+    maskPercent: Math.min(
+      45,
+      Math.max(4, (Math.abs(trimPreview.deltaFrames) / Math.max(1, trimPreview.totalFrames)) * 100),
+    ),
+    maskBorderWidth: isStart ? '0 1px 0 0' : '0 0 0 1px',
+    maskBackground: isStart
+      ? 'linear-gradient(90deg, rgba(251,146,60,.24), transparent)'
+      : 'linear-gradient(270deg, rgba(251,146,60,.24), transparent)',
+    deltaLabel: `${deltaLabel}${constraintSuffix}`,
+    constrainedAttr: trimPreview.constrained ? 'true' : undefined,
+  }
+}
+
+function PreviewMediaLoading({
+  isResolving,
+  trimPreview,
+  label,
+}: {
+  isResolving: boolean
+  trimPreview: TrimPreviewPresentationData | null
+  label: string
+}) {
+  if (!isResolving || trimPreview) return null
+  return (
+    <div className="absolute inset-0 flex items-center justify-center bg-black/50 z-20">
+      <p className="text-white text-sm">{label}</p>
+    </div>
+  )
+}
+
+function TrimPreviewPresentation({
+  trimPreview,
+}: {
+  trimPreview: TrimPreviewPresentationData | null
+}) {
+  const presentation = resolveTrimPreviewPresentationData(trimPreview)
+  if (!trimPreview || !presentation) return null
+
+  return (
+    <div
+      aria-hidden="true"
+      data-trim-preview-presentation
+      data-trim-preview-constrained={presentation.constrainedAttr}
+      data-trim-preview-edit-point-before={trimPreview.editPointBeforeFrame}
+      data-trim-preview-edit-point-after={trimPreview.editPointAfterFrame}
+      className="pointer-events-none absolute inset-0 z-[7] overflow-hidden"
+    >
+      <div
+        data-trim-preview-mask
+        className="absolute inset-y-0 border-orange-200/70"
+        style={{
+          [presentation.edge]: 0,
+          width: `${presentation.maskPercent}%`,
+          borderWidth: presentation.maskBorderWidth,
+          background: presentation.maskBackground,
+        }}
+      />
+      <div
+        data-trim-preview-ghost
+        data-trim-preview-delta={presentation.deltaLabel}
+        className="absolute top-3 rounded-sm border border-white/35 bg-slate-950/75 px-1.5 py-0.5 text-[10px] font-medium text-white shadow-sm"
+        style={{
+          [presentation.edge]: '8px',
+        }}
+      >
+        {presentation.deltaLabel}
+      </div>
+    </div>
+  )
 }
 
 export const PreviewStage = memo(function PreviewStage({
@@ -97,6 +202,7 @@ export const PreviewStage = memo(function PreviewStage({
   perfPanel,
   comparisonOverlay,
   overlayControls,
+  trimPreview = null,
 }: PreviewStageProps) {
   const { t } = useTranslation()
   const useProxy = usePlaybackStore((s) => s.useProxy)
@@ -374,6 +480,7 @@ export const PreviewStage = memo(function PreviewStage({
             <div
               ref={setPixelSnappedPlayerContainerRef}
               data-player-container
+              data-trim-preview-active={trimPreview ? 'true' : undefined}
               className="relative shadow-2xl"
               style={{
                 width: `${playerSize.width}px`,
@@ -386,11 +493,11 @@ export const PreviewStage = memo(function PreviewStage({
               }}
               onDoubleClick={(event) => event.preventDefault()}
             >
-              {isResolving && (
-                <div className="absolute inset-0 flex items-center justify-center bg-black/50 z-20">
-                  <p className="text-white text-sm">{t('preview.stage.loadingMedia')}</p>
-                </div>
-              )}
+              <PreviewMediaLoading
+                isResolving={isResolving}
+                trimPreview={trimPreview}
+                label={t('preview.stage.loadingMedia')}
+              />
 
               {!isResolving && isTimelineEmpty && (
                 <div className="absolute inset-0 z-10 flex items-center justify-center bg-black/35 px-6 text-center pointer-events-none">
@@ -473,6 +580,8 @@ export const PreviewStage = memo(function PreviewStage({
                   inputProps={domTextScrubInputProps}
                 />
               )}
+
+              <TrimPreviewPresentation trimPreview={trimPreview} />
 
               {perfPanel}
               {comparisonOverlay}

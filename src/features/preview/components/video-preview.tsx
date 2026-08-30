@@ -2,6 +2,7 @@ import { useMemo, useCallback, memo, useEffect, useLayoutEffect, useRef, useStat
 import { useRafDeferredValue } from '@/shared/hooks/use-raf-deferred-value'
 import { usePreviewBridgeStore } from '@/shared/state/preview-bridge'
 import { usePlaybackStore } from '@/shared/state/playback'
+import { useTrimPreviewStore } from '@/shared/state/trim-preview'
 import type { ItemEffect } from '@/types/effects'
 import type { TimelineItem } from '@/types/timeline'
 import { GizmoOverlay } from './gizmo-overlay'
@@ -213,6 +214,10 @@ const VideoPreviewBase = memo(function VideoPreviewBase({
   const isCornerPinEditing = useCornerPinStore((s) => s.isEditing)
   const isPowerWindowEditing = usePowerWindowEditorStore((s) => s.isEditing)
   const isSpatialEffectEditing = useSpatialEffectEditorStore((s) => s.isEditing)
+  const trimProjection = useTrimPreviewStore((s) => s.projection)
+  const trimPreviewConstrained = useTrimPreviewStore((s) => s.constrained)
+  const trimPreviewConstraintLabel = useTrimPreviewStore((s) => s.constraintLabel)
+  const trimTransitionIdsToRemove = useTrimPreviewStore((s) => s.transitionIdsToRemove)
   const setCaptureFrame = usePreviewBridgeStore((s) => s.setCaptureFrame)
   const setCaptureFrameImageData = usePreviewBridgeStore((s) => s.setCaptureFrameImageData)
   const setDisplayedFrame = usePreviewBridgeStore((s) => s.setDisplayedFrame)
@@ -317,6 +322,7 @@ const VideoPreviewBase = memo(function VideoPreviewBase({
     fastScrubInputProps,
     fastScrubPreviewItems,
     fastScrubTracksTopologyFingerprint,
+    transitions: previewTransitions,
     sourceBindingIdentity,
     getPreviewTransformOverride,
     getPreviewEffectsOverride,
@@ -337,6 +343,8 @@ const VideoPreviewBase = memo(function VideoPreviewBase({
     blobUrlVersion,
     project,
     playerSize,
+    trimProjection,
+    transitionIdsToRemove: trimTransitionIdsToRemove,
   })
   const domTextScrubOverlayPlan = useMemo(
     () => buildDomTextScrubOverlayPlan(fastScrubScaledTracks, fastScrubScaledKeyframes),
@@ -389,7 +397,7 @@ const VideoPreviewBase = memo(function VideoPreviewBase({
     shouldPreserveHighFidelityBackwardPreview,
   } = usePreviewTransitionModel({
     fps,
-    transitions,
+    transitions: previewTransitions,
     fastScrubScaledTracks,
     fastScrubPreviewItems,
   })
@@ -556,7 +564,10 @@ const VideoPreviewBase = memo(function VideoPreviewBase({
   // Waiting for the timeline-wide effect scan adds a reactive round trip that
   // makes the first neutral-EV drag look stuck until another parameter changes.
   const forceFastScrubOverlay =
-    showGpuEffectsOverlay || isPowerWindowEditing || isSpatialEffectEditing
+    showGpuEffectsOverlay ||
+    isPowerWindowEditing ||
+    isSpatialEffectEditing ||
+    trimProjection !== null
   const previousForceFastScrubOverlayRef = useRef(forceFastScrubOverlay)
 
   // The split comparison is the only render-time branch that needs playback
@@ -1096,6 +1107,19 @@ const VideoPreviewBase = memo(function VideoPreviewBase({
       perfPanel={perfPanel}
       comparisonOverlay={comparisonOverlay}
       overlayControls={overlayControls}
+      trimPreview={
+        trimProjection
+          ? {
+              handle: trimProjection.handle,
+              deltaFrames: trimProjection.requestedDeltaFrames,
+              editPointBeforeFrame: trimProjection.timeline.editPointBeforeFrame,
+              editPointAfterFrame: trimProjection.timeline.editPointAfterFrame,
+              constrained: trimPreviewConstrained,
+              constraintLabel: trimPreviewConstraintLabel,
+              totalFrames,
+            }
+          : null
+      }
     />
   )
 })

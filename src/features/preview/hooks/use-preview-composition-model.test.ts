@@ -2,6 +2,7 @@
 
 import { describe, expect, it } from 'vite-plus/test'
 import type { TimelineTrack } from '@/types/timeline'
+import { projectTrimItem } from '@/shared/timeline/trim-preview'
 import {
   buildPreviewSourceBindings,
   buildPreviewCompositionData,
@@ -177,6 +178,81 @@ describe('mergeLiveItemPresentation', () => {
 })
 
 describe('buildPreviewCompositionData', () => {
+  it('renders a trim projection without replacing the authoritative track snapshot', () => {
+    const clip = {
+      id: 'clip-1',
+      trackId: 'track-1',
+      type: 'video' as const,
+      mediaId: 'media-1',
+      src: '',
+      label: 'Clip',
+      from: 10,
+      durationInFrames: 60,
+      sourceStart: 12,
+      sourceEnd: 72,
+      sourceDuration: 120,
+      sourceFps: 60,
+      speed: 1.5,
+    }
+    const track: TimelineTrack = {
+      id: 'track-1',
+      name: 'Video',
+      height: 80,
+      locked: false,
+      visible: true,
+      muted: false,
+      solo: false,
+      order: 1,
+      items: [clip],
+    }
+    const projected = projectTrimItem(clip, 'start', 10, { timelineFps: 30 })
+    const result = buildPreviewCompositionData({
+      combinedTracks: [track],
+      fps: 30,
+      items: track.items,
+      keyframes: [],
+      transitions: [
+        {
+          id: 'transition-1',
+          type: 'crossfade',
+          presentation: 'fade',
+          timing: 'linear',
+          leftClipId: clip.id,
+          rightClipId: 'other',
+          trackId: track.id,
+          durationInFrames: 8,
+        },
+      ],
+      resolvedUrls: new Map([['media-1', 'blob://video']]),
+      useProxy: false,
+      blobUrlVersion: 0,
+      project: { width: 1920, height: 1080, backgroundColor: '#000000' },
+      trimProjection: {
+        itemId: clip.id,
+        handle: 'start',
+        mode: 'trim',
+        requestedDeltaFrames: 10,
+        timeline: {
+          deltaFrames: 10,
+          editPointBeforeFrame: 10,
+          editPointAfterFrame: 20,
+          rippleShiftFrames: 0,
+          updates: [projected],
+        },
+        source: { boundaries: [] },
+      },
+      transitionIdsToRemove: ['transition-1'],
+    })
+
+    expect(track.items[0]).toBe(clip)
+    expect(result.fastScrubPreviewItems[0]).toMatchObject({
+      from: projected.from,
+      durationInFrames: projected.durationInFrames,
+      sourceStart: projected.sourceStart,
+    })
+    expect(result.inputProps.transitions).toEqual([])
+  })
+
   it('uses original media for playback and fast scrubbing when proxies are disabled', () => {
     const track: TimelineTrack = {
       id: 'track-1',
