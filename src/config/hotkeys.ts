@@ -57,8 +57,8 @@ export const HOTKEYS = {
   // Tools
   SELECTION_TOOL: 'v',
   TRIM_EDIT_TOOL: 't',
-  RAZOR_TOOL: 'c',
-  SPLIT_AT_PLAYHEAD: 'shift+c',
+  RAZOR_TOOL: 'shift+c',
+  SPLIT_AT_PLAYHEAD: 'c',
   RATE_STRETCH_TOOL: 'r',
   SLIP_TOOL: 'y',
   SLIDE_TOOL: 'u',
@@ -276,6 +276,10 @@ const HOTKEY_COMMAND_ALIASES: Partial<Record<string, HotkeyKey>> = {
   SPLIT_AT_CURSOR: 'SPLIT_AT_PLAYHEAD',
 }
 
+const LEGACY_HOTKEY_LABELS: Record<string, HotkeyKey> = {
+  'razor tool': 'RAZOR_TOOL',
+}
+
 const BROWSER_HOSTILE_HOTKEYS: readonly BrowserHostileHotkey[] = [
   { binding: 'alt+left', browserAction: 'Back navigation' },
   { binding: 'alt+right', browserAction: 'Forward navigation' },
@@ -344,7 +348,7 @@ export const HOTKEY_DESCRIPTIONS: Record<HotkeyKey, string> = {
   PREVIOUS_SNAP_POINT: 'Previous snap point',
 
   // Timeline editing
-  SPLIT_AT_PLAYHEAD_ALT: 'Split at playhead',
+  SPLIT_AT_PLAYHEAD_ALT: 'Split all items at playhead',
   JOIN_ITEMS: 'Join selected clips',
   DELETE_SELECTED: 'Delete selected items',
   DELETE_SELECTED_ALT: 'Delete selected items (alternative)',
@@ -382,8 +386,8 @@ export const HOTKEY_DESCRIPTIONS: Record<HotkeyKey, string> = {
   // Tools
   SELECTION_TOOL: 'Selection tool',
   TRIM_EDIT_TOOL: 'Trim edit tool',
-  RAZOR_TOOL: 'Razor tool',
-  SPLIT_AT_PLAYHEAD: 'Split at playhead',
+  RAZOR_TOOL: 'Razor tool (persistent)',
+  SPLIT_AT_PLAYHEAD: 'Split hovered clip at pointer',
   RATE_STRETCH_TOOL: 'Rate stretch tool',
   SLIP_TOOL: 'Slip tool',
   SLIDE_TOOL: 'Slide tool',
@@ -554,6 +558,24 @@ function normalizeHotkeyCommandLabel(label: string): string {
   return label.trim().toLowerCase()
 }
 
+function resolveLegacyHotkeyImportCommand(command: HotkeyImportCommand): HotkeyKey | null {
+  if (typeof command.label !== 'string') return null
+
+  const normalizedLabel = normalizeHotkeyCommandLabel(command.label)
+  const legacyLabelMatch = LEGACY_HOTKEY_LABELS[normalizedLabel]
+  if (legacyLabelMatch) return legacyLabelMatch
+
+  // Both split commands historically exported the same label. Use the old
+  // default binding to preserve the command when an older preset omitted its
+  // command id but retained metadata.
+  if (normalizedLabel !== 'split at playhead') return null
+
+  const legacyDefault = normalizeHotkeyBinding(command.defaultBinding ?? '')
+  return legacyDefault === normalizeHotkeyBinding(HOTKEYS.SPLIT_AT_PLAYHEAD_ALT)
+    ? 'SPLIT_AT_PLAYHEAD_ALT'
+    : 'SPLIT_AT_PLAYHEAD'
+}
+
 function createHotkeyCommandLookup(): HotkeyCommandLookup {
   const byLabel = new Map<string, HotkeyKey>()
   const byDefaultBinding = new Map<string, HotkeyKey>()
@@ -569,6 +591,8 @@ function createHotkeyCommandLookup(): HotkeyCommandLookup {
   }
 }
 
+// Legacy preset metadata has to distinguish the two historical split commands.
+// fallow-ignore-next-line complexity
 function resolveHotkeyImportCommand(command: HotkeyImportCommand): {
   key: HotkeyKey | null
   wasRemapped: boolean
@@ -591,6 +615,14 @@ function resolveHotkeyImportCommand(command: HotkeyImportCommand): {
   }
 
   if (typeof command.label === 'string') {
+    const legacyCommand = resolveLegacyHotkeyImportCommand(command)
+    if (legacyCommand) {
+      return {
+        key: legacyCommand,
+        wasRemapped: true,
+      }
+    }
+
     const labelMatch = HOTKEY_COMMAND_LOOKUP.byLabel.get(normalizeHotkeyCommandLabel(command.label))
     if (labelMatch) {
       return {

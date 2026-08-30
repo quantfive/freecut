@@ -1,7 +1,9 @@
 // @vitest-environment node
 
-import { beforeEach, describe, expect, it } from 'vite-plus/test'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vite-plus/test'
+import { toast } from 'sonner'
 import type { AudioItem, TextItem, TimelineTrack, VideoItem } from '@/types/timeline'
+import type { Transition } from '@/types/transition'
 import { useItemsStore } from '../items-store'
 import { useTransitionsStore } from '../transitions-store'
 import { useKeyframesStore } from '../keyframes-store'
@@ -129,6 +131,95 @@ describe('linked timeline items', () => {
     expect(rightVideo?.linkedGroupId).toBe(rightAudio?.linkedGroupId)
     expect(leftVideo?.linkedGroupId).not.toBe(rightVideo?.linkedGroupId)
     expect(useSelectionStore.getState().selectedItemIds).toEqual(['video-1', 'audio-1'])
+    expect(useTimelineCommandStore.getState().undoStack).toHaveLength(1)
+
+    useTimelineCommandStore.getState().undo()
+    expect(useItemsStore.getState().items).toEqual([makeVideoItem(), makeAudioItem()])
+  })
+
+  it('rejects a malformed linked cohort atomically with actionable feedback', () => {
+    const warning = vi.spyOn(toast, 'warning').mockImplementation(() => '')
+    useItemsStore
+      .getState()
+      .setItems([
+        makeVideoItem({ durationInFrames: 60 }),
+        makeAudioItem({ from: 10, durationInFrames: 50 }),
+      ])
+    const before = structuredClone(useItemsStore.getState().items)
+
+    expect(splitItem('video-1', 30)).toBeNull()
+    expect(useItemsStore.getState().items).toEqual(before)
+    expect(useTimelineCommandStore.getState().undoStack).toHaveLength(0)
+    expect(warning).toHaveBeenCalledWith(expect.stringContaining('linked'))
+  })
+
+  it.each([
+    {
+      name: 'an exact edge',
+      prepare: () => {
+        useItemsStore.getState().setItems([makeVideoItem()])
+        return 0
+      },
+      message: 'edges',
+    },
+    {
+      name: 'a non-finite frame',
+      prepare: () => {
+        useItemsStore.getState().setItems([makeVideoItem()])
+        return Number.NaN
+      },
+      message: 'inside',
+    },
+    {
+      name: 'a transition zone',
+      prepare: () => {
+        useItemsStore
+          .getState()
+          .setItems([
+            makeVideoItem(),
+            makeVideoItem({ id: 'video-2', from: 60, linkedGroupId: undefined }),
+          ])
+        const transition: Transition = {
+          id: 'transition-1',
+          type: 'crossfade',
+          presentation: 'fade',
+          timing: 'linear',
+          leftClipId: 'video-1',
+          rightClipId: 'video-2',
+          trackId: 'video-track',
+          durationInFrames: 12,
+        }
+        useTransitionsStore.getState().setTransitions([transition])
+        return 56
+      },
+      message: 'transition zone',
+    },
+    {
+      name: 'an effectively locked track',
+      prepare: () => {
+        useItemsStore
+          .getState()
+          .setTracks([
+            makeTrack({ id: 'video-track', name: 'V1', order: 0, kind: 'video', locked: true }),
+          ])
+        useItemsStore.getState().setItems([makeVideoItem()])
+        return 30
+      },
+      message: 'locked',
+    },
+  ])('rejects and reports $name without mutating', ({ prepare, message }) => {
+    const warning = vi.spyOn(toast, 'warning').mockImplementation(() => '')
+    const splitFrame = prepare()
+    const before = structuredClone(useItemsStore.getState().items)
+
+    expect(splitItem('video-1', splitFrame)).toBeNull()
+    expect(useItemsStore.getState().items).toEqual(before)
+    expect(useTimelineCommandStore.getState().undoStack).toHaveLength(0)
+    expect(warning).toHaveBeenCalledWith(expect.stringContaining(message))
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
   })
 
   it('reverses synchronized video/audio items together even when linked selection is disabled', () => {
@@ -296,10 +387,12 @@ describe('linked timeline items', () => {
       parentTrackId: group.id,
     })
     useItemsStore.getState().setTracks([group, firstChild, secondChild])
-    useItemsStore.getState().setItems([
-      makeVideoItem({ id: 'child-item-1', trackId: firstChild.id, linkedGroupId: undefined }),
-      makeVideoItem({ id: 'child-item-2', trackId: secondChild.id, linkedGroupId: undefined }),
-    ])
+    useItemsStore
+      .getState()
+      .setItems([
+        makeVideoItem({ id: 'child-item-1', trackId: firstChild.id, linkedGroupId: undefined }),
+        makeVideoItem({ id: 'child-item-2', trackId: secondChild.id, linkedGroupId: undefined }),
+      ])
 
     removeItems(['child-item-1'])
     expect(useItemsStore.getState().tracks.map((track) => track.id)).toEqual([

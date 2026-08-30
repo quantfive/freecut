@@ -130,8 +130,12 @@ export const HOTKEY_EDITOR_SECTIONS: readonly HotkeyEditorSection[] = [
     blurbKey: 'projects.settings.hotkeys.sections.editing.blurb',
     items: [
       {
+        labelKey: 'projects.settings.hotkeys.items.splitAtCursor',
+        keys: ['SPLIT_AT_PLAYHEAD'],
+      },
+      {
         labelKey: 'projects.settings.hotkeys.items.splitAtPlayhead',
-        keys: ['SPLIT_AT_PLAYHEAD', 'SPLIT_AT_PLAYHEAD_ALT'],
+        keys: ['SPLIT_AT_PLAYHEAD_ALT'],
       },
       {
         labelKey: 'projects.settings.hotkeys.items.joinSelectedClips',

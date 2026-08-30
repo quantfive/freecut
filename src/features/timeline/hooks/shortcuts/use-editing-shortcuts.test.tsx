@@ -282,7 +282,7 @@ describe('useEditingShortcuts delete ownership', () => {
     })
     usePlaybackStore.setState({
       currentFrame: 50,
-      previewFrame: null,
+      previewFrame: 12,
       previewItemId: null,
     })
 

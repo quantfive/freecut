@@ -33,6 +33,7 @@ import {
 import { isRateStretchableItem } from '../../hooks/use-rate-stretch'
 import { getTimelineClipLabelRowHeightPx } from './hover-layout'
 import { emitUiSound } from '@/shared/ui/ui-sound'
+import { isTimelinePointerControl } from '../../utils/timeline-pointer'
 import type { useTimelineDrag } from '../../hooks/use-timeline-drag'
 import type { useTimelineTrim } from '../../hooks/use-timeline-trim'
 import type { useRateStretch } from '../../hooks/use-rate-stretch'
@@ -71,6 +72,31 @@ export interface TimelineItemPointerHandlers {
   handleSmartTrimStart: (e: React.MouseEvent, handle: 'start' | 'end') => void
 }
 
+function shouldSeekFromTimelineItemClick({
+  activeTool,
+  isTrimming,
+  isStretching,
+  isSlipSlideActive,
+  hoveredEdge,
+  isRecording,
+}: {
+  activeTool: SelectionState['activeTool']
+  isTrimming: boolean
+  isStretching: boolean
+  isSlipSlideActive: boolean
+  hoveredEdge: 'start' | 'end' | null
+  isRecording: boolean
+}): boolean {
+  return (
+    activeTool === 'select' &&
+    !isTrimming &&
+    !isStretching &&
+    !isSlipSlideActive &&
+    hoveredEdge === null &&
+    !isRecording
+  )
+}
+
 /**
  * The pointer-gesture router for a timeline clip. Resolves click / double-click /
  * mouse-down / smart-trim-start into the correct action based on the active tool
@@ -99,8 +125,15 @@ export function useTimelineItemPointerHandlers({
   setPointerHint,
 }: TimelineItemPointerHandlersInput): TimelineItemPointerHandlers {
   const handleClick = useCallback(
+    // Clip clicks route selection, split, seek, and edit gestures in one event
+    // boundary so those operations cannot race each other.
+    // fallow-ignore-next-line complexity
     (e: React.MouseEvent) => {
       e.stopPropagation()
+
+      const pointerTarget =
+        typeof Element !== 'undefined' && e.target instanceof Element ? e.target : null
+      if (e.defaultPrevented || isTimelinePointerControl(pointerTarget)) return
 
       if (trackLocked) {
         emitUiSound('error')
@@ -154,7 +187,16 @@ export function useTimelineItemPointerHandlers({
       // seek from this click's own geometry. The hover skimmer can still hold
       // the previous pointer event (including the next clip boundary), so it
       // must never own the committed click frame.
-      if (!isMicRecordingActive(useMicRecordingStore.getState().status)) {
+      if (
+        shouldSeekFromTimelineItemClick({
+          activeTool: activeToolRef.current,
+          isTrimming,
+          isStretching,
+          isSlipSlideActive,
+          hoveredEdge,
+          isRecording: isMicRecordingActive(useMicRecordingStore.getState().status),
+        })
+      ) {
         const playback = usePlaybackStore.getState()
         const rect = e.currentTarget.getBoundingClientRect()
         const relativeX = Math.max(0, Math.min(e.clientX - rect.left, rect.width))
@@ -207,7 +249,18 @@ export function useTimelineItemPointerHandlers({
         selectItems(targetIds)
       }
     },
-    [activeToolRef, trackLocked, item.durationInFrames, item.from, item.id, smartTrimIntentRef],
+    [
+      activeToolRef,
+      hoveredEdge,
+      isSlipSlideActive,
+      isStretching,
+      isTrimming,
+      trackLocked,
+      item.durationInFrames,
+      item.from,
+      item.id,
+      smartTrimIntentRef,
+    ],
   )
 
   // Double-click: open media in source monitor with clip's source range as I/O

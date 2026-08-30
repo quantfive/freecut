@@ -22,6 +22,8 @@ import type { TimelineShortcutCallbacks } from '../use-timeline-shortcuts'
 import { useClearKeyframesDialogStore } from '@/shared/state/clear-keyframes-dialog'
 import { useKeyframeSelectionStore } from '../../stores/keyframe-selection-store'
 import { useDeleteShortcuts } from './use-delete-shortcuts'
+import { isMicRecordingActive, useMicRecordingStore } from '@/shared/state/mic-recording-store'
+import { notifySplitRejection } from '../../stores/actions/item-actions'
 
 export function useEditingShortcuts(callbacks: TimelineShortcutCallbacks) {
   const selectedItemIds = useSelectionStore((s) => s.selectedItemIds)
@@ -261,12 +263,15 @@ export function useEditingShortcuts(callbacks: TimelineShortcutCallbacks) {
 
   const splitAtPlayhead = useCallback((event: KeyboardEvent) => {
     event.preventDefault()
-    const { previewFrame, currentFrame } = usePlaybackStore.getState()
-    const splitFrame = previewFrame ?? currentFrame
-    splitAllItemsAtFrame(splitFrame)
+    if (isMicRecordingActive(useMicRecordingStore.getState().status)) {
+      notifySplitRejection('recording')
+      return
+    }
+    const { currentFrame } = usePlaybackStore.getState()
+    splitAllItemsAtFrame(currentFrame)
   }, [])
 
-  // Editing: Alt+C - Split all items at gray playhead (or main playhead)
+  // Editing: Alt+C - Split all eligible items at the committed playhead
   useCommandHotkey(
     'SPLIT_AT_PLAYHEAD_ALT',
     splitAtPlayhead,

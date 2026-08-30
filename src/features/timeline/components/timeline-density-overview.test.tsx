@@ -4,6 +4,7 @@ import { useEditorStore } from '@/shared/state/editor'
 import { useSelectionStore } from '@/shared/state/selection'
 import type { TimelineItem } from '@/types/timeline'
 import { useLinkedEditPreviewStore } from '../stores/linked-edit-preview-store'
+import { clearTimelineHover, getTimelineHover } from '../utils/timeline-hover-state'
 import { TimelineDensityOverview } from './timeline-density-overview'
 
 const overviewItems: TimelineItem[] = [
@@ -35,6 +36,7 @@ describe('TimelineDensityOverview', () => {
     useSelectionStore.getState().setActiveTool('select')
     useEditorStore.setState({ linkedSelectionEnabled: false })
     useLinkedEditPreviewStore.getState().clear()
+    clearTimelineHover()
     vi.stubGlobal('requestAnimationFrame', () => 1)
   })
 
@@ -66,18 +68,41 @@ describe('TimelineDensityOverview', () => {
         trackHidden={false}
       />,
     )
-    const buckets = view.container.querySelectorAll<HTMLElement>(
-      '[data-timeline-density-bucket]',
-    )
+    const buckets = view.container.querySelectorAll<HTMLElement>('[data-timeline-density-bucket]')
 
     expect(buckets[0]?.style.left).toContain('--timeline-percent-per-frame')
     expect(buckets[0]?.style.width).toContain('--timeline-percent-per-frame')
   })
 
+  it('records the exact item and frame under a dense timeline pointer', () => {
+    const view = render(
+      <TimelineDensityOverview
+        items={overviewItems}
+        selectedItemIds={new Set()}
+        trackLocked={false}
+        trackHidden={false}
+      />,
+    )
+    const bucket = view.container.querySelector<HTMLElement>('[data-timeline-density-bucket]')!
+    vi.spyOn(bucket, 'getBoundingClientRect').mockReturnValue({
+      left: 0,
+      right: 60,
+      top: 0,
+      bottom: 40,
+      width: 60,
+      height: 40,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    })
+
+    fireEvent.mouseMove(bucket, { clientX: 30, clientY: 10 })
+
+    expect(getTimelineHover()).toEqual({ itemId: 'overview-1', frame: 15 })
+  })
+
   it('culls density shells to linked edit preview geometry', () => {
-    useLinkedEditPreviewStore.getState().setUpdates([
-      { id: 'overview-1', durationInFrames: 12 },
-    ])
+    useLinkedEditPreviewStore.getState().setUpdates([{ id: 'overview-1', durationInFrames: 12 }])
 
     const view = render(
       <TimelineDensityOverview
@@ -87,13 +112,9 @@ describe('TimelineDensityOverview', () => {
         trackHidden={false}
       />,
     )
-    const bucket = view.container.querySelector<HTMLElement>(
-      '[data-timeline-density-bucket]',
-    )
+    const bucket = view.container.querySelector<HTMLElement>('[data-timeline-density-bucket]')
 
-    expect(bucket?.style.width).toBe(
-      'calc(12 * var(--timeline-percent-per-frame, 0%))',
-    )
+    expect(bucket?.style.width).toBe('calc(12 * var(--timeline-percent-per-frame, 0%))')
     expect(bucket?.className).toContain('ring-primary')
   })
 
