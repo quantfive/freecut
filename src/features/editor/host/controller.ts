@@ -895,7 +895,16 @@ export class HostEditorController {
       return { status: 'rejected', snapshot: this.getSnapshot(), result: localResult }
     }
 
-    const remoteResult = await this.host.submitEdit(batch)
+    let remoteResult: HostEditResult
+    try {
+      remoteResult = await this.host.submitEdit(batch)
+    } catch (error) {
+      // The private adapter is only a validation aid. A transport failure has
+      // no authoritative receipt, so discard its speculative revision before
+      // allowing a retry derived from the unchanged host snapshot.
+      this.adapter.replaceDocument(freeCutDocumentToControlledDocument(this.snapshot.timeline))
+      throw error
+    }
     this.replaceAuthoritativeSnapshot(remoteResult.snapshot)
     if (remoteResult.status === 'conflict') {
       this.notify({

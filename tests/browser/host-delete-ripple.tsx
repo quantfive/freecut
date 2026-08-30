@@ -10,6 +10,7 @@ declare global {
   interface Window {
     __freecutDeleteRippleFixture: {
       selectClip(): void
+      rejectNextDelete(): void
       getLastBatch(): EditCommandBatch | null
       releaseReceipt(): void
     }
@@ -129,6 +130,7 @@ function fixtureSnapshot(revision = 0): EmbeddedEditorSnapshot {
 let currentSnapshot = fixtureSnapshot()
 let lastBatch: EditCommandBatch | null = null
 let releaseReceipt: (() => void) | null = null
+let rejectNextDelete = false
 
 const host: EditorHost = {
   capabilities: { 'timeline.remove': true, 'media.resolve': false },
@@ -138,6 +140,10 @@ const host: EditorHost = {
     lastBatch = batch
     const command = batch.commands[0]
     if (command?.type !== 'ripple_delete') throw new Error('Expected ripple delete')
+    if (rejectNextDelete) {
+      rejectNextDelete = false
+      return Promise.reject(new Error('Host rejected the timeline delete; retry is available'))
+    }
     currentSnapshot = fixtureSnapshot(1)
     return new Promise((resolve) => {
       releaseReceipt = () => {
@@ -168,6 +174,9 @@ const host: EditorHost = {
 
 window.__freecutDeleteRippleFixture = {
   selectClip: () => useSelectionStore.getState().selectItems(['video-1']),
+  rejectNextDelete: () => {
+    rejectNextDelete = true
+  },
   getLastBatch: () => lastBatch,
   releaseReceipt: () => releaseReceipt?.(),
 }

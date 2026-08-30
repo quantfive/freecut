@@ -258,6 +258,78 @@ describe('embedded FreeCut host controller', () => {
     expect(controller.getSnapshot().timeline.tracks[0]!.items[0]).toMatchObject({ from: 30 })
   })
 
+  it('restores the validation adapter after transport rejection so Delete can retry', async () => {
+    const initial = snapshot()
+    let attempts = 0
+    const submitEdit = vi.fn(async (_batch: EditCommandBatch): Promise<HostEditResult> => {
+      attempts += 1
+      if (attempts === 1) throw new Error('host transport unavailable')
+      return {
+        status: 'applied',
+        snapshot: initial,
+        result: { status: 'applied' } as HostAppliedEditResult['result'],
+      }
+    })
+    const host: EditorHost = {
+      capabilities: DEFAULT_HOST_CAPABILITIES,
+      load: () => initial,
+      resolveMedia: () => null,
+      submitEdit,
+    }
+    const controller = new HostEditorController(host, initial)
+
+    await expect(controller.requestRippleDelete(['clip-1'])).rejects.toThrow(
+      'host transport unavailable',
+    )
+    await expect(controller.requestRippleDelete(['clip-1'])).resolves.toMatchObject({
+      status: 'applied',
+    })
+    expect(submitEdit).toHaveBeenCalledTimes(2)
+  })
+
+  it('preserves regular text linked-group metadata through a supported host move', () => {
+    const initial = snapshot({
+      tracks: [
+        {
+          id: 'text-track',
+          kind: 'video',
+          name: 'Text',
+          locked: false,
+          muted: false,
+          items: [
+            {
+              type: 'text',
+              id: 'text-1',
+              trackId: 'text-track',
+              from: 0,
+              durationInFrames: 30,
+              text: 'Linked text',
+              linkedGroupId: 'cohort-text',
+            },
+          ],
+        },
+      ],
+    })
+    const native = hostSnapshotToNativeTimeline(initial)
+    const moved = nativeTimelineToFrameDocument(
+      {
+        tracks: native.tracks,
+        items: native.items.map((item) => (item.id === 'text-1' ? { ...item, from: 30 } : item)),
+        fps: native.fps,
+      },
+      initial.timeline,
+    )
+
+    expect(moved).toMatchObject({ ok: true })
+    if (!moved.ok) return
+    expect(moved.document.tracks[0]?.items[0]).toMatchObject({ linkedGroupId: 'cohort-text' })
+    const derived = deriveSupportedHostEdit(initial.timeline, moved.document, {
+      operationId: 'operation-text-move',
+      idempotencyKey: 'idempotency-text-move',
+    })
+    expect(derived.batch?.commands[0]).toMatchObject({ type: 'move_item', item_id: 'text-1' })
+  })
+
   it('produces one authoritative ripple command from selected cohort anchors', () => {
     const initial = snapshot({
       tracks: [

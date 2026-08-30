@@ -64,4 +64,34 @@ test.describe('host authoritative delete/ripple', () => {
     await page.evaluate(() => window.__freecutDeleteRippleFixture.releaseReceipt())
     await expect(page.locator('[data-timeline-item="true"][data-item-id="video-1"]')).toHaveCount(0)
   })
+
+  test('rejected Delete keeps state and allows a successful retry', async ({ page }) => {
+    await page.goto('/tests/browser/host-delete-ripple.html')
+    await page.waitForSelector('[data-freecut-editor-surface="host"]')
+    await page.waitForFunction(() => Boolean(window.__freecutDeleteRippleFixture))
+
+    await page.evaluate(() => {
+      window.__freecutDeleteRippleFixture.selectClip()
+      window.__freecutDeleteRippleFixture.rejectNextDelete()
+    })
+    await page.keyboard.press('Delete')
+    await expect(page.locator('[data-timeline-item="true"][data-item-id="video-1"]')).toHaveCount(1)
+    await expect(page.locator('body')).toHaveAttribute(
+      'data-last-notice',
+      'Host rejected the timeline delete; retry is available',
+    )
+
+    const rejectedBatch = await page.evaluate(() =>
+      window.__freecutDeleteRippleFixture.getLastBatch(),
+    )
+    await page.keyboard.press('Delete')
+    await page.waitForFunction(
+      (previousId) =>
+        window.__freecutDeleteRippleFixture.getLastBatch()?.idempotency_key !== previousId,
+      rejectedBatch?.idempotency_key,
+    )
+    await page.evaluate(() => window.__freecutDeleteRippleFixture.releaseReceipt())
+    await expect(page.locator('[data-timeline-item="true"][data-item-id="video-1"]')).toHaveCount(0)
+    await page.screenshot({ path: 'artifacts/host-delete-ripple-retry.png', fullPage: true })
+  })
 })
