@@ -414,6 +414,68 @@ export interface DerivedHostEdit {
 }
 
 /**
+ * Produce the one-command payload used by the host UI Delete action.
+ *
+ * The selected IDs are anchors, not an expanded local deletion set. The
+ * authority uses them with the explicit ripple intent to resolve linked
+ * A/V/caption cohorts and synchronized unlocked tracks. Requiring one shared
+ * interval keeps this UI gesture one command/one receipt and avoids guessing
+ * how disjoint selections should be merged.
+ */
+export function deriveRippleDelete(
+  previous: FreeCutFrameDocument,
+  itemIds: readonly string[],
+  options: { operationId?: string; idempotencyKey?: string } = {},
+): DerivedHostEdit {
+  const ids = [...new Set(itemIds)]
+  if (ids.length === 0) return { batch: null, reason: 'No timeline item is selected' }
+
+  const items = itemMap(previous)
+  const selected = ids.map((id) => items.get(id))
+  if (selected.some((item) => item === undefined)) {
+    return { batch: null, reason: 'The selected timeline item is no longer authoritative' }
+  }
+
+  const first = selected[0]!
+  const startFrame = first.from
+  const endFrame = first.from + first.durationInFrames
+  if (
+    selected.some(
+      (item) => item!.from !== startFrame || item!.from + item!.durationInFrames !== endFrame,
+    )
+  ) {
+    return {
+      batch: null,
+      reason: 'Ripple delete requires selected items to share one timeline interval',
+    }
+  }
+
+  const operationId = options.operationId ?? `op-${crypto.randomUUID()}`
+  const idempotencyKey = options.idempotencyKey ?? `idem-${crypto.randomUUID()}`
+  return {
+    batch: {
+      contract_version: 1,
+      timeline_id: previous.timelineId,
+      operation_id: operationId,
+      idempotency_key: idempotencyKey,
+      base_revision: previous.revision,
+      preconditions: selected.map((item) => preconditionForItem(item!, previous.fps)),
+      commands: [
+        {
+          command_id: `ripple-delete-${operationId}`,
+          type: 'ripple_delete',
+          start_us: framesToMicroseconds(startFrame, previous.fps),
+          end_us: framesToMicroseconds(endFrame, previous.fps),
+          track_ids: null,
+          item_ids: ids,
+          intent: 'ripple',
+        },
+      ],
+    },
+  }
+}
+
+/**
  * Derive one bounded command batch from the real editor's frame-native store
  * change.  Ambiguous or unsupported changes fail closed instead of being
  * silently ignored or written to local persistence.
@@ -794,6 +856,22 @@ export class HostEditorController {
   async resolveMedia(locator: MediaLocator): Promise<ResolvedMediaLocator | null> {
     if (!isHostCapabilityEnabled(this.capabilities, 'media.resolve')) return null
     return this.host.resolveMedia(locator)
+  }
+
+  async requestRippleDelete(itemIds: readonly string[]): Promise<HostControllerResult> {
+    const derived = deriveRippleDelete(this.snapshot.timeline, itemIds)
+    if (!derived.batch) {
+      this.notify({
+        kind: 'unsupported',
+        message: derived.reason ?? 'Ripple delete is unavailable',
+      })
+      return {
+        status: 'unsupported',
+        snapshot: this.getSnapshot(),
+        reason: derived.reason ?? 'Ripple delete is unavailable',
+      }
+    }
+    return this.submitEdit(derived.batch)
   }
 
   async submitEdit(batch: EditCommandBatch): Promise<HostControllerResult> {

@@ -51,6 +51,7 @@ import {
 import { resolveMediaUrl } from '../../deps/media-library-resolver'
 import { useBentoLayoutDialogStore } from '../bento-layout-dialog-store'
 import { createLogger } from '@/shared/logging/logger'
+import { useEditorHostContext } from '../../deps/editor'
 import { saveScenes } from '@/infrastructure/storage/workspace-fs/scenes'
 import {
   analyzeFillerWordsForItems,
@@ -123,6 +124,7 @@ export function useTimelineItemActions({
   rightNeighbor,
   segmentOverlays,
 }: UseTimelineItemActionsParams) {
+  const { mode: editorMode, host, timeline: hostTimeline } = useEditorHostContext()
   const getCanJoinSelected = useCallback(() => getSelectionCapabilities().canJoin, [])
 
   const getCanLinkSelected = useCallback(() => getSelectionCapabilities().canLink, [])
@@ -157,9 +159,14 @@ export function useTimelineItemActions({
   const handleDelete = useCallback(() => {
     const selectedItemIds = useSelectionStore.getState().selectedItemIds
     if (selectedItemIds.length > 0) {
+      if (editorMode === 'host') {
+        if (hostTimeline) void hostTimeline.requestRippleDelete(selectedItemIds)
+        else host?.notify?.({ kind: 'unsupported', message: 'Timeline delete is unavailable' })
+        return
+      }
       useTimelineStore.getState().removeItems(selectedItemIds)
     }
-  }, [])
+  }, [editorMode, host, hostTimeline])
 
   const handleRippleDelete = useCallback(() => {
     const selectedItemIds = useSelectionStore.getState().selectedItemIds

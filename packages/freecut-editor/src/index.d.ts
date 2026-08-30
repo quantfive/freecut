@@ -472,6 +472,11 @@ export interface EditorHostContextValue {
   mode: 'local' | 'host'
   capabilities: EditorCapabilityMap
   host?: EditorHost
+  timeline?: HostTimelineEditPort
+}
+
+export interface HostTimelineEditPort {
+  requestRippleDelete(itemIds: readonly string[]): Promise<void> | void
 }
 
 export interface EditorHostProviderProps {

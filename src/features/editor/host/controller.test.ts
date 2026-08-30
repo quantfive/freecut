@@ -24,6 +24,7 @@ import {
 import {
   HostEditorController,
   NO_SUPPORTED_EDIT_REASON,
+  deriveRippleDelete,
   deriveSupportedHostEdit,
 } from './controller'
 import { framesToMicroseconds } from '@/features/editor/codepress/timing'
@@ -255,6 +256,98 @@ describe('embedded FreeCut host controller', () => {
     expect(harness.submitEdit).toHaveBeenCalledWith(batch)
     expect(controller.getSnapshot().timeline.revision).toBe(1)
     expect(controller.getSnapshot().timeline.tracks[0]!.items[0]).toMatchObject({ from: 30 })
+  })
+
+  it('produces one authoritative ripple command from selected cohort anchors', () => {
+    const initial = snapshot({
+      tracks: [
+        {
+          id: 'track-video',
+          kind: 'video',
+          name: 'Video',
+          locked: false,
+          muted: false,
+          syncLock: true,
+          items: [
+            {
+              type: 'video',
+              id: 'video-1',
+              trackId: 'track-video',
+              mediaId: 'media-1',
+              linkedGroupId: 'cohort-1',
+              from: 30,
+              durationInFrames: 60,
+              sourceStart: 0,
+              sourceEnd: 60,
+            },
+          ],
+        },
+        {
+          id: 'track-audio',
+          kind: 'audio',
+          name: 'Audio',
+          locked: false,
+          muted: false,
+          syncLock: true,
+          items: [
+            {
+              type: 'audio',
+              id: 'audio-1',
+              trackId: 'track-audio',
+              mediaId: 'media-1',
+              linkedGroupId: 'cohort-1',
+              from: 30,
+              durationInFrames: 60,
+              sourceStart: 0,
+              sourceEnd: 60,
+            },
+          ],
+        },
+      ],
+    })
+
+    const derived = deriveRippleDelete(initial.timeline, ['video-1'], {
+      operationId: 'operation-delete-1',
+      idempotencyKey: 'idempotency-delete-1',
+    })
+
+    expect(derived.batch).toMatchObject({
+      timeline_id: 'timeline-1',
+      base_revision: 0,
+      preconditions: [
+        {
+          type: 'item_at',
+          item_id: 'video-1',
+          timeline_start_us: 1_000_000,
+          timeline_end_us: 3_000_000,
+        },
+      ],
+      commands: [
+        {
+          command_id: 'ripple-delete-operation-delete-1',
+          type: 'ripple_delete',
+          start_us: 1_000_000,
+          end_us: 3_000_000,
+          track_ids: null,
+          item_ids: ['video-1'],
+          intent: 'ripple',
+        },
+      ],
+    })
+  })
+
+  it('submits the UI ripple producer without changing stores before the receipt', async () => {
+    const initial = snapshot()
+    const harness = createFakeHost(initial)
+    const controller = new HostEditorController(harness.host, initial)
+
+    const result = await controller.requestRippleDelete(['clip-1'])
+
+    expect(result.status).toBe('applied')
+    expect(harness.submitEdit).toHaveBeenCalledOnce()
+    expect(harness.submitEdit.mock.calls[0]?.[0].commands).toEqual([
+      expect.objectContaining({ type: 'ripple_delete', item_ids: ['clip-1'], intent: 'ripple' }),
+    ])
   })
 
   it('keeps transformed clip moves supported across native transform key names', () => {

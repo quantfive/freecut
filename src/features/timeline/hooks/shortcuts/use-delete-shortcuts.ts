@@ -3,7 +3,7 @@
  *
  * Extracted from useEditingShortcuts so host-embedded surfaces can mount just
  * the remove bindings: item removal flows through the host bridge as
- * remove_item commands, while the remaining editing shortcuts (ripple delete,
+ * authoritative ripple_delete requests, while the remaining editing shortcuts (ripple delete,
  * nudges, join, freeze frame, keyframes) are unsupported in host mode.
  */
 
@@ -15,8 +15,10 @@ import { useSelectionStore } from '@/shared/state/selection'
 import { HOTKEY_OPTIONS } from '@/config/hotkeys'
 import type { TimelineShortcutCallbacks } from '../use-timeline-shortcuts'
 import { useKeyframeSelectionStore } from '../../stores/keyframe-selection-store'
+import { useEditorHostContext } from '../../deps/editor'
 
 export function useDeleteShortcuts(callbacks: TimelineShortcutCallbacks) {
+  const { mode: editorMode, host, timeline: hostTimeline } = useEditorHostContext()
   const selectedItemIds = useSelectionStore((s) => s.selectedItemIds)
   const selectedMarkerId = useSelectionStore((s) => s.selectedMarkerId)
   const selectedTransitionId = useSelectionStore((s) => s.selectedTransitionId)
@@ -60,6 +62,11 @@ export function useDeleteShortcuts(callbacks: TimelineShortcutCallbacks) {
       }
       if (selectedItemIds.length > 0) {
         event.preventDefault()
+        if (editorMode === 'host') {
+          if (hostTimeline) void hostTimeline.requestRippleDelete(selectedItemIds)
+          else host?.notify?.({ kind: 'unsupported', message: 'Timeline delete is unavailable' })
+          return
+        }
         removeItems(selectedItemIds)
         if (callbacks.onDelete) {
           callbacks.onDelete()
@@ -76,6 +83,9 @@ export function useDeleteShortcuts(callbacks: TimelineShortcutCallbacks) {
       removeTransition,
       clearSelection,
       callbacks,
+      editorMode,
+      hostTimeline,
+      host,
     ],
   )
 

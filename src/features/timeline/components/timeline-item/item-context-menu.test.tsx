@@ -3,6 +3,8 @@ import { beforeEach, describe, expect, it, vi } from 'vite-plus/test'
 import { fireEvent, render, screen } from '@testing-library/react'
 import { useSelectionStore } from '@/shared/state/selection'
 import { ItemContextMenu } from './item-context-menu'
+import { EditorHostProvider } from '../../deps/editor'
+import { useEditorStore } from '@/shared/state/editor'
 
 const { mockGetSceneVerificationModelOptions } = vi.hoisted(() => ({
   mockGetSceneVerificationModelOptions: vi.fn(() => [
@@ -65,10 +67,14 @@ vi.mock('@/config/hotkeys', () => ({
     })[binding] ?? '',
 }))
 
-function renderContextMenu(overrides: Partial<ComponentProps<typeof ItemContextMenu>> = {}) {
+function renderContextMenu(
+  overrides: Partial<ComponentProps<typeof ItemContextMenu>> = {},
+  options: { hostMode?: boolean } = {},
+) {
   const onDetectScenes = vi.fn()
+  useEditorStore.setState({ hostMode: options.hostMode ?? false })
 
-  render(
+  const menu = (
     <ItemContextMenu
       trackLocked={false}
       joinActions={{
@@ -93,7 +99,16 @@ function renderContextMenu(overrides: Partial<ComponentProps<typeof ItemContextM
       {...overrides}
     >
       <div>Clip</div>
-    </ItemContextMenu>,
+    </ItemContextMenu>
+  )
+  render(
+    options.hostMode ? (
+      <EditorHostProvider value={{ mode: 'host', capabilities: { 'timeline.remove': true } }}>
+        {menu}
+      </EditorHostProvider>
+    ) : (
+      menu
+    ),
   )
 
   fireEvent.contextMenu(screen.getByText('Clip'))
@@ -105,6 +120,7 @@ describe('ItemContextMenu scene detection', () => {
   beforeEach(() => {
     mockGetSceneVerificationModelOptions.mockClear()
     mockContextMenuProps.mockClear()
+    useEditorStore.setState({ hostMode: false })
     useSelectionStore.setState({
       selectedItemIds: [],
       selectedMarkerId: null,
@@ -144,6 +160,13 @@ describe('ItemContextMenu scene detection', () => {
     fireEvent.click(screen.getByRole('button', { name: 'AI (Liquid Vision)' }))
 
     expect(onDetectScenes).toHaveBeenCalledWith('adaptive', 'lfm')
+  })
+
+  it('keeps host Delete as the authoritative ripple action and names local removal Lift', () => {
+    renderContextMenu({}, { hostMode: true })
+
+    expect(screen.getByRole('button', { name: /^Delete/ })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Ripple Delete/ })).toBeNull()
   })
 })
 

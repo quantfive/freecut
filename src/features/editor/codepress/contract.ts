@@ -126,6 +126,8 @@ export interface ClipItem {
   timeline_end_us: Microseconds
   source_start_us: Microseconds
   source_end_us: Microseconds
+  /** Stable identity for an atomically linked media/caption cohort. */
+  linked_group_id?: string | null
   transform?: Transform
   opacity?: number
   volume?: number
@@ -145,6 +147,8 @@ export interface TextItem {
   timeline_start_us: Microseconds
   timeline_end_us: Microseconds
   text: string
+  /** Reserved for host-authored synchronized text cohorts. */
+  linked_group_id?: string | null
   style?: TextStyle
   transform?: Transform
   opacity?: number
@@ -158,6 +162,8 @@ export interface CaptionCue {
   start_us: Microseconds
   end_us: Microseconds
   text: string
+  /** Stable identity when a caption is part of a linked edit cohort. */
+  linked_group_id?: string | null
   speaker?: string | null
   style?: CaptionStyle
 }
@@ -174,6 +180,12 @@ export interface TimelineTrack {
   language?: string
   locked: boolean
   muted: boolean
+  /** Whether this track participates in project-wide ripple synchronization. */
+  sync_lock?: boolean
+  /** Optional containing group; group lock is inherited through this chain. */
+  parent_track_id?: TrackId | null
+  /** Group tracks contain no timeline items and provide lock topology only. */
+  is_group?: boolean
   /** Optional FreeCut-side extension for caption-track defaults. */
   default_style?: CaptionStyle | null
   items: readonly TimelineItem[]
@@ -248,6 +260,10 @@ export interface RippleDeleteCommand {
   start_us: Microseconds
   end_us: Microseconds
   track_ids: readonly TrackId[] | null
+  /** Selected anchors let the authority derive linked and synchronized tracks. */
+  item_ids?: readonly TimelineItemId[]
+  /** Explicit UI intent; interval-only legacy calls retain their old scope. */
+  intent?: 'ripple'
 }
 export interface AddTrackCommand {
   command_id: CommandId

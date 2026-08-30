@@ -8,6 +8,7 @@ import { useTimelineCommandStore } from '../stores/timeline-command-store'
 import { useKeyframeSelectionStore } from '../stores/keyframe-selection-store'
 import { useHostTimelineShortcuts, useTimelineShortcuts } from './use-timeline-shortcuts'
 import type { TimelineTrack, VideoItem } from '@/types/timeline'
+import { EditorHostProvider } from '../deps/editor'
 
 // Some machines run jsdom with an opaque origin, leaving localStorage
 // undefined; the zustand persist middleware captures it at store creation
@@ -29,9 +30,28 @@ vi.hoisted(() => {
   Object.defineProperty(globalThis, 'localStorage', { value: stub, configurable: true })
 })
 
-function HostShortcutHarness() {
+function HostShortcutBindings() {
   useHostTimelineShortcuts()
   return null
+}
+
+function HostShortcutHarness({
+  onRippleDelete,
+}: {
+  onRippleDelete?: (itemIds: readonly string[]) => void | Promise<void>
+}) {
+  if (!onRippleDelete) return <HostShortcutBindings />
+  return (
+    <EditorHostProvider
+      value={{
+        mode: 'host',
+        capabilities: { 'timeline.remove': true },
+        timeline: { requestRippleDelete: onRippleDelete },
+      }}
+    >
+      <HostShortcutBindings />
+    </EditorHostProvider>
+  )
 }
 
 function FullShortcutHarness() {
@@ -128,6 +148,17 @@ describe('useHostTimelineShortcuts', () => {
     fireEvent.keyDown(document, { key: 'Delete', code: 'Delete' })
 
     expect(useTimelineStore.getState().items).toHaveLength(0)
+  })
+
+  it('requests authoritative ripple deletion without mutating the local timeline', () => {
+    const requestRippleDelete = vi.fn(() => Promise.resolve())
+    useSelectionStore.setState({ selectedItemIds: ['clip-1'], selectionType: 'item' })
+    render(<HostShortcutHarness onRippleDelete={requestRippleDelete} />)
+
+    fireEvent.keyDown(document, { key: 'Delete', code: 'Delete' })
+
+    expect(requestRippleDelete).toHaveBeenCalledWith(['clip-1'])
+    expect(useTimelineStore.getState().items).toEqual([ITEM])
   })
 
   it('splits the hovered clip at the playhead on Shift+C', () => {

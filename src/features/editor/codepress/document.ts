@@ -21,6 +21,7 @@ export interface FreeCutFrameClip {
   id: string
   trackId: string
   mediaId: string
+  linkedGroupId?: string | null
   from: number
   durationInFrames: number
   sourceStart?: number
@@ -37,6 +38,7 @@ export interface FreeCutFrameText {
   trackId: string
   from: number
   durationInFrames: number
+  linkedGroupId?: string | null
   text: string
   style?: Record<string, string | number>
   opacity?: number
@@ -49,6 +51,7 @@ export interface FreeCutFrameCaptionCue {
   trackId: string
   from: number
   durationInFrames: number
+  linkedGroupId?: string | null
   text: string
   speaker?: string | null
   style?: CaptionStyle
@@ -63,6 +66,9 @@ export interface FreeCutFrameTrack {
   language?: string
   locked: boolean
   muted: boolean
+  syncLock?: boolean
+  parentTrackId?: string | null
+  isGroup?: boolean
   defaultStyle?: CaptionStyle | null
   items: readonly FreeCutFrameItem[]
 }
@@ -117,6 +123,7 @@ function toContractItem(item: FreeCutFrameItem, fps: FrameRateLike): TimelineIte
       start_us: range.start_us,
       end_us: range.end_us,
       text: item.text,
+      ...(item.linkedGroupId !== undefined ? { linked_group_id: item.linkedGroupId } : {}),
       ...(item.speaker !== undefined ? { speaker: item.speaker } : {}),
       ...(item.style !== undefined ? { style: { ...item.style } } : {}),
     }
@@ -129,6 +136,7 @@ function toContractItem(item: FreeCutFrameItem, fps: FrameRateLike): TimelineIte
       timeline_start_us: range.start_us,
       timeline_end_us: range.end_us,
       text: item.text,
+      ...(item.linkedGroupId !== undefined ? { linked_group_id: item.linkedGroupId } : {}),
       ...(item.style
         ? {
             style: {
@@ -175,6 +183,7 @@ function toContractItem(item: FreeCutFrameItem, fps: FrameRateLike): TimelineIte
     timeline_end_us: range.end_us,
     source_start_us: framesToMicroseconds(sourceStart, fps),
     source_end_us: framesToMicroseconds(sourceEnd, fps),
+    ...(item.linkedGroupId !== undefined ? { linked_group_id: item.linkedGroupId } : {}),
     ...(item.volume !== undefined ? { volume: item.volume } : {}),
     ...(item.speed !== undefined ? { speed: item.speed } : {}),
     ...(item.opacity !== undefined ? { opacity: item.opacity } : {}),
@@ -217,6 +226,9 @@ function toTrack(track: FreeCutFrameTrack, fps: FrameRateLike): TimelineTrack {
     ...(track.language !== undefined ? { language: track.language } : {}),
     locked: track.locked,
     muted: track.muted,
+    ...(track.syncLock !== undefined ? { sync_lock: track.syncLock } : {}),
+    ...(track.parentTrackId !== undefined ? { parent_track_id: track.parentTrackId } : {}),
+    ...(track.isGroup !== undefined ? { is_group: track.isGroup } : {}),
     ...(track.defaultStyle !== undefined ? { default_style: track.defaultStyle } : {}),
     items: track.items.map((item) => toContractItem(item, fps)),
   }
@@ -279,6 +291,7 @@ function fromContractItem(item: TimelineItem, fps: FrameRateLike): FreeCutFrameI
       from: range.start,
       durationInFrames: range.end - range.start,
       text: item.text,
+      ...(item.linked_group_id !== undefined ? { linkedGroupId: item.linked_group_id } : {}),
       ...(item.speaker !== undefined ? { speaker: item.speaker } : {}),
       ...(item.style !== undefined ? { style: { ...item.style } } : {}),
     }
@@ -297,6 +310,7 @@ function fromContractItem(item: TimelineItem, fps: FrameRateLike): FreeCutFrameI
       from: range.start,
       durationInFrames: range.end - range.start,
       text: item.text,
+      ...(item.linked_group_id !== undefined ? { linkedGroupId: item.linked_group_id } : {}),
       ...(item.style ? { style: { ...item.style } } : {}),
       ...(item.opacity !== undefined ? { opacity: item.opacity } : {}),
       ...(item.transform ? { transform: fromTransform(item.transform) } : {}),
@@ -323,6 +337,7 @@ function fromContractItem(item: TimelineItem, fps: FrameRateLike): FreeCutFrameI
     durationInFrames: timelineRange.end - timelineRange.start,
     sourceStart: sourceRange.start,
     sourceEnd: sourceRange.end,
+    ...(item.linked_group_id !== undefined ? { linkedGroupId: item.linked_group_id } : {}),
     ...(item.volume !== undefined ? { volume: item.volume } : {}),
     ...(item.speed !== undefined ? { speed: item.speed } : {}),
     ...(item.opacity !== undefined ? { opacity: item.opacity } : {}),
@@ -346,6 +361,9 @@ export function controlledDocumentToFreeCutDocument(
       ...(track.language !== undefined ? { language: track.language } : {}),
       locked: track.locked,
       muted: track.muted,
+      ...(track.sync_lock !== undefined ? { syncLock: track.sync_lock } : {}),
+      ...(track.parent_track_id !== undefined ? { parentTrackId: track.parent_track_id } : {}),
+      ...(track.is_group !== undefined ? { isGroup: track.is_group } : {}),
       ...(track.default_style !== undefined ? { defaultStyle: track.default_style } : {}),
       items: track.items.map((item) => fromContractItem(item, document.fps)),
     })),

@@ -3,7 +3,7 @@
 export { FreeCutEditorSurface } from './editor-surface'
 export { useEditorCapability, useEditorHostContext, useEditorHostMode } from './context'
 export { EditorHostProvider } from './context-provider'
-export type { EditorHostContextValue } from './context'
+export type { EditorHostContextValue, HostTimelineEditPort } from './context'
 export type { EditorHostProviderProps } from './context-provider'
 export {
   DEFAULT_HOST_CAPABILITIES,

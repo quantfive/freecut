@@ -110,6 +110,7 @@ type LayoutActionsProps = ItemContextMenuSectionProps & {
 
 type DestructiveActionsProps = ItemContextMenuSectionProps & {
   isSelected: boolean
+  hostMode?: boolean
   canRippleDelete?: boolean
   canDelete?: boolean
   onRippleDelete: () => void
@@ -338,6 +339,7 @@ const ItemContextMenuFull = memo(function ItemContextMenuFull({
           t={t}
           hotkeys={hotkeys}
           {...destructiveActions}
+          hostMode={hostMode}
           canRippleDelete={!hostMode}
           canDelete={canDeleteItem}
         />
@@ -709,6 +711,7 @@ function DestructiveActions({
   t,
   hotkeys,
   isSelected,
+  hostMode = false,
   canRippleDelete = true,
   canDelete = true,
   onRippleDelete,
@@ -732,7 +735,7 @@ function DestructiveActions({
           disabled={!isSelected}
           className="text-destructive focus:text-destructive"
         >
-          {t('common.delete')}
+          {hostMode ? t('common.delete') : t('timeline.contextMenu.lift')}
           <ContextMenuShortcut>{formatHotkeyBinding(hotkeys.DELETE_SELECTED)}</ContextMenuShortcut>
         </ContextMenuItem>
       )}
