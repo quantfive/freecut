@@ -147,6 +147,11 @@ function withoutPosition(item: unknown): unknown {
   delete copy.sourceEnd
   delete copy.transform
   delete copy.opacity
+  // Native timeline items omit nullable linked-group metadata. Treat that
+  // representation as the same unset value as an explicit null from a frame
+  // document so a regular-text move remains a move rather than an unsupported
+  // metadata edit.
+  if (copy.linkedGroupId == null) delete copy.linkedGroupId
   return copy
 }
 

@@ -330,6 +330,54 @@ describe('embedded FreeCut host controller', () => {
     expect(derived.batch?.commands[0]).toMatchObject({ type: 'move_item', item_id: 'text-1' })
   })
 
+  it.each([
+    ['null', null],
+    ['absent', undefined],
+  ] as const)(
+    'treats %s regular-text linked-group metadata as unset during a move',
+    (_label, linkedGroupId) => {
+      const textItem = {
+        type: 'text' as const,
+        id: 'text-1',
+        trackId: 'text-track',
+        from: 0,
+        durationInFrames: 30,
+        text: 'Unlinked text',
+        ...(linkedGroupId === undefined ? {} : { linkedGroupId }),
+      }
+      const initial = snapshot({
+        tracks: [
+          {
+            id: 'text-track',
+            kind: 'video',
+            name: 'Text',
+            locked: false,
+            muted: false,
+            items: [textItem],
+          },
+        ],
+      })
+      const native = hostSnapshotToNativeTimeline(initial)
+      const moved = nativeTimelineToFrameDocument(
+        {
+          tracks: native.tracks,
+          items: native.items.map((item) => (item.id === 'text-1' ? { ...item, from: 30 } : item)),
+          fps: native.fps,
+        },
+        initial.timeline,
+      )
+
+      expect(moved).toMatchObject({ ok: true })
+      if (!moved.ok) return
+      expect(moved.document.tracks[0]?.items[0]).not.toHaveProperty('linkedGroupId')
+      const derived = deriveSupportedHostEdit(initial.timeline, moved.document, {
+        operationId: `operation-text-${_label}-move`,
+        idempotencyKey: `idempotency-text-${_label}-move`,
+      })
+      expect(derived.batch?.commands[0]).toMatchObject({ type: 'move_item', item_id: 'text-1' })
+    },
+  )
+
   it('produces one authoritative ripple command from selected cohort anchors', () => {
     const initial = snapshot({
       tracks: [
