@@ -1177,6 +1177,8 @@ function validateCommand(value: unknown, path: string, errors: VideoCommandError
       checkIdentifier(value.to_track_id, `${path}.to_track_id`, errors)
       checkMicroseconds(value.timeline_start_us, `${path}.timeline_start_us`, errors)
       checkIndex(value.index, `${path}.index`, errors)
+      if (value.ripple !== undefined && typeof value.ripple !== 'boolean')
+        errors.push(invalidRequest(`${path}.ripple`, 'must be a boolean'))
       break
     case 'set_item_attachment':
       if (!checkArray(value.item_ids, `${path}.item_ids`, errors)) return

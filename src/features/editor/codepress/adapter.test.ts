@@ -152,6 +152,24 @@ describe('PR1 conformance fixtures', () => {
     })
   })
 
+  it('rejects a non-boolean ripple move intent', () => {
+    const fixture = readFixture<ValidFixture>('valid/core-edit-batch.json')
+    const request = structuredClone(fixture.request) as unknown as Record<string, unknown>
+    request.commands = [
+      {
+        command_id: 'invalid-ripple-move',
+        type: 'move_item',
+        item_id: 'clip-a',
+        to_track_id: 'track-video',
+        timeline_start_us: 1_000_000,
+        index: 0,
+        ripple: 'true',
+      },
+    ]
+
+    expect(validateCommandBatch(request).ok).toBe(false)
+  })
+
   it.each(['errors/revision-conflict.json', 'errors/idempotency-conflict.json'])(
     'keeps the canonical structured error shape for %s',
     (path) => {
