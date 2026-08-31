@@ -24,7 +24,7 @@ describe('timeline pointer intent', () => {
   it.each([
     ['trim handle', 'data-trim-handle', 'start'],
     ['fade control', 'data-clip-fade-controls', 'video'],
-    ['context anchor', 'data-item-context-anchor', ''],
+    ['timeline interaction control', 'data-timeline-interaction-control', ''],
     ['scrollbar', 'role', 'scrollbar'],
     ['menu', 'role', 'menu'],
   ])('recognizes %s as a non-seeking control', (_name, attribute, value) => {
@@ -39,5 +39,14 @@ describe('timeline pointer intent', () => {
     track.dataset.trackId = 'track-1'
 
     expect(isTimelinePointerControl(track)).toBe(false)
+  })
+
+  it('does not let the display-contents context-menu wrapper steal clip ownership', () => {
+    const contextAnchor = document.createElement('span')
+    contextAnchor.dataset.itemContextAnchor = ''
+    const clip = document.createElement('div')
+    contextAnchor.append(clip)
+
+    expect(isTimelinePointerControl(clip)).toBe(false)
   })
 })

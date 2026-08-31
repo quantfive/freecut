@@ -1379,6 +1379,16 @@ const IMPORT_NODE_CHECKS = [
   isReactHotkeysCallImport,
 ]
 
+// Most source nodes cannot introduce a runtime module dependency. Keep the
+// full AST walk for scope construction, but avoid invoking all three import
+// checks for every expression, token wrapper, and declaration in the scan.
+const IMPORT_NODE_KINDS = new Set([
+  SyntaxKind.ImportDeclaration,
+  SyntaxKind.ExportDeclaration,
+  SyntaxKind.ImportEqualsDeclaration,
+  SyntaxKind.CallExpression,
+])
+
 function walkAst(node, onNode) {
   onNode(node)
   node.forEachChild((child) => walkAst(child, onNode))
@@ -1478,6 +1488,7 @@ export function findReactHotkeysHookImportViolations(
       }
 
       walkAst(sourceFile, (node) => {
+        if (!IMPORT_NODE_KINDS.has(node.kind)) return
         const scope = nodeScopes.get(node) ?? sourceScope
         if (IMPORT_NODE_CHECKS.some((check) => check(node, scope))) record(node)
       })

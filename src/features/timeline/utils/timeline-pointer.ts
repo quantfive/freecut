@@ -4,7 +4,6 @@ const TIMELINE_POINTER_CONTROL_SELECTOR = [
   '[data-trim-handle]',
   '[data-clip-fade-controls]',
   '[data-track-push]',
-  '[data-item-context-anchor]',
   '[data-playhead-handle]',
   '[role="menu"]',
   '[role="scrollbar"]',
