@@ -55,6 +55,7 @@ import {
 } from '../utils/trim-edit-constraints'
 import { getTransitionBridgeAtHandle } from '../utils/transition-edit-guards'
 import { createRafCoalescedCallback } from '../utils/raf-coalesced-callback'
+import { resolveAttachedRippleTail } from '../utils/attached-chain'
 
 interface TrimState {
   isTrimming: boolean
@@ -105,12 +106,14 @@ function getRippleDownstreamItemIds(
 ): Set<string> {
   const currentEnd = currentItem.from + currentItem.durationInFrames
   const downstreamItemIds = new Set<string>()
+  const attachedIds = new Set(resolveAttachedRippleTail(allItems, currentItem.id))
 
   for (const other of allItems) {
     if (
       other.id !== currentItem.id &&
       other.trackId === currentItem.trackId &&
-      other.from >= currentEnd
+      other.from >= currentEnd &&
+      attachedIds.has(other.id)
     ) {
       downstreamItemIds.add(other.id)
     }

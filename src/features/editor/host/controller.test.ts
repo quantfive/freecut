@@ -698,6 +698,7 @@ describe('embedded FreeCut host controller', () => {
       'add_clip',
       'add_text',
       'move_item',
+      'set_item_attachment',
       'trim_item',
       'split_item',
       'remove_item',
@@ -719,6 +720,24 @@ describe('embedded FreeCut host controller', () => {
       },
     })
     expect(adapter.capabilities).toEqual({})
+  })
+
+  it('derives attachment toggles as one command with item preconditions', () => {
+    const initial = snapshot()
+    const track = initial.timeline.tracks[0]!
+    const next = {
+      ...initial.timeline,
+      tracks: [{ ...track, items: [{ ...track.items[0]!, rippleLinked: false }] }],
+    }
+    const derived = deriveSupportedHostEdit(initial.timeline, next)
+    expect(derived.batch?.commands).toEqual([
+      expect.objectContaining({
+        type: 'set_item_attachment',
+        item_ids: ['clip-1'],
+        ripple_linked: false,
+      }),
+    ])
+    expect(derived.batch?.preconditions).toHaveLength(1)
   })
 
   describe('host round-trip stability', () => {
@@ -1278,13 +1297,9 @@ describe('embedded FreeCut host controller', () => {
 
       const derived = deriveSupportedHostEdit(initial.timeline, next)
 
-      expect(derived.batch).toBeNull()
-      expect(derived.reason).toMatch(/^Multiple or ambiguous timeline changes are unsupported\b/)
-      expect(derived.reason).toContain('added 0, removed 0, changed 2')
-      expect(derived.detail).toEqual({
-        code: 'ambiguous_change',
-        changeCounts: { added: 0, removed: 0, changed: 2 },
-      })
+      expect(derived.batch?.commands).toEqual([
+        expect.objectContaining({ type: 'move_item', item_id: 'clip-1', ripple: true }),
+      ])
     })
 
     it('derives a move_item command for a store drag of a clip carrying an identity transform', async () => {

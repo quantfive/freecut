@@ -88,6 +88,7 @@ export type EditorCapability =
   | 'media.relink'
   | 'timeline.add'
   | 'timeline.move'
+  | 'timeline.attachment'
   | 'timeline.trim'
   | 'timeline.split'
   | 'timeline.remove'
@@ -160,6 +161,7 @@ export interface FreeCutFrameClip {
   trackId: string
   mediaId: string
   linkedGroupId?: string | null
+  rippleLinked?: boolean
   from: number
   durationInFrames: number
   sourceStart?: number
@@ -177,6 +179,7 @@ export interface FreeCutFrameText {
   from: number
   durationInFrames: number
   linkedGroupId?: string | null
+  rippleLinked?: boolean
   text: string
   style?: Record<string, string | number>
   opacity?: number
@@ -190,6 +193,7 @@ export interface FreeCutFrameCaptionCue {
   from: number
   durationInFrames: number
   linkedGroupId?: string | null
+  rippleLinked?: boolean
   text: string
   speaker?: string | null
   style?: CaptionStyle
@@ -483,6 +487,7 @@ export interface EditorHostContextValue {
 
 export interface HostTimelineEditPort {
   requestRippleDelete(itemIds: readonly string[]): Promise<void> | void
+  requestSetItemAttachment?(itemIds: readonly string[], rippleLinked: boolean): Promise<void> | void
 }
 
 export interface EditorHostProviderProps {
@@ -501,6 +506,7 @@ export declare const SUPPORTED_HOST_COMMANDS: readonly [
   'add_clip',
   'add_text',
   'move_item',
+  'set_item_attachment',
   'trim_item',
   'split_item',
   'remove_item',

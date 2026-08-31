@@ -69,7 +69,9 @@ shortcut editor, including J/K/L transport. UI changes call `setSettings`, and
 host or agent changes can flow back through `subscribe`, so embedded shortcut
 configuration never becomes a UI-only setting.
 
-As of 0.3.11, the host-mode Delete action and Delete/Backspace shortcuts submit
+As of 0.3.12, host-mode timeline clips use durable forward attachment chains by
+default. A detached clip is an explicit ripple break and can be reattached from
+its context menu. The host-mode Delete action and Delete/Backspace shortcuts submit
 one authoritative ripple-delete request for the selected linked cohort. The
 controlled timeline remains unchanged until the host receipt arrives; rejected
 requests surface actionable host feedback. Lift / leave gap remains the named
@@ -135,5 +137,5 @@ Consumers install the exact published version and keep it pinned in their
 lockfile:
 
 ```bash
-npm install @quantfive/freecut-editor-surface@0.3.11
+npm install @quantfive/freecut-editor-surface@0.3.12
 ```

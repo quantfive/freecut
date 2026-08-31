@@ -10,6 +10,10 @@ import {
 export interface HostTimelineEditPort {
   /** Ask the host authority to ripple-delete the selected timeline anchors. */
   requestRippleDelete(itemIds: readonly string[]): Promise<void> | void
+  requestSetItemAttachment?: (
+    itemIds: readonly string[],
+    rippleLinked: boolean,
+  ) => Promise<void> | void
 }
 
 export interface EditorHostContextValue {

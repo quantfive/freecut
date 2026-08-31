@@ -85,6 +85,7 @@ export interface ProjectTimeline {
       mediaId?: string
       originId?: string // Tracks lineage for stable React keys
       linkedGroupId?: string
+      rippleLinked?: boolean
       type:
         | 'video'
         | 'audio'

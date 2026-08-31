@@ -22,6 +22,7 @@ export interface FreeCutFrameClip {
   trackId: string
   mediaId: string
   linkedGroupId?: string | null
+  rippleLinked?: boolean
   from: number
   durationInFrames: number
   sourceStart?: number
@@ -39,6 +40,7 @@ export interface FreeCutFrameText {
   from: number
   durationInFrames: number
   linkedGroupId?: string | null
+  rippleLinked?: boolean
   text: string
   style?: Record<string, string | number>
   opacity?: number
@@ -52,6 +54,7 @@ export interface FreeCutFrameCaptionCue {
   from: number
   durationInFrames: number
   linkedGroupId?: string | null
+  rippleLinked?: boolean
   text: string
   speaker?: string | null
   style?: CaptionStyle
@@ -124,6 +127,7 @@ function toContractItem(item: FreeCutFrameItem, fps: FrameRateLike): TimelineIte
       end_us: range.end_us,
       text: item.text,
       ...(item.linkedGroupId !== undefined ? { linked_group_id: item.linkedGroupId } : {}),
+      ...(item.rippleLinked !== undefined ? { ripple_linked: item.rippleLinked } : {}),
       ...(item.speaker !== undefined ? { speaker: item.speaker } : {}),
       ...(item.style !== undefined ? { style: { ...item.style } } : {}),
     }
@@ -137,6 +141,7 @@ function toContractItem(item: FreeCutFrameItem, fps: FrameRateLike): TimelineIte
       timeline_end_us: range.end_us,
       text: item.text,
       ...(item.linkedGroupId !== undefined ? { linked_group_id: item.linkedGroupId } : {}),
+      ...(item.rippleLinked !== undefined ? { ripple_linked: item.rippleLinked } : {}),
       ...(item.style
         ? {
             style: {
@@ -184,6 +189,7 @@ function toContractItem(item: FreeCutFrameItem, fps: FrameRateLike): TimelineIte
     source_start_us: framesToMicroseconds(sourceStart, fps),
     source_end_us: framesToMicroseconds(sourceEnd, fps),
     ...(item.linkedGroupId !== undefined ? { linked_group_id: item.linkedGroupId } : {}),
+    ...(item.rippleLinked !== undefined ? { ripple_linked: item.rippleLinked } : {}),
     ...(item.volume !== undefined ? { volume: item.volume } : {}),
     ...(item.speed !== undefined ? { speed: item.speed } : {}),
     ...(item.opacity !== undefined ? { opacity: item.opacity } : {}),
@@ -292,6 +298,7 @@ function fromContractItem(item: TimelineItem, fps: FrameRateLike): FreeCutFrameI
       durationInFrames: range.end - range.start,
       text: item.text,
       ...(item.linked_group_id !== undefined ? { linkedGroupId: item.linked_group_id } : {}),
+      ...(item.ripple_linked !== undefined ? { rippleLinked: item.ripple_linked } : {}),
       ...(item.speaker !== undefined ? { speaker: item.speaker } : {}),
       ...(item.style !== undefined ? { style: { ...item.style } } : {}),
     }
@@ -311,6 +318,7 @@ function fromContractItem(item: TimelineItem, fps: FrameRateLike): FreeCutFrameI
       durationInFrames: range.end - range.start,
       text: item.text,
       ...(item.linked_group_id !== undefined ? { linkedGroupId: item.linked_group_id } : {}),
+      ...(item.ripple_linked !== undefined ? { rippleLinked: item.ripple_linked } : {}),
       ...(item.style ? { style: { ...item.style } } : {}),
       ...(item.opacity !== undefined ? { opacity: item.opacity } : {}),
       ...(item.transform ? { transform: fromTransform(item.transform) } : {}),
@@ -338,6 +346,7 @@ function fromContractItem(item: TimelineItem, fps: FrameRateLike): FreeCutFrameI
     sourceStart: sourceRange.start,
     sourceEnd: sourceRange.end,
     ...(item.linked_group_id !== undefined ? { linkedGroupId: item.linked_group_id } : {}),
+    ...(item.ripple_linked !== undefined ? { rippleLinked: item.ripple_linked } : {}),
     ...(item.volume !== undefined ? { volume: item.volume } : {}),
     ...(item.speed !== undefined ? { speed: item.speed } : {}),
     ...(item.opacity !== undefined ? { opacity: item.opacity } : {}),

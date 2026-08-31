@@ -59,6 +59,7 @@ import {
   DEFAULT_FILLER_REMOVAL_SETTINGS,
 } from '../../utils/filler-word-removal-preview'
 import { mapSceneCutTimesToTimelineFrames } from '../../utils/scene-cut-frames'
+import { setItemAttachment } from '../../stores/actions/item-actions'
 
 const logger = createLogger('UseTimelineItemActions')
 
@@ -174,6 +175,19 @@ export function useTimelineItemActions({
       useTimelineStore.getState().rippleDeleteItems(selectedItemIds)
     }
   }, [])
+
+  const handleToggleAttachment = useCallback(() => {
+    const selectedItemIds = useSelectionStore.getState().selectedItemIds
+    const ids = selectedItemIds.length > 0 ? selectedItemIds : [item.id]
+    const nextValue = item.rippleLinked === false
+    if (editorMode === 'host') {
+      if (hostTimeline?.requestSetItemAttachment)
+        void hostTimeline.requestSetItemAttachment(ids, nextValue)
+      else host?.notify?.({ kind: 'unsupported', message: 'Attachment changes are unavailable' })
+      return
+    }
+    setItemAttachment(ids, nextValue)
+  }, [editorMode, host, hostTimeline, item.id, item.rippleLinked])
 
   const handleLinkSelected = useCallback(() => {
     const selectedItemIds = useSelectionStore.getState().selectedItemIds
@@ -607,6 +621,7 @@ export function useTimelineItemActions({
     handleJoinRight,
     handleDelete,
     handleRippleDelete,
+    handleToggleAttachment,
     handleLinkSelected,
     handleUnlinkSelected,
     handleReverseSelected,

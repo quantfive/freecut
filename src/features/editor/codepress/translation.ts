@@ -79,6 +79,7 @@ export type FrameEditCommand =
       timeline_start_frame?: Frame
     })
   | Extract<EditCommand, { type: 'remove_item' }>
+  | Extract<EditCommand, { type: 'set_item_attachment' }>
   | (Omit<Extract<EditCommand, { type: 'move_item' }>, 'timeline_start_us'> & {
       timeline_start_frame: Frame
     })
@@ -177,6 +178,7 @@ function itemToFrames(item: TimelineItem, fps: FrameRateLike): FrameItem {
       cue_id: item.cue_id,
       track_id: item.track_id,
       text: item.text,
+      ...(item.ripple_linked !== undefined ? { ripple_linked: item.ripple_linked } : {}),
       ...(item.speaker !== undefined ? { speaker: item.speaker } : {}),
       ...(item.style !== undefined ? { style: item.style } : {}),
       start_frame: assertFrameAligned(item.start_us, fps),
@@ -189,6 +191,7 @@ function itemToFrames(item: TimelineItem, fps: FrameRateLike): FrameItem {
       item_id: item.item_id,
       track_id: item.track_id,
       text: item.text,
+      ...(item.ripple_linked !== undefined ? { ripple_linked: item.ripple_linked } : {}),
       ...(item.style !== undefined ? { style: item.style } : {}),
       ...(item.transform !== undefined ? { transform: item.transform } : {}),
       ...(item.opacity !== undefined ? { opacity: item.opacity } : {}),
@@ -203,6 +206,7 @@ function itemToFrames(item: TimelineItem, fps: FrameRateLike): FrameItem {
     track_id: item.track_id,
     media_id: item.media_id,
     media_kind: item.media_kind,
+    ...(item.ripple_linked !== undefined ? { ripple_linked: item.ripple_linked } : {}),
     ...(item.transform !== undefined ? { transform: item.transform } : {}),
     ...(item.opacity !== undefined ? { opacity: item.opacity } : {}),
     ...(item.volume !== undefined ? { volume: item.volume } : {}),
@@ -269,6 +273,8 @@ export function translateCommandToFrames(
           : { timeline_start_frame: assertFrameAligned(command.timeline_start_us, fps) }),
       }
     case 'remove_item':
+      return command
+    case 'set_item_attachment':
       return command
     case 'move_item':
       return {

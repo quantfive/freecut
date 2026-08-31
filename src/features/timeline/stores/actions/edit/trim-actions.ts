@@ -38,6 +38,7 @@ import {
   requestPostEditWarmForItems,
 } from './shared'
 import type { TimelineItem, TimelineTrack } from '@/types/timeline'
+import { resolveAttachedRippleTail } from '../../../utils/attached-chain'
 
 function keepTightestDelta(requested: number, candidate: number): number {
   return requested < 0 ? Math.max(requested, candidate) : Math.min(requested, candidate)
@@ -230,6 +231,9 @@ function addRippleTrimDownstreamMutationIds(params: {
   mutationIds: Set<string>
 }): void {
   const transitions = useTransitionsStore.getState().transitions
+  const attachedIds = new Set(
+    params.synced.flatMap((syncedItem) => resolveAttachedRippleTail(params.items, syncedItem.id)),
+  )
   for (const syncedItem of params.synced) {
     const oldSyncedEnd = syncedItem.from + syncedItem.durationInFrames
     const transitionNeighbors = new Set(
@@ -239,7 +243,10 @@ function addRippleTrimDownstreamMutationIds(params: {
     )
     for (const candidate of params.items) {
       if (params.syncedIds.has(candidate.id) || candidate.trackId !== syncedItem.trackId) continue
-      if (candidate.from >= oldSyncedEnd || transitionNeighbors.has(candidate.id)) {
+      if (
+        attachedIds.has(candidate.id) &&
+        (candidate.from >= oldSyncedEnd || transitionNeighbors.has(candidate.id))
+      ) {
         params.mutationIds.add(candidate.id)
       }
     }
@@ -702,6 +709,9 @@ export function rippleTrimItem(id: string, handle: 'start' | 'end', trimDelta: n
       if (clampedTrimDelta === 0) return
       const oldFrom = item.from
       const oldEnd = item.from + item.durationInFrames
+      const attachedIds = new Set(
+        synced.flatMap((syncedItem) => resolveAttachedRippleTail(store.items, syncedItem.id)),
+      )
       if (handle === 'start')
         store._trimItemStart(id, clampedTrimDelta, { skipAdjacentClamp: true })
       else store._trimItemEnd(id, clampedTrimDelta, { skipAdjacentClamp: true })
@@ -749,7 +759,12 @@ export function rippleTrimItem(id: string, handle: 'start' | 'end', trimDelta: n
             if (transition.leftClipId === syncedItem.id) neighbors.add(transition.rightClipId)
           }
           for (const candidate of fresh) {
-            if (syncedIds.has(candidate.id) || candidate.trackId !== before.trackId) continue
+            if (
+              syncedIds.has(candidate.id) ||
+              candidate.trackId !== before.trackId ||
+              !attachedIds.has(candidate.id)
+            )
+              continue
             if (candidate.from >= oldSyncedEnd || neighbors.has(candidate.id))
               deltas.set(candidate.id, shift)
           }

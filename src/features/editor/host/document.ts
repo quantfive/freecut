@@ -157,6 +157,7 @@ function nativeItemFromHostItem(
       label: item.text || 'Text',
       text: item.text,
       ...linkedGroupMetadata(item.linkedGroupId),
+      ...(item.rippleLinked !== undefined ? { rippleLinked: item.rippleLinked } : {}),
       color: textColor,
       ...(typeof item.style?.font_family === 'string'
         ? { fontFamily: item.style.font_family }
@@ -184,6 +185,7 @@ function nativeItemFromHostItem(
       text: item.text,
       textRole: 'caption',
       ...linkedGroupMetadata(item.linkedGroupId),
+      ...(item.rippleLinked !== undefined ? { rippleLinked: item.rippleLinked } : {}),
       color: style?.color ?? '#ffffff',
       ...(typeof style?.font_family === 'string' ? { fontFamily: style.font_family } : {}),
       ...(typeof style?.font_size === 'number' ? { fontSize: style.font_size } : {}),
@@ -212,6 +214,7 @@ function nativeItemFromHostItem(
     mediaId: item.mediaId,
     src: '',
     ...linkedGroupMetadata(item.linkedGroupId),
+    ...(item.rippleLinked !== undefined ? { rippleLinked: item.rippleLinked } : {}),
     ...(sourceDuration !== undefined ? { sourceDuration } : {}),
     // Carry the host's source range through exactly as stated, absence
     // included.  A native item with no `sourceStart` plays from source frame
@@ -289,6 +292,7 @@ function frameItemToNativeComparable(
       sourceStart: item.sourceStart,
       sourceEnd: item.sourceEnd,
       ...linkedGroupMetadata(item.linkedGroupId),
+      ...(item.rippleLinked !== undefined ? { rippleLinked: item.rippleLinked } : {}),
       // Optional fields are emitted only when set so the comparable shape
       // matches host snapshots that omit them entirely.
       ...(item.volume !== undefined ? { volume: item.volume } : {}),
@@ -317,6 +321,7 @@ function frameItemToNativeComparable(
       durationInFrames: item.durationInFrames,
       text: item.text,
       ...linkedGroupMetadata(item.linkedGroupId),
+      ...(item.rippleLinked !== undefined ? { rippleLinked: item.rippleLinked } : {}),
       ...(Object.keys(style).length > 0 ? { style } : {}),
     }
   }
