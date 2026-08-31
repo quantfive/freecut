@@ -1,5 +1,6 @@
 import { useMemo } from 'react'
 import type { TimelineItem } from '@/types/timeline'
+import { projectTrimItem } from '@/shared/timeline/trim-preview'
 import { useTimelineStore } from '@/features/preview/deps/timeline-store'
 import { useRippleEditPreviewStore } from '@/features/preview/deps/timeline-edit-preview'
 import { EditTwoUpPanels } from './edit-2up-panels'
@@ -106,12 +107,16 @@ export function RippleEditOverlay({ fps }: RippleEditOverlayProps) {
   if (!trimmedItem || !handle) return null
 
   const trimmedVisualItem = resolveEditOverlayVisualItem(items, trimmedItem)
+  const projectedTrimmedItem = projectTrimItem(trimmedVisualItem, handle, trimDelta, {
+    timelineFps: fps,
+    positioning: handle === 'start' ? 'anchor-start' : 'standard',
+  })
 
   // --- End-handle trim ---
   if (handle === 'end') {
-    const editPointFrame = trimmedItem.from + trimmedItem.durationInFrames + delta
-    const outLocalFrame = Math.max(0, editPointFrame - trimmedItem.from - 1)
-    const outInfo = getSourceFrameInfo(trimmedVisualItem, outLocalFrame, fps)
+    const editPointFrame = projectedTrimmedItem.from + projectedTrimmedItem.durationInFrames
+    const outLocalFrame = Math.max(0, projectedTrimmedItem.durationInFrames - 1)
+    const outInfo = getSourceFrameInfo(projectedTrimmedItem, outLocalFrame, fps)
 
     // Check if the next clip is adjacent to the new edit point.
     // If there's a gap between them, IN should show GAP, not the distant clip.
@@ -123,7 +128,7 @@ export function RippleEditOverlay({ fps }: RippleEditOverlayProps) {
       return (
         <EditTwoUpPanels
           leftPanel={{
-            item: trimmedVisualItem,
+            item: projectedTrimmedItem,
             sourceTime: outInfo.sourceTime,
             sourceFrame: outInfo.sourceFrame,
             timecode: outInfo.timecode,
@@ -146,7 +151,7 @@ export function RippleEditOverlay({ fps }: RippleEditOverlayProps) {
     return (
       <EditTwoUpPanels
         leftPanel={{
-          item: trimmedVisualItem,
+          item: projectedTrimmedItem,
           sourceTime: outInfo.sourceTime,
           sourceFrame: outInfo.sourceFrame,
           timecode: outInfo.timecode,
@@ -166,7 +171,7 @@ export function RippleEditOverlay({ fps }: RippleEditOverlayProps) {
   // --- Start-handle trim ---
   // IN = trimmed clip at its new first visible frame.
   // trimDelta frames into the original clip's range (negative when extending start).
-  const inInfo = getSourceFrameInfo(trimmedVisualItem, trimDelta, fps)
+  const inInfo = getSourceFrameInfo(projectedTrimmedItem, 0, fps)
 
   // Check if the previous clip is adjacent to A's start.
   // In the anchor-from ripple model, A's position doesn't change — only its
@@ -184,7 +189,7 @@ export function RippleEditOverlay({ fps }: RippleEditOverlayProps) {
           placeholderText: 'GAP',
         }}
         rightPanel={{
-          item: trimmedVisualItem,
+          item: projectedTrimmedItem,
           sourceTime: inInfo.sourceTime,
           sourceFrame: inInfo.sourceFrame,
           timecode: inInfo.timecode,
@@ -209,7 +214,7 @@ export function RippleEditOverlay({ fps }: RippleEditOverlayProps) {
         label: 'OUT',
       }}
       rightPanel={{
-        item: trimmedVisualItem,
+        item: projectedTrimmedItem,
         sourceTime: inInfo.sourceTime,
         sourceFrame: inInfo.sourceFrame,
         timecode: inInfo.timecode,

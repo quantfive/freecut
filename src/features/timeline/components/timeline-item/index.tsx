@@ -64,6 +64,7 @@ import { useClipReadoutLabels } from './use-clip-readout-labels'
 import { useTimelineItemPointerHandlers } from './use-timeline-item-pointer-handlers'
 import { ClipFloatingLayer } from './clip-floating-layer'
 import { SharedRollingTrimHandle } from './shared-rolling-trim-handle'
+import { TrimPreviewGhost } from './trim-preview-ghost'
 import { getLinkedItemIds } from '../../utils/linked-items'
 import { partitionItemMutationIdsByLock } from '../../utils/track-lock-invariants'
 import { formatTimecode } from '@/shared/utils/time-utils'
@@ -1087,6 +1088,15 @@ export const TimelineItem = memo(function TimelineItem({
                   </div>
                 )}
               </div>
+            )}
+
+            {isTrimming && trimHandle && (
+              <TrimPreviewGhost
+                handle={trimHandle}
+                deltaFrames={trimDelta}
+                constrained={trimConstrained}
+                visualWidthFrames={visualWidthFrames}
+              />
             )}
 
             <div className="absolute inset-px rounded-[3px] overflow-hidden">
