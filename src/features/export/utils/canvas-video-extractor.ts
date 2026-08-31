@@ -95,6 +95,10 @@ export class VideoFrameExtractor {
   private lastRequestedTimestamp: number | null = null
   private sampleLoopError: unknown = null
   private lastFailureKind: 'none' | 'no-sample' | 'decode-error' = 'none'
+  /** Samples returned by the streaming iterator remain extractor-owned until closed. */
+  private ownedSamples = new Set<MediabunnySample>()
+  /** Protects the exactly-once close boundary across stale and teardown races. */
+  private closedSamples = new WeakSet<object>()
   /**
    * Cached VideoFrame from the current sample.  Kept alive between draws so
    * that repeated draws of the same sample (common during transitions past the
@@ -385,7 +389,10 @@ export class VideoFrameExtractor {
     const generation = this.streamGeneration
     const nextResult = await iterator.next()
     if (this.disposed || generation !== this.streamGeneration || iterator !== this.sampleIterator) {
-      if (!nextResult.done) this.closeSample(nextResult.value)
+      if (!nextResult.done) {
+        this.ownSample(nextResult.value)
+        this.closeSample(nextResult.value)
+      }
       return null
     }
     if (nextResult.done) {
@@ -393,6 +400,7 @@ export class VideoFrameExtractor {
       return null
     }
 
+    this.ownSample(nextResult.value)
     this.nextSample = nextResult.value
     return this.nextSample
   }
@@ -570,12 +578,22 @@ export class VideoFrameExtractor {
     this.closeCachedVideoFrame()
     this.closeSample(this.currentSample)
     this.closeSample(this.nextSample)
+    for (const sample of this.ownedSamples) {
+      this.closeSample(sample)
+    }
     this.currentSample = null
     this.nextSample = null
   }
 
+  private ownSample(sample: MediabunnySample): void {
+    this.ownedSamples.add(sample)
+  }
+
   private closeSample(sample: MediabunnySample | null): void {
     if (!sample) return
+    if (this.closedSamples.has(sample)) return
+    this.closedSamples.add(sample)
+    this.ownedSamples.delete(sample)
     try {
       sample.close()
     } catch {

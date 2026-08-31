@@ -5,6 +5,34 @@ describe('VideoFrameExtractor lifecycle', () => {
   afterEach(() => {
     vi.restoreAllMocks()
   })
+
+  it('closes a sample exactly once when stream ownership slots overlap', () => {
+    const sample = { close: vi.fn() }
+    const extractor = new VideoFrameExtractor('blob:test', 'test-item')
+    const internals = extractor as unknown as {
+      currentSample: typeof sample | null
+      nextSample: typeof sample | null
+    }
+    internals.currentSample = sample
+    internals.nextSample = sample
+
+    extractor.dispose()
+
+    expect(sample.close).toHaveBeenCalledOnce()
+  })
+
+  it('closes every sample retained by the ownership ledger during teardown', () => {
+    const sample = { close: vi.fn() }
+    const extractor = new VideoFrameExtractor('blob:test', 'test-item')
+    const internals = extractor as unknown as {
+      ownedSamples: Set<typeof sample>
+    }
+    internals.ownedSamples.add(sample)
+
+    extractor.dispose()
+
+    expect(sample.close).toHaveBeenCalledOnce()
+  })
   it('closes a sample yielded after the extractor was disposed', async () => {
     let resolveNext!: (result: IteratorResult<{ close: () => void }>) => void
     const nextResult = new Promise<IteratorResult<{ close: () => void }>>((resolve) => {
