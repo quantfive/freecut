@@ -99,6 +99,10 @@ export class VideoFrameExtractor {
   private ownedSamples = new Set<MediabunnySample>()
   /** Protects the exactly-once close boundary across stale and teardown races. */
   private closedSamples = new WeakSet<object>()
+  /** Number of independent batch iterators that still own the input. */
+  private activeBatchOperations = 0
+  /** Inputs whose batch iterators must drain before the input can be disposed. */
+  private pendingInputDisposals = new Set<MediabunnyInput>()
   /**
    * Cached VideoFrame from the current sample.  Kept alive between draws so
    * that repeated draws of the same sample (common during transitions past the
@@ -655,13 +659,15 @@ export class VideoFrameExtractor {
     width: number,
     height: number,
   ): Promise<number> {
-    if (this.batchDisabled || !this.ready || !this.sink || timestamps.length === 0) {
+    const sink = this.sink
+    if (this.batchDisabled || !this.ready || !sink || timestamps.length === 0) {
       return -1
     }
 
+    this.activeBatchOperations += 1
     let decoded = 0
     try {
-      for await (const sample of this.sink.samplesAtTimestamps(timestamps)) {
+      for await (const sample of sink.samplesAtTimestamps(timestamps)) {
         if (!sample) continue
         try {
           if (typeof sample.draw === 'function') {
@@ -687,6 +693,11 @@ export class VideoFrameExtractor {
         this.batchDisabled = true
       }
       return decoded > 0 ? decoded : -1
+    } finally {
+      this.activeBatchOperations = Math.max(0, this.activeBatchOperations - 1)
+      if (this.activeBatchOperations === 0) {
+        this.disposePendingInputs()
+      }
     }
   }
 
@@ -738,17 +749,35 @@ export class VideoFrameExtractor {
     this.disposed = true
     this.closeStreamState()
 
-    try {
-      // mediabunny Input lifecycle API is dispose(); close() is not guaranteed.
-      this.input?.dispose()
-    } catch {
-      // Ignore dispose errors
+    const input = this.input
+    this.input = null
+    if (input) {
+      if (this.activeBatchOperations > 0) {
+        this.pendingInputDisposals.add(input)
+      } else {
+        this.disposeInput(input)
+      }
     }
     this.sink = null
-    this.input = null
     this.videoTrack = null
     this.ready = false
     this.drawFailureCount = 0
     this.lastFailureKind = 'none'
+  }
+
+  private disposePendingInputs(): void {
+    for (const input of this.pendingInputDisposals) {
+      this.disposeInput(input)
+    }
+    this.pendingInputDisposals.clear()
+  }
+
+  private disposeInput(input: MediabunnyInput): void {
+    try {
+      // mediabunny Input lifecycle API is dispose(); close() is not guaranteed.
+      input.dispose()
+    } catch {
+      // Ignore dispose errors
+    }
   }
 }
