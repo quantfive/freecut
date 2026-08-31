@@ -19,7 +19,7 @@ export {
   createLocalEditorHost,
   isHostCapabilityEnabled,
 } from '@/features/editor/host/contract'
-export type { EditorHostContextValue } from '@/features/editor/host/context'
+export type { EditorHostContextValue, HostTimelineEditPort } from '@/features/editor/host/context'
 export type { EditorHostProviderProps } from '@/features/editor/host/context-provider'
 export type {
   EditorCapability,

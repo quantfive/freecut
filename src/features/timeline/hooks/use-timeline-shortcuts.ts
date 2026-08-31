@@ -52,11 +52,11 @@ export function useTimelineShortcuts(callbacks: TimelineShortcutCallbacks = {}) 
  *   local playback state that never crosses the host bridge.
  * - Tools (V/T/Shift+C/R tool switching, C hover split) — tool switching is
  *   pure local UI; split flows through the bridge as a supported split_item command.
- * - Delete/Backspace — flows through the bridge as remove_item commands.
+ * - Delete/Backspace — produces one authoritative ripple_delete request.
  * - UI zoom/snap (S, Shift+S, Cmd/Ctrl+=/-, \, Shift+\) — local view state.
  *
  * Deliberately excluded: undo/redo (mutate the temporal store without host
- * commands), ripple delete, clipboard, markers, in/out points, nudges, join,
+ * commands), modifier ripple delete, clipboard, markers, in/out points, nudges, join,
  * freeze frame, and clear-keyframes — all unsupported by the host slice.
  */
 export function useHostTimelineShortcuts(callbacks: TimelineShortcutCallbacks = {}) {

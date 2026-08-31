@@ -121,7 +121,14 @@ export function FreeCutEditorSurface({ host }: { host: EditorHost }) {
   return (
     <I18nextProvider i18n={i18n}>
       <TooltipProvider delayDuration={300}>
-        <EditorHostProvider value={{ mode: 'host', capabilities, host }}>
+        <EditorHostProvider
+          value={{
+            mode: 'host',
+            capabilities,
+            host,
+            timeline: { requestRippleDelete: state.runtime.requestRippleDelete },
+          }}
+        >
           <HostCaptionEditorProvider runtime={state.runtime}>
             <HostTranscriptEditorProvider runtime={state.runtime}>
               <ErrorBoundary level="feature">

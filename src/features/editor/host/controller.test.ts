@@ -24,6 +24,7 @@ import {
 import {
   HostEditorController,
   NO_SUPPORTED_EDIT_REASON,
+  deriveRippleDelete,
   deriveSupportedHostEdit,
 } from './controller'
 import { framesToMicroseconds } from '@/features/editor/codepress/timing'
@@ -255,6 +256,218 @@ describe('embedded FreeCut host controller', () => {
     expect(harness.submitEdit).toHaveBeenCalledWith(batch)
     expect(controller.getSnapshot().timeline.revision).toBe(1)
     expect(controller.getSnapshot().timeline.tracks[0]!.items[0]).toMatchObject({ from: 30 })
+  })
+
+  it('restores the validation adapter after transport rejection so Delete can retry', async () => {
+    const initial = snapshot()
+    let attempts = 0
+    const submitEdit = vi.fn(async (_batch: EditCommandBatch): Promise<HostEditResult> => {
+      attempts += 1
+      if (attempts === 1) throw new Error('host transport unavailable')
+      return {
+        status: 'applied',
+        snapshot: initial,
+        result: { status: 'applied' } as HostAppliedEditResult['result'],
+      }
+    })
+    const host: EditorHost = {
+      capabilities: DEFAULT_HOST_CAPABILITIES,
+      load: () => initial,
+      resolveMedia: () => null,
+      submitEdit,
+    }
+    const controller = new HostEditorController(host, initial)
+
+    await expect(controller.requestRippleDelete(['clip-1'])).rejects.toThrow(
+      'host transport unavailable',
+    )
+    await expect(controller.requestRippleDelete(['clip-1'])).resolves.toMatchObject({
+      status: 'applied',
+    })
+    expect(submitEdit).toHaveBeenCalledTimes(2)
+  })
+
+  it('preserves regular text linked-group metadata through a supported host move', () => {
+    const initial = snapshot({
+      tracks: [
+        {
+          id: 'text-track',
+          kind: 'video',
+          name: 'Text',
+          locked: false,
+          muted: false,
+          items: [
+            {
+              type: 'text',
+              id: 'text-1',
+              trackId: 'text-track',
+              from: 0,
+              durationInFrames: 30,
+              text: 'Linked text',
+              linkedGroupId: 'cohort-text',
+            },
+          ],
+        },
+      ],
+    })
+    const native = hostSnapshotToNativeTimeline(initial)
+    const moved = nativeTimelineToFrameDocument(
+      {
+        tracks: native.tracks,
+        items: native.items.map((item) => (item.id === 'text-1' ? { ...item, from: 30 } : item)),
+        fps: native.fps,
+      },
+      initial.timeline,
+    )
+
+    expect(moved).toMatchObject({ ok: true })
+    if (!moved.ok) return
+    expect(moved.document.tracks[0]?.items[0]).toMatchObject({ linkedGroupId: 'cohort-text' })
+    const derived = deriveSupportedHostEdit(initial.timeline, moved.document, {
+      operationId: 'operation-text-move',
+      idempotencyKey: 'idempotency-text-move',
+    })
+    expect(derived.batch?.commands[0]).toMatchObject({ type: 'move_item', item_id: 'text-1' })
+  })
+
+  it.each([
+    ['null', null],
+    ['absent', undefined],
+  ] as const)(
+    'treats %s regular-text linked-group metadata as unset during a move',
+    (_label, linkedGroupId) => {
+      const textItem = {
+        type: 'text' as const,
+        id: 'text-1',
+        trackId: 'text-track',
+        from: 0,
+        durationInFrames: 30,
+        text: 'Unlinked text',
+        ...(linkedGroupId === undefined ? {} : { linkedGroupId }),
+      }
+      const initial = snapshot({
+        tracks: [
+          {
+            id: 'text-track',
+            kind: 'video',
+            name: 'Text',
+            locked: false,
+            muted: false,
+            items: [textItem],
+          },
+        ],
+      })
+      const native = hostSnapshotToNativeTimeline(initial)
+      const moved = nativeTimelineToFrameDocument(
+        {
+          tracks: native.tracks,
+          items: native.items.map((item) => (item.id === 'text-1' ? { ...item, from: 30 } : item)),
+          fps: native.fps,
+        },
+        initial.timeline,
+      )
+
+      expect(moved).toMatchObject({ ok: true })
+      if (!moved.ok) return
+      expect(moved.document.tracks[0]?.items[0]).not.toHaveProperty('linkedGroupId')
+      const derived = deriveSupportedHostEdit(initial.timeline, moved.document, {
+        operationId: `operation-text-${_label}-move`,
+        idempotencyKey: `idempotency-text-${_label}-move`,
+      })
+      expect(derived.batch?.commands[0]).toMatchObject({ type: 'move_item', item_id: 'text-1' })
+    },
+  )
+
+  it('produces one authoritative ripple command from selected cohort anchors', () => {
+    const initial = snapshot({
+      tracks: [
+        {
+          id: 'track-video',
+          kind: 'video',
+          name: 'Video',
+          locked: false,
+          muted: false,
+          syncLock: true,
+          items: [
+            {
+              type: 'video',
+              id: 'video-1',
+              trackId: 'track-video',
+              mediaId: 'media-1',
+              linkedGroupId: 'cohort-1',
+              from: 30,
+              durationInFrames: 60,
+              sourceStart: 0,
+              sourceEnd: 60,
+            },
+          ],
+        },
+        {
+          id: 'track-audio',
+          kind: 'audio',
+          name: 'Audio',
+          locked: false,
+          muted: false,
+          syncLock: true,
+          items: [
+            {
+              type: 'audio',
+              id: 'audio-1',
+              trackId: 'track-audio',
+              mediaId: 'media-1',
+              linkedGroupId: 'cohort-1',
+              from: 30,
+              durationInFrames: 60,
+              sourceStart: 0,
+              sourceEnd: 60,
+            },
+          ],
+        },
+      ],
+    })
+
+    const derived = deriveRippleDelete(initial.timeline, ['video-1'], {
+      operationId: 'operation-delete-1',
+      idempotencyKey: 'idempotency-delete-1',
+    })
+
+    expect(derived.batch).toMatchObject({
+      timeline_id: 'timeline-1',
+      base_revision: 0,
+      preconditions: [
+        {
+          type: 'item_at',
+          item_id: 'video-1',
+          timeline_start_us: 1_000_000,
+          timeline_end_us: 3_000_000,
+        },
+      ],
+      commands: [
+        {
+          command_id: 'ripple-delete-operation-delete-1',
+          type: 'ripple_delete',
+          start_us: 1_000_000,
+          end_us: 3_000_000,
+          track_ids: null,
+          item_ids: ['video-1'],
+          intent: 'ripple',
+        },
+      ],
+    })
+  })
+
+  it('submits the UI ripple producer without changing stores before the receipt', async () => {
+    const initial = snapshot()
+    const harness = createFakeHost(initial)
+    const controller = new HostEditorController(harness.host, initial)
+
+    const result = await controller.requestRippleDelete(['clip-1'])
+
+    expect(result.status).toBe('applied')
+    expect(harness.submitEdit).toHaveBeenCalledOnce()
+    expect(harness.submitEdit.mock.calls[0]?.[0].commands).toEqual([
+      expect.objectContaining({ type: 'ripple_delete', item_ids: ['clip-1'], intent: 'ripple' }),
+    ])
   })
 
   it('keeps transformed clip moves supported across native transform key names', () => {

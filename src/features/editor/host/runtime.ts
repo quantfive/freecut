@@ -59,6 +59,7 @@ export class EmbeddedEditorHostRuntime implements EmbeddedEditorHostRuntimeContr
   private applyingAuthoritative = false
   private reconcileScheduled = false
   private editInFlight = false
+  private rippleDeleteInFlight = false
   private gestureListenersAttached = false
   private unsubscribeResolver: (() => void) | null = null
   private unsubscribeController: (() => void) | null = null
@@ -71,6 +72,39 @@ export class EmbeddedEditorHostRuntime implements EmbeddedEditorHostRuntimeContr
     this.projectId = snapshot.project.id
     this.authoritativeSnapshot = snapshot
     this.controller = new HostEditorController(host, snapshot)
+  }
+
+  /**
+   * Runtime producer for the host UI's Delete action. It submits against the
+   * controller's authoritative snapshot and leaves the visible stores alone
+   * until the host returns an applied/replayed snapshot.
+   */
+  // fallow-ignore-next-line unused-class-member
+  readonly requestRippleDelete = async (itemIds: readonly string[]): Promise<void> => {
+    if (this.rippleDeleteInFlight) {
+      this.host.notify?.({
+        kind: 'info',
+        message: 'Wait for the current timeline delete to finish',
+      })
+      return
+    }
+    this.rippleDeleteInFlight = true
+    try {
+      const result = await this.controller.requestRippleDelete(itemIds)
+      if (result.status === 'applied' || result.status === 'replayed') {
+        // Selection is UI state, so clear it only after the authoritative
+        // receipt has replaced the timeline. Rejections keep the selection
+        // visible for recovery and retry.
+        useSelectionStore.getState().clearSelection()
+      }
+    } catch (error) {
+      this.host.notify?.({
+        kind: 'error',
+        message: error instanceof Error ? error.message : 'Timeline delete submission failed',
+      })
+    } finally {
+      this.rippleDeleteInFlight = false
+    }
   }
 
   /**

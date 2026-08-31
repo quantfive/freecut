@@ -16,6 +16,7 @@ import {
   type EmbeddedEditorSnapshot,
   type HostEditPredicate,
   type HostNotice,
+  type HostTimelineEditPort,
 } from '@quantfive/freecut-editor-surface'
 
 const snapshot: EmbeddedEditorSnapshot = {
@@ -144,8 +145,48 @@ describe('published FreeCut browser entry', () => {
       detail: { code: 'ambiguous_change', failedPredicates: [predicate] },
     }
     const requestTranscription = vi.fn<NonNullable<EditorTranscriptPort['requestTranscription']>>()
+    const timelinePort: HostTimelineEditPort = { requestRippleDelete: vi.fn() }
     expect(notice.detail?.failedPredicates).toEqual(['sourceRange'])
     expect(requestTranscription).toBeTypeOf('function')
+    expect(timelinePort.requestRippleDelete).toBeTypeOf('function')
+
+    const typedMetadataSnapshot: EmbeddedEditorSnapshot = {
+      ...snapshot,
+      timeline: {
+        ...snapshot.timeline,
+        tracks: [
+          {
+            id: 'metadata-track',
+            kind: 'video',
+            name: 'Metadata track',
+            locked: false,
+            muted: false,
+            syncLock: true,
+            parentTrackId: null,
+            isGroup: false,
+            items: [
+              {
+                type: 'text',
+                id: 'metadata-text',
+                trackId: 'metadata-track',
+                from: 0,
+                durationInFrames: 1,
+                linkedGroupId: null,
+                text: 'typed metadata',
+              },
+            ],
+          },
+        ],
+      },
+    }
+    expect(typedMetadataSnapshot.timeline.tracks[0]?.items[0]).toMatchObject({
+      linkedGroupId: null,
+    })
+    expect(typedMetadataSnapshot.timeline.tracks[0]).toMatchObject({
+      syncLock: true,
+      parentTrackId: null,
+      isGroup: false,
+    })
   })
 
   it('sizes the published surface against its container, never the viewport', async () => {

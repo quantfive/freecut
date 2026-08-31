@@ -159,6 +159,7 @@ export interface FreeCutFrameClip {
   id: string
   trackId: string
   mediaId: string
+  linkedGroupId?: string | null
   from: number
   durationInFrames: number
   sourceStart?: number
@@ -175,6 +176,7 @@ export interface FreeCutFrameText {
   trackId: string
   from: number
   durationInFrames: number
+  linkedGroupId?: string | null
   text: string
   style?: Record<string, string | number>
   opacity?: number
@@ -187,6 +189,7 @@ export interface FreeCutFrameCaptionCue {
   trackId: string
   from: number
   durationInFrames: number
+  linkedGroupId?: string | null
   text: string
   speaker?: string | null
   style?: CaptionStyle
@@ -201,6 +204,9 @@ export interface FreeCutFrameTrack {
   language?: string
   locked: boolean
   muted: boolean
+  syncLock?: boolean
+  parentTrackId?: string | null
+  isGroup?: boolean
   defaultStyle?: CaptionStyle | null
   items: readonly FreeCutFrameItem[]
 }
@@ -472,6 +478,11 @@ export interface EditorHostContextValue {
   mode: 'local' | 'host'
   capabilities: EditorCapabilityMap
   host?: EditorHost
+  timeline?: HostTimelineEditPort
+}
+
+export interface HostTimelineEditPort {
+  requestRippleDelete(itemIds: readonly string[]): Promise<void> | void
 }
 
 export interface EditorHostProviderProps {

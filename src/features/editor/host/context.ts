@@ -6,10 +6,17 @@ import {
   type EditorHost,
 } from './contract'
 
+/** UI producer for destructive host timeline edits. */
+export interface HostTimelineEditPort {
+  /** Ask the host authority to ripple-delete the selected timeline anchors. */
+  requestRippleDelete(itemIds: readonly string[]): Promise<void> | void
+}
+
 export interface EditorHostContextValue {
   mode: 'local' | 'host'
   capabilities: EditorCapabilityMap
   host?: EditorHost
+  timeline?: HostTimelineEditPort
 }
 
 const localContext: EditorHostContextValue = {

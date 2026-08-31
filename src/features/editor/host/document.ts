@@ -66,6 +66,10 @@ function isOpacityOnlyTransform(transform: Record<string, number>): boolean {
   )
 }
 
+function linkedGroupMetadata(linkedGroupId: string | null | undefined): { linkedGroupId?: string } {
+  return linkedGroupId ? { linkedGroupId } : {}
+}
+
 function frameTransformToNative(
   transform: Record<string, number> | undefined,
 ): NonNullable<TimelineItem['transform']> | undefined {
@@ -124,11 +128,15 @@ function nativeTrackFromHostTrack(
     kind,
     height: DEFAULT_TRACK_HEIGHT,
     locked: track.locked,
-    syncLock: true,
+    syncLock: track.syncLock ?? true,
     visible: true,
     muted: track.muted,
     solo: false,
     order: index,
+    ...(track.parentTrackId !== undefined
+      ? { parentTrackId: track.parentTrackId ?? undefined }
+      : {}),
+    ...(track.isGroup !== undefined ? { isGroup: track.isGroup } : {}),
     items: [],
   }
 }
@@ -148,6 +156,7 @@ function nativeItemFromHostItem(
       durationInFrames: item.durationInFrames,
       label: item.text || 'Text',
       text: item.text,
+      ...linkedGroupMetadata(item.linkedGroupId),
       color: textColor,
       ...(typeof item.style?.font_family === 'string'
         ? { fontFamily: item.style.font_family }
@@ -174,6 +183,7 @@ function nativeItemFromHostItem(
       label: item.text || 'Caption',
       text: item.text,
       textRole: 'caption',
+      ...linkedGroupMetadata(item.linkedGroupId),
       color: style?.color ?? '#ffffff',
       ...(typeof style?.font_family === 'string' ? { fontFamily: style.font_family } : {}),
       ...(typeof style?.font_size === 'number' ? { fontSize: style.font_size } : {}),
@@ -201,6 +211,7 @@ function nativeItemFromHostItem(
     label: asset?.fileName ?? item.mediaId,
     mediaId: item.mediaId,
     src: '',
+    ...linkedGroupMetadata(item.linkedGroupId),
     ...(sourceDuration !== undefined ? { sourceDuration } : {}),
     // Carry the host's source range through exactly as stated, absence
     // included.  A native item with no `sourceStart` plays from source frame
@@ -277,6 +288,7 @@ function frameItemToNativeComparable(
       durationInFrames: item.durationInFrames,
       sourceStart: item.sourceStart,
       sourceEnd: item.sourceEnd,
+      ...linkedGroupMetadata(item.linkedGroupId),
       // Optional fields are emitted only when set so the comparable shape
       // matches host snapshots that omit them entirely.
       ...(item.volume !== undefined ? { volume: item.volume } : {}),
@@ -304,6 +316,7 @@ function frameItemToNativeComparable(
       from: item.from,
       durationInFrames: item.durationInFrames,
       text: item.text,
+      ...linkedGroupMetadata(item.linkedGroupId),
       ...(Object.keys(style).length > 0 ? { style } : {}),
     }
   }
@@ -324,6 +337,7 @@ function frameItemToNativeComparable(
       from: item.from,
       durationInFrames: item.durationInFrames,
       text: item.text,
+      ...linkedGroupMetadata(item.linkedGroupId),
       ...(Object.keys(style).length > 0 ? { style } : {}),
       ...(opacityOnly ? { opacity: transform.opacity } : {}),
       ...(transform !== undefined && !opacityOnly ? { transform } : {}),
@@ -331,6 +345,19 @@ function frameItemToNativeComparable(
   }
 
   return { reason: `Unsupported native timeline item type "${item.type}"`, itemId: item.id }
+}
+
+function authoritativeTrackMetadata(
+  track: FreeCutFrameDocument['tracks'][number] | undefined,
+): Partial<Pick<TimelineTrack, 'syncLock' | 'parentTrackId' | 'isGroup'>> {
+  const syncLock = track?.syncLock
+  const parentTrackId = track?.parentTrackId
+  const isGroup = track?.isGroup
+  const metadata: Partial<Pick<TimelineTrack, 'syncLock' | 'parentTrackId' | 'isGroup'>> = {}
+  if (syncLock !== undefined) metadata.syncLock = syncLock
+  if (parentTrackId !== undefined && parentTrackId !== null) metadata.parentTrackId = parentTrackId
+  if (isGroup !== undefined) metadata.isGroup = isGroup
+  return metadata
 }
 
 /**
@@ -374,6 +401,7 @@ export function nativeTimelineToFrameDocument(
         : {}),
       locked: track.locked,
       muted: track.muted,
+      ...authoritativeTrackMetadata(authoritativeTrack),
       ...(authoritativeTrack?.defaultStyle !== undefined
         ? { defaultStyle: authoritativeTrack.defaultStyle }
         : {}),
