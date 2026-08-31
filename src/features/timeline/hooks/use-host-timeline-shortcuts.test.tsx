@@ -6,6 +6,7 @@ import { useSelectionStore } from '@/shared/state/selection'
 import { useTimelineStore } from '../stores/timeline-store'
 import { useTimelineCommandStore } from '../stores/timeline-command-store'
 import { useKeyframeSelectionStore } from '../stores/keyframe-selection-store'
+import { clearTimelineHover, setTimelineHover } from '../utils/timeline-hover-state'
 import { useHostTimelineShortcuts, useTimelineShortcuts } from './use-timeline-shortcuts'
 import type { TimelineTrack, VideoItem } from '@/types/timeline'
 
@@ -64,6 +65,7 @@ const ITEM: VideoItem = {
 
 describe('useHostTimelineShortcuts', () => {
   beforeEach(() => {
+    clearTimelineHover()
     useTimelineCommandStore.getState().clearHistory()
     useSelectionStore.setState({
       selectedItemIds: [],
@@ -130,15 +132,16 @@ describe('useHostTimelineShortcuts', () => {
     expect(useTimelineStore.getState().items).toHaveLength(0)
   })
 
-  it('splits the hovered clip at the playhead on Shift+C', () => {
+  it('splits the hovered clip at the pointer frame on C', () => {
     usePlaybackStore.setState({
-      currentFrame: 15,
+      currentFrame: 4,
       previewFrame: null,
-      previewItemId: 'clip-1',
+      previewItemId: null,
     })
+    setTimelineHover('clip-1', 15)
     render(<HostShortcutHarness />)
 
-    fireEvent.keyDown(document, { key: 'C', code: 'KeyC', shiftKey: true })
+    fireEvent.keyDown(document, { key: 'c', code: 'KeyC' })
 
     expect(useTimelineStore.getState().items).toHaveLength(2)
     expect(useTimelineStore.getState().items).toEqual(

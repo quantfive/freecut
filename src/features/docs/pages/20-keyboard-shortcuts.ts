@@ -30,7 +30,8 @@ const page = {
           kind: 'table',
           headers: ['Action', 'Shortcut'],
           rows: [
-            ['Split at playhead', '`Shift+C` / `Alt+C`'],
+            ['Split hovered clip', '`C`'],
+            ['Split all at playhead', '`Alt+C`'],
             ['Join', '`Shift+J`'],
             ['Delete / Ripple delete', '`Delete` / `Ctrl+Delete`'],
             ['Insert freeze frame', '`Shift+F`'],
@@ -50,7 +51,7 @@ const page = {
           rows: [
             ['Selection', '`V`'],
             ['Trim edit', '`T`'],
-            ['Razor', '`C`'],
+            ['Razor (persistent)', '`Shift+C`'],
             ['Rate stretch', '`R`'],
             ['Slip', '`Y`'],
             ['Slide', '`U`'],

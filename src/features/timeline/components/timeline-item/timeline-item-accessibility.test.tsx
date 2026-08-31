@@ -7,7 +7,10 @@ import { useSelectionStore } from '@/shared/state/selection'
 import type { TimelineItem as TimelineItemType, TimelineTrack, VideoItem } from '@/types/timeline'
 
 import { usePlaybackShortcuts } from '../../hooks/shortcuts/use-playback-shortcuts'
+import { useTimelineShortcuts } from '../../hooks/use-timeline-shortcuts'
 import { useItemsStore } from '../../stores/items-store'
+import { useTimelineCommandStore } from '../../stores/timeline-command-store'
+import { clearTimelineHover, setTimelineHover } from '../../utils/timeline-hover-state'
 import { useTimelineStore } from '../../stores/timeline-store'
 import { TimelineItemHitTarget } from '../timeline-item-hit-target'
 import { TimelineItem } from '.'
@@ -104,6 +107,11 @@ function renderItem(item: TimelineItemType = ITEM, trackLocked = false) {
 
 function PlaybackShortcutHarness({ children }: { children: React.ReactNode }) {
   usePlaybackShortcuts({})
+  return children
+}
+
+function TimelineShortcutHarness({ children }: { children: React.ReactNode }) {
+  useTimelineShortcuts()
   return children
 }
 
@@ -284,5 +292,121 @@ describe('TimelineItem keyboard accessibility', () => {
     act(() => useSelectionStore.getState().setActiveTool('razor'))
     fireEvent.click(clip, { button: 0, clientX: 20, clientY: 10 })
     expect(splitItem).toHaveBeenCalledTimes(1)
+  })
+
+  it('restores one linked pair through hover-C and focused Razor undo', () => {
+    useTimelineCommandStore.getState().clearHistory()
+    useEditorStore.getState().setLinkedSelectionEnabled(true)
+    const linkedVideo = {
+      ...ITEM,
+      from: 0,
+      durationInFrames: 120,
+      sourceEnd: 120,
+      linkedGroupId: 'av-group',
+    }
+    const linkedAudio = {
+      ...ITEM,
+      id: 'clip-audio-1',
+      type: 'audio' as const,
+      trackId: AUDIO_TRACK.id,
+      from: 0,
+      durationInFrames: 120,
+      sourceEnd: 120,
+      linkedGroupId: 'av-group',
+    }
+    setTimeline(
+      [linkedVideo, linkedAudio],
+      [
+        { ...VIDEO_TRACK, items: [linkedVideo] },
+        { ...AUDIO_TRACK, locked: false, items: [linkedAudio] },
+      ],
+    )
+    const originalIds = [linkedVideo.id, linkedAudio.id]
+    const originalGroups = [linkedVideo.linkedGroupId, linkedAudio.linkedGroupId]
+
+    const { container } = render(
+      <TimelineShortcutHarness>
+        <TimelineItem
+          item={linkedVideo}
+          timelineDuration={10}
+          trackLocked={false}
+          isCompactWidth={false}
+          isDetailEligible
+        />
+      </TimelineShortcutHarness>,
+    )
+    const clip = container.querySelector<HTMLElement>('[data-timeline-item]')!
+    const itemShell = container.querySelector<HTMLElement>('.timeline-item')!
+    vi.spyOn(itemShell, 'getBoundingClientRect').mockReturnValue({
+      left: 0,
+      top: 0,
+      right: 400,
+      bottom: 40,
+      width: 400,
+      height: 40,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    })
+
+    setTimelineHover(linkedVideo.id, 48)
+    act(() => {
+      document.dispatchEvent(
+        new KeyboardEvent('keydown', {
+          key: 'c',
+          code: 'KeyC',
+          bubbles: true,
+          cancelable: true,
+        }),
+      )
+    })
+    const afterHoverSplit = useTimelineStore.getState().items
+    expect(afterHoverSplit.map((item) => item.durationInFrames).toSorted((a, b) => a - b)).toEqual([
+      48, 48, 72, 72,
+    ])
+    expect(new Set(afterHoverSplit.map((item) => item.id)).size).toBe(4)
+    expect(useTimelineCommandStore.getState().undoStack).toHaveLength(1)
+
+    act(() => useTimelineCommandStore.getState().undo())
+    expect(useTimelineStore.getState().items).toEqual([linkedVideo, linkedAudio])
+    expect(useTimelineCommandStore.getState().undoStack).toHaveLength(0)
+
+    act(() => useSelectionStore.getState().setActiveTool('razor'))
+    fireEvent.click(clip, {
+      button: 0,
+      clientX: 280,
+      clientY: 10,
+    })
+    const afterRazorSplit = useTimelineStore.getState().items
+    expect(afterRazorSplit.map((item) => item.durationInFrames).toSorted((a, b) => a - b)).toEqual([
+      36, 36, 84, 84,
+    ])
+    expect(afterRazorSplit.filter((item) => originalIds.includes(item.id))).toHaveLength(2)
+    expect(new Set(afterRazorSplit.map((item) => item.id)).size).toBe(4)
+    expect(useTimelineCommandStore.getState().undoStack).toHaveLength(1)
+    expect(useTimelineStore.getState().isDirty).toBe(true)
+
+    expect(useTimelineStore.getState().items).toHaveLength(4)
+
+    clip.focus()
+    act(() => {
+      clip.dispatchEvent(
+        new KeyboardEvent('keydown', {
+          key: 'z',
+          code: 'KeyZ',
+          metaKey: true,
+          bubbles: true,
+          cancelable: true,
+        }),
+      )
+    })
+
+    const restored = useTimelineStore.getState().items
+    expect(restored).toHaveLength(2)
+    expect(restored.map((item) => item.id)).toEqual(originalIds)
+    expect(restored.map((item) => item.durationInFrames)).toEqual([120, 120])
+    expect(restored.map((item) => item.linkedGroupId)).toEqual(originalGroups)
+    expect(useTimelineCommandStore.getState().undoStack).toHaveLength(0)
+    clearTimelineHover()
   })
 })

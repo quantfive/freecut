@@ -135,6 +135,7 @@ describe('ItemContextMenu scene detection', () => {
   it('shows the resolved ripple-delete keycap', () => {
     renderContextMenu()
 
+    expect(screen.getByText('Ripple Delete', { exact: true })).toBeInTheDocument()
     expect(screen.getByText('Ctrl + Backspace')).toBeInTheDocument()
   })
 

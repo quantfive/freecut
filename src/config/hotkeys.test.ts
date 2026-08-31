@@ -42,19 +42,21 @@ describe('keyframe productivity hotkeys', () => {
 })
 
 describe('transport and editing defaults', () => {
-  it('uses canonical J/K/L transport without conflicting with keyframe add', () => {
+  it('uses canonical J/K/L transport and the hover split / Razor defaults', () => {
     expect({
       reverse: HOTKEYS.SHUTTLE_REVERSE,
       pause: HOTKEYS.SHUTTLE_PAUSE,
       forward: HOTKEYS.SHUTTLE_FORWARD,
       addKeyframe: HOTKEYS.EDIT_KEYFRAME_ADD,
       splitAtPlayhead: HOTKEYS.SPLIT_AT_PLAYHEAD,
+      razor: HOTKEYS.RAZOR_TOOL,
     }).toEqual({
       reverse: 'j',
       pause: 'k',
       forward: 'l',
       addKeyframe: 'shift+k',
-      splitAtPlayhead: 'shift+c',
+      splitAtPlayhead: 'c',
+      razor: 'shift+c',
     })
   })
 })
@@ -170,7 +172,7 @@ describe('findHotkeyConflicts', () => {
       SELECTION_TOOL: 'c',
     })
 
-    expect(findHotkeyConflicts(bindings, 'c', 'SELECTION_TOOL')).toEqual(['RAZOR_TOOL'])
+    expect(findHotkeyConflicts(bindings, 'c', 'SELECTION_TOOL')).toEqual(['SPLIT_AT_PLAYHEAD'])
   })
 
   it('exposes derived preview variants that collide with runtime commands', () => {
@@ -602,6 +604,31 @@ describe('parseHotkeyImportDocument', () => {
     ).toEqual({
       overrides: {
         SPLIT_AT_PLAYHEAD: 'mod+shift+c',
+      },
+      importedCommandCount: 1,
+      ignoredCommandCount: 0,
+      remappedCommandCount: 1,
+      sourceVersion: 1,
+    })
+  })
+
+  it('migrates split metadata from a v1 preset after the shortcut roles swap', () => {
+    expect(
+      parseHotkeyImportDocument({
+        schema: HOTKEY_EXPORT_SCHEMA,
+        version: 1,
+        commands: [
+          {
+            id: 'REMOVED_SPLIT_COMMAND',
+            label: 'Split at playhead',
+            defaultBinding: 'Shift+C',
+            binding: 'Shift+X',
+          },
+        ],
+      }),
+    ).toMatchObject({
+      overrides: {
+        SPLIT_AT_PLAYHEAD: 'shift+x',
       },
       importedCommandCount: 1,
       ignoredCommandCount: 0,

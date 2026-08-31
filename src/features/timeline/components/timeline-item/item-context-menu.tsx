@@ -722,7 +722,7 @@ function DestructiveActions({
           disabled={!isSelected}
           className="text-destructive focus:text-destructive"
         >
-          {t('timeline.contextMenu.rippleDelete')}
+          <span>{t('timeline.contextMenu.rippleDelete')}</span>
           <ContextMenuShortcut>{formatHotkeyBinding(hotkeys.RIPPLE_DELETE)}</ContextMenuShortcut>
         </ContextMenuItem>
       )}

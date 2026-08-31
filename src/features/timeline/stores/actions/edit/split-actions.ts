@@ -5,31 +5,76 @@ import { useTimelineSettingsStore } from '../../timeline-settings-store'
 import { useSelectionStore } from '@/shared/state/selection'
 import { execute, applyTransitionRepairs } from '../shared'
 import { getLinkedItemsForEdit } from '../linked-edit'
-import { getUniqueLinkedItemAnchorIds } from '../../../utils/linked-items'
+import {
+  getSynchronizedLinkedItems,
+  getUniqueLinkedItemAnchorIds,
+} from '../../../utils/linked-items'
 import { applySplitBookkeeping, type SplitResultEntry } from '../split-bookkeeping'
 import { canMutateTimelineItems, isLinkedSelectionEnabled, isInTransitionOverlap } from './shared'
 import { emitUiSound } from '@/shared/ui/ui-sound'
+
+export type SplitRejectionReason =
+  | 'no-hover'
+  | 'out-of-range'
+  | 'transition'
+  | 'locked'
+  | 'malformed-linked'
+  | 'no-clip'
+  | 'recording'
+
+const SPLIT_REJECTION_MESSAGES: Record<SplitRejectionReason, string> = {
+  'no-hover': 'Hover over a clip before splitting.',
+  'out-of-range': 'Place the split inside the clip, away from its edges.',
+  transition: 'Cannot split inside a transition zone',
+  locked: 'Cannot split a locked clip or linked companion.',
+  'malformed-linked': 'Cannot split: linked clips have mismatched timing.',
+  'no-clip': 'No clip crosses the requested split frame.',
+  recording: 'Stop recording before splitting the timeline.',
+}
+
+export function notifySplitRejection(reason: SplitRejectionReason): void {
+  toast.warning(SPLIT_REJECTION_MESSAGES[reason])
+  emitUiSound('error')
+}
 
 export function splitItem(
   id: string,
   splitFrame: number,
 ): { leftItem: TimelineItem; rightItem: TimelineItem } | null {
+  if (!Number.isFinite(splitFrame)) {
+    notifySplitRejection('out-of-range')
+    return null
+  }
+
   const items = useItemsStore.getState().items
   const itemsToSplit = getLinkedItemsForEdit(items, id, isLinkedSelectionEnabled())
-  if (itemsToSplit.length === 0 || !canMutateTimelineItems(itemsToSplit.map((item) => item.id))) {
+  if (itemsToSplit.length === 0) {
+    return null
+  }
+
+  if (!canMutateTimelineItems(itemsToSplit.map((item) => item.id))) {
+    notifySplitRejection('locked')
+    return null
+  }
+
+  if (
+    itemsToSplit.length > 1 &&
+    getSynchronizedLinkedItems(items, id).length !== itemsToSplit.length
+  ) {
+    notifySplitRejection('malformed-linked')
     return null
   }
 
   for (const item of itemsToSplit) {
-    // Bounds check first — out-of-range splits are a silent no-op (handled by _splitItem),
-    // must not fall through to transition zone check which would false-positive.
+    // Bounds check first — an edge/out-of-range split gets specific feedback
+    // and must not fall through to transition-zone validation.
     if (splitFrame <= item.from || splitFrame >= item.from + item.durationInFrames) {
+      notifySplitRejection('out-of-range')
       return null
     }
     const relativeFrame = splitFrame - item.from
     if (isInTransitionOverlap(item.id, relativeFrame, item.durationInFrames)) {
-      toast.warning('Cannot split inside a transition zone')
-      emitUiSound('error')
+      notifySplitRejection('transition')
       return null
     }
   }
@@ -78,11 +123,22 @@ export function splitAllItemsAtFrame(splitFrame: number): number {
     .map((item) => item.id)
   const anchorIds = getUniqueLinkedItemAnchorIds(items, overlappingItemIds)
 
-  if (anchorIds.length === 0) return 0
+  if (anchorIds.length === 0) {
+    notifySplitRejection('no-clip')
+    return 0
+  }
 
   const splitPlans = anchorIds.flatMap((anchorId) => {
     const itemsToSplit = getLinkedItemsForEdit(items, anchorId, isLinkedSelectionEnabled())
     if (itemsToSplit.length === 0) return []
+
+    if (
+      itemsToSplit.length > 1 &&
+      getSynchronizedLinkedItems(items, anchorId).length !== itemsToSplit.length
+    ) {
+      notifySplitRejection('malformed-linked')
+      return []
+    }
 
     let blockedByTransition = false
     const canSplitGroup = itemsToSplit.every((item) => {
@@ -101,14 +157,19 @@ export function splitAllItemsAtFrame(splitFrame: number): number {
 
     if (!canSplitGroup) {
       if (blockedByTransition) {
-        toast.warning('Cannot split inside a transition zone')
-        emitUiSound('error')
+        notifySplitRejection('transition')
+      } else {
+        notifySplitRejection('out-of-range')
       }
       return []
     }
 
     const itemIds = itemsToSplit.map((item) => item.id)
-    return canMutateTimelineItems(itemIds) ? [{ anchorId, itemIds }] : []
+    if (!canMutateTimelineItems(itemIds)) {
+      notifySplitRejection('locked')
+      return []
+    }
+    return [{ anchorId, itemIds }]
   })
 
   if (splitPlans.length === 0) return 0

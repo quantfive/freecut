@@ -1063,12 +1063,12 @@ describe('TimelineContent playback selection behavior', () => {
     expect(usePlaybackStore.getState().previewFrame).toBe(24)
   })
 
-  it('commits the hover preview when the timeline body is clicked', () => {
+  it('seeks the timeline body from the pointer coordinate instead of stale hover preview', () => {
     const { container } = render(<TimelineContent duration={10} tracks={[VIDEO_TRACK]} />)
 
     act(() => {
       usePlaybackStore.getState().setCurrentFrame(90)
-      usePlaybackStore.getState().setPreviewFrame(24)
+      usePlaybackStore.getState().setPreviewFrame(99)
       usePlaybackStore.getState().play()
     })
 
