@@ -1,14 +1,51 @@
 /**
- * Tool shortcuts: V (Select), T (Trim Edit), C (Razor), Shift+C (Split at playhead), R (Rate Stretch).
+ * Tool shortcuts: V (Select), T (Trim Edit), Shift+C (Razor), C (hover split), R (Rate Stretch).
  */
 
 import { useCommandHotkey } from '@/hooks/use-hotkey-registration'
-import { usePlaybackStore } from '@/shared/state/playback'
 import { useTimelineStore } from '../../stores/timeline-store'
+import { useTimelineCommandStore } from '../../stores/timeline-command-store'
 import { useSelectionStore } from '@/shared/state/selection'
 import { HOTKEY_OPTIONS } from '@/config/hotkeys'
 import type { TimelineShortcutCallbacks } from '../use-timeline-shortcuts'
 import { SLIP_SLIDE_TOOLS_ENABLED } from '../../constants'
+import { getTimelineHover } from '../../utils/timeline-hover-state'
+import { notifySplitRejection } from '../../stores/actions/item-actions'
+import { isMicRecordingActive, useMicRecordingStore } from '@/shared/state/mic-recording-store'
+
+function splitHoveredTimelineItemAtPointer(): boolean {
+  if (isMicRecordingActive(useMicRecordingStore.getState().status)) {
+    notifySplitRejection('recording')
+    return false
+  }
+
+  const { itemId, frame } = getTimelineHover()
+  const { items } = useTimelineStore.getState()
+
+  if (!itemId || frame === null) {
+    notifySplitRejection('no-hover')
+    return false
+  }
+
+  const item = items.find((candidate) => candidate.id === itemId)
+  if (!item) {
+    notifySplitRejection('no-hover')
+    return false
+  }
+
+  if (frame <= item.from || frame >= item.from + item.durationInFrames) {
+    notifySplitRejection('out-of-range')
+    return false
+  }
+
+  const itemCountBeforeSplit = items.length
+  const undoDepthBeforeSplit = useTimelineCommandStore.getState().undoStack.length
+  useTimelineStore.getState().splitItem(item.id, frame)
+  return (
+    useTimelineStore.getState().items.length > itemCountBeforeSplit &&
+    useTimelineCommandStore.getState().undoStack.length > undoDepthBeforeSplit
+  )
+}
 
 export function useToolShortcuts(callbacks: TimelineShortcutCallbacks) {
   const activeTool = useSelectionStore((s) => s.activeTool)
@@ -36,7 +73,7 @@ export function useToolShortcuts(callbacks: TimelineShortcutCallbacks) {
     [activeTool, setActiveTool],
   )
 
-  // Tool: C - Toggle Razor/Cut Mode
+  // Tool: Shift+C - Toggle persistent Razor/Cut Mode
   useCommandHotkey(
     'RAZOR_TOOL',
     (event) => {
@@ -47,24 +84,15 @@ export function useToolShortcuts(callbacks: TimelineShortcutCallbacks) {
     [activeTool, setActiveTool],
   )
 
-  // Tool: Shift+C - Split hovered item at gray playhead (or main playhead)
+  // Editing: C - Split the clip currently under the pointer at its exact hover frame.
+  // This intentionally does not fall back to currentFrame or the throttled
+  // playback preview: a stale preview must never become an edit location.
   useCommandHotkey(
     'SPLIT_AT_PLAYHEAD',
     (event) => {
       event.preventDefault()
-      const { previewFrame, previewItemId, currentFrame } = usePlaybackStore.getState()
-      const splitFrame = previewFrame ?? currentFrame
-      const { items, splitItem } = useTimelineStore.getState()
-
-      // If hovering over a specific item, split only that item
-      if (previewItemId) {
-        const item = items.find((i) => i.id === previewItemId)
-        if (item && splitFrame > item.from && splitFrame < item.from + item.durationInFrames) {
-          splitItem(item.id, splitFrame)
-          if (callbacks.onSplit) {
-            callbacks.onSplit()
-          }
-        }
+      if (splitHoveredTimelineItemAtPointer() && callbacks.onSplit) {
+        callbacks.onSplit()
       }
     },
     HOTKEY_OPTIONS,

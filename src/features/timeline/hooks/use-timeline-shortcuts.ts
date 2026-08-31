@@ -24,7 +24,7 @@ export interface TimelineShortcutCallbacks {
  * Composes domain-specific shortcut hooks for:
  * - Playback & navigation (Space, arrows, Home/End, snap points)
  * - Editing (Delete, split, join, keyframes)
- * - Tools (V/C/R tool switching)
+ * - Tools (V/T/Shift+C/R tool switching, C hover split)
  * - Markers (M add/remove, [ ] navigate)
  * - In/Out markers (I, O, Shift+I/O, Alt+X)
  * - UI (S snap, Z zoom, undo/redo)
@@ -50,8 +50,8 @@ export function useTimelineShortcuts(callbacks: TimelineShortcutCallbacks = {}) 
  * authoritative timeline document:
  * - Playback & navigation (Space, J/K/L, arrows, Home/End, snap points) —
  *   local playback state that never crosses the host bridge.
- * - Tools (V/T/C/R, Shift+C split) — tool switching is pure local UI; split
- *   flows through the bridge as a supported split_item command.
+ * - Tools (V/T/Shift+C/R tool switching, C hover split) — tool switching is
+ *   pure local UI; split flows through the bridge as a supported split_item command.
  * - Delete/Backspace — produces one authoritative ripple_delete request.
  * - UI zoom/snap (S, Shift+S, Cmd/Ctrl+=/-, \, Shift+\) — local view state.
  *

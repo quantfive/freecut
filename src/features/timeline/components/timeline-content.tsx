@@ -76,6 +76,8 @@ import { notifyTimelineLiveScroll } from '@/shared/timeline/live-scroll-sync'
 import { getPlaybackFollowScrollLeft } from '../utils/playback-follow-scroll'
 import { TimelineSettledContentZoomProvider } from './timeline-settled-content-zoom-provider'
 import { getTimelineZoomInteractionShieldBounds } from '../utils/timeline-zoom-interaction-shield'
+import { clearTimelineHover, setTimelineHover } from '../utils/timeline-hover-state'
+import { isTimelinePointerControl, resolveTimelinePointerFrame } from '../utils/timeline-pointer'
 
 const ACTIVE_TIMELINE_GESTURE_CURSOR_CLASSES = [
   'timeline-cursor-trim-left',
@@ -97,13 +99,17 @@ function shouldIgnoreTimelineContainerClick(
 ): boolean {
   return (
     interactionJustFinished ||
-    Boolean(target.closest('[role="menu"]')) ||
+    isTimelinePointerControl(target) ||
     isMicRecordingActive(useMicRecordingStore.getState().status)
   )
 }
 
-function shouldIgnoreTimelineMouseDownCapture(button: number): boolean {
-  return button !== 0 || isMicRecordingActive(useMicRecordingStore.getState().status)
+function shouldIgnoreTimelineMouseDownCapture(button: number, target: HTMLElement): boolean {
+  return (
+    button !== 0 ||
+    isTimelinePointerControl(target) ||
+    isMicRecordingActive(useMicRecordingStore.getState().status)
+  )
 }
 
 function resolveTimelineContainerClickFrame(
@@ -113,11 +119,13 @@ function resolveTimelineContainerClickFrame(
   maxTimelineFrame: number,
 ): number {
   const playback = usePlaybackStore.getState()
-  if (playback.previewFrame !== null) return playback.previewFrame
-  if (!container) return playback.currentFrame
-
-  const localX = clientX - container.getBoundingClientRect().left + container.scrollLeft
-  return Math.max(0, Math.min(Math.round(pixelsToFrame(localX)), maxTimelineFrame))
+  return resolveTimelinePointerFrame({
+    clientX,
+    container,
+    pixelsToFrame,
+    maxTimelineFrame,
+    fallbackFrame: playback.currentFrame,
+  })
 }
 
 function seekTimelineTrackAtPointer({
@@ -134,6 +142,7 @@ function seekTimelineTrackAtPointer({
   maxTimelineFrame: number
 }): void {
   if (!target.closest('[data-track-id]')) return
+  if (isTimelinePointerControl(target)) return
   if (useSelectionStore.getState().activeTool === 'razor') return
   if (isMicRecordingActive(useMicRecordingStore.getState().status)) return
 
@@ -1040,6 +1049,7 @@ export const TimelineContent = memo(function TimelineContent({
   useEffect(() => {
     return usePlaybackStore.subscribe((state, prev) => {
       if (state.isPlaying && !prev.isPlaying) {
+        clearTimelineHover()
         state.setPreviewFrame(null)
       }
     })
@@ -1047,12 +1057,14 @@ export const TimelineContent = memo(function TimelineContent({
 
   useEffect(() => {
     if (isDragging && usePlaybackStore.getState().previewFrame !== null) {
+      clearTimelineHover()
       usePlaybackStore.getState().setPreviewFrame(null)
     }
   }, [isDragging])
 
   useEffect(() => {
     if (!isTranscriptionDialogOpen) return
+    clearTimelineHover()
     if (usePlaybackStore.getState().previewFrame !== null) {
       usePlaybackStore.getState().setPreviewFrame(null)
     }
@@ -1066,6 +1078,7 @@ export const TimelineContent = memo(function TimelineContent({
         cancelAnimationFrame(marqueeReleaseRafRef.current)
         marqueeReleaseRafRef.current = null
       }
+      clearTimelineHover()
       setPreviewFrameRef.current(null)
     }
   }, [cancelPendingHoverPreview])
@@ -1428,6 +1441,7 @@ export const TimelineContent = memo(function TimelineContent({
 
       if (active) {
         clearItemSelection()
+        clearTimelineHover()
         marqueeWasActiveRef.current = true
         const lockedFrame = marqueeStartPreviewFrameRef.current
         if (lockedFrame !== null && usePlaybackStore.getState().previewFrame !== lockedFrame) {
@@ -1476,6 +1490,7 @@ export const TimelineContent = memo(function TimelineContent({
       // Check if mousedown is on a playhead handle or timeline ruler
       if (target.closest('[data-playhead-handle]') || target.closest('.timeline-ruler')) {
         cancelPendingHoverPreview()
+        clearTimelineHover()
         scrubWasActiveRef.current = true
       }
     }
@@ -1525,6 +1540,7 @@ export const TimelineContent = memo(function TimelineContent({
     // program monitor follows currentFrame instead of resurrecting the hover
     // frame on the next animation frame.
     cancelPendingHoverPreview()
+    clearTimelineHover()
     const clickedOnItem = target.closest('[data-item-id]')
     seekTimelineTrackAtPointer({
       target,
@@ -1550,6 +1566,7 @@ export const TimelineContent = memo(function TimelineContent({
       // Item clicks stop propagation, so invalidate hover work here before the
       // item's click handler commits its own geometry-derived seek.
       cancelPendingHoverPreview()
+      clearTimelineHover()
     },
     [cancelPendingHoverPreview],
   )
@@ -1580,15 +1597,19 @@ export const TimelineContent = memo(function TimelineContent({
   // Preview scrubber: show ghost playhead on hover
   const handleTimelineMouseDownCapture = useCallback(
     (e: React.MouseEvent) => {
-      if (shouldIgnoreTimelineMouseDownCapture(e.button)) return
-
       const target = e.target as HTMLElement
+      if (shouldIgnoreTimelineMouseDownCapture(e.button, target)) {
+        clearTimelineHover()
+        cancelPendingHoverPreview()
+        return
+      }
       if (!target.closest('[data-track-id]')) return
 
       // Start a new interaction epoch before item/background handlers run. A
       // hover callback already dequeued by the browser can no longer take display
       // ownership during this pointer interaction.
       cancelPendingHoverPreview()
+      clearTimelineHover()
       if (target.closest('[data-item-id]') || target.closest('[data-timeline-density-bucket]'))
         return
 
@@ -1648,6 +1669,7 @@ export const TimelineContent = memo(function TimelineContent({
     marqueeReleasePreviewRef.current = null
 
     if (!wasMarqueePointerGesture) return
+    clearTimelineHover()
     if (marqueeReleaseRafRef.current !== null) {
       cancelAnimationFrame(marqueeReleaseRafRef.current)
       marqueeReleaseRafRef.current = null
@@ -1665,18 +1687,34 @@ export const TimelineContent = memo(function TimelineContent({
   )
 
   const handleTimelineMouseMove = useCallback(
+    // Pointer hover owns both the immediate split target and the deferred skim
+    // preview, so its guard ordering is intentionally explicit.
+    // fallow-ignore-next-line complexity
     (e: React.MouseEvent) => {
+      const target = e.target as HTMLElement
+
+      if (isTimelinePointerControl(target)) {
+        cancelPendingHoverPreview()
+        clearTimelineHover()
+        if (usePlaybackStore.getState().previewFrame !== null) {
+          setPreviewFrameRef.current(null)
+        }
+        return
+      }
+
       // A hover-skim request that lands in the same frame as the first zoom
       // wheel update makes the program monitor render a new preview frame while
       // the dense timeline is also changing scale. Keep the last settled
       // preview during zoom; the next real pointer move refreshes it.
       if (useZoomStore.getState().isZoomInteracting) {
         cancelPendingHoverPreview()
+        clearTimelineHover()
         return
       }
 
       if (useEditorStore.getState().transcriptionDialogDepth > 0) {
         cancelPendingHoverPreview()
+        clearTimelineHover()
         if (usePlaybackStore.getState().previewFrame !== null) {
           setPreviewFrameRef.current(null)
         }
@@ -1686,6 +1724,16 @@ export const TimelineContent = memo(function TimelineContent({
       // Skip during playback
       if (usePlaybackStore.getState().isPlaying) {
         cancelPendingHoverPreview()
+        clearTimelineHover()
+        if (usePlaybackStore.getState().previewFrame !== null) {
+          setPreviewFrameRef.current(null)
+        }
+        return
+      }
+
+      if (isMicRecordingActive(useMicRecordingStore.getState().status)) {
+        cancelPendingHoverPreview()
+        clearTimelineHover()
         if (usePlaybackStore.getState().previewFrame !== null) {
           setPreviewFrameRef.current(null)
         }
@@ -1699,6 +1747,7 @@ export const TimelineContent = memo(function TimelineContent({
       const interactionLockActive = gestureCursorActive || body.style.userSelect === 'none'
       if (interactionLockActive && !marqueePointerDownRef.current) {
         cancelPendingHoverPreview()
+        clearTimelineHover()
         if (usePlaybackStore.getState().previewFrame !== null) {
           setPreviewFrameRef.current(null)
         }
@@ -1711,6 +1760,7 @@ export const TimelineContent = memo(function TimelineContent({
         (dragWasActiveRef.current || scrubWasActiveRef.current)
       ) {
         cancelPendingHoverPreview()
+        clearTimelineHover()
         return
       }
 
@@ -1743,11 +1793,19 @@ export const TimelineContent = memo(function TimelineContent({
       }
 
       // Detect hovered item
-      const target = e.target as HTMLElement
       const itemEl = target.closest('[data-item-id]') as HTMLElement | null
+      const densityBucket = target.closest('[data-timeline-density-bucket]')
       const itemId = itemEl?.dataset.itemId
 
+      // Density buckets resolve their exact item in their own mousemove
+      // handler before this parent callback bubbles. Do not overwrite that
+      // resolution with the bucket's aggregate frame.
+      if (!densityBucket) {
+        setTimelineHover(itemId ?? null, itemId ? frame : null)
+      }
+
       if (marqueePointerDownRef.current) {
+        clearTimelineHover()
         marqueeReleasePreviewRef.current = { frame, itemId }
         return
       }
@@ -1791,6 +1849,7 @@ export const TimelineContent = memo(function TimelineContent({
     if (marqueePointerDownRef.current) return
 
     cancelPendingHoverPreview()
+    clearTimelineHover()
     setPreviewFrameRef.current(null)
   }, [cancelPendingHoverPreview])
 

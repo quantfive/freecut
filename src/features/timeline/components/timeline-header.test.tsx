@@ -135,11 +135,11 @@ describe('TimelineHeader zoom slider', () => {
   it('exposes the razor split tool shortcut in its accessible label and tooltip', () => {
     render(<TimelineHeader />)
 
-    const razor = screen.getByRole('button', { name: /Razor tool \(C\)/i })
-    expect(razor).toHaveAttribute('aria-keyshortcuts', 'C')
+    const razor = screen.getByRole('button', { name: /Razor tool \(Shift \+ C\)/i })
+    expect(razor).toHaveAttribute('aria-keyshortcuts', 'Shift + C')
     expect(razor).toHaveAttribute(
       'data-tooltip',
-      expect.stringMatching(/\(C\).*\((Alt|Option) \+ C\)/),
+      expect.stringMatching(/\(Shift \+ C\).*\(C\).*\((Alt|Option) \+ C\)/),
     )
   })
 

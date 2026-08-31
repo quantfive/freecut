@@ -504,10 +504,10 @@ export const TimelineHeader = memo(function TimelineHeader({
     labelWithShortcut(t('timeline.header.razorToolTooltip'), hotkeys.RAZOR_TOOL),
   ]
   const razorShortcut = formatHotkeyBinding(hotkeys.RAZOR_TOOL)
-  const splitAtPlayheadShortcut = formatHotkeyBinding(hotkeys.SPLIT_AT_PLAYHEAD)
-  if (splitAtPlayheadShortcut) {
+  const splitAtCursorShortcut = formatHotkeyBinding(hotkeys.SPLIT_AT_PLAYHEAD)
+  if (splitAtCursorShortcut) {
     razorToolTooltipParts.push(
-      t('timeline.header.splitAtPlayheadHint', { shortcut: splitAtPlayheadShortcut }),
+      `${t('projects.settings.hotkeys.items.splitAtCursor')} (${splitAtCursorShortcut})`,
     )
   }
   const splitAtPlayheadAlternateShortcut = formatHotkeyBinding(hotkeys.SPLIT_AT_PLAYHEAD_ALT)

@@ -12,6 +12,21 @@ const DEPENDENCY_INVENTORY_PATH = path.join(ROOT, 'provenance/dependency-invento
 const ASSET_INVENTORY_PATH = path.join(ROOT, 'provenance/asset-inventory.json')
 const verifyOnly = process.argv.includes('--verify-only')
 
+export const reproducibleBuildEnvironment = Object.freeze({
+  TZ: 'UTC',
+  LC_ALL: 'C',
+  SOURCE_DATE_EPOCH: '0',
+})
+
+export function normalizeGeneratedSourceMap(sourceMap) {
+  if (!Array.isArray(sourceMap.sourcesContent)) return sourceMap
+
+  const sourcesContent = sourceMap.sourcesContent.map((content) =>
+    typeof content === 'string' && content.includes('__VITE_ASSET__') ? null : content,
+  )
+  return { ...sourceMap, sourcesContent }
+}
+
 function fail(message) {
   throw new Error(`[reproducible-package] ${message}`)
 }
@@ -333,10 +348,28 @@ function runBuild() {
   const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm'
   const result = spawnSync(npm, ['run', 'build'], {
     cwd: ROOT,
-    env: { ...process.env, TZ: 'UTC', LC_ALL: 'C' },
+    env: { ...process.env, ...reproducibleBuildEnvironment },
     stdio: 'inherit',
   })
   assertCondition(result.status === 0, 'npm run build failed')
+}
+
+function normalizeGeneratedSourceMaps(directoryPath) {
+  for (const entry of fs.readdirSync(directoryPath).sort(compareStrings)) {
+    const filePath = path.join(directoryPath, entry)
+    const stat = fs.lstatSync(filePath)
+    if (stat.isDirectory()) {
+      normalizeGeneratedSourceMaps(filePath)
+      continue
+    }
+    if (!stat.isFile() || !entry.endsWith('.map')) continue
+
+    const sourceMap = JSON.parse(fs.readFileSync(filePath, 'utf8'))
+    const normalized = normalizeGeneratedSourceMap(sourceMap)
+    if (JSON.stringify(sourceMap) !== JSON.stringify(normalized)) {
+      fs.writeFileSync(filePath, JSON.stringify(normalized))
+    }
+  }
 }
 
 function createPackage(manifest) {
@@ -375,13 +408,16 @@ function main() {
     return
   }
   runBuild()
+  normalizeGeneratedSourceMaps(path.join(ROOT, 'dist'))
   verifyBaseline()
   createPackage(manifest)
 }
 
-try {
-  main()
-} catch (error) {
-  console.error(error instanceof Error ? error.message : error)
-  process.exitCode = 1
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  try {
+    main()
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : error)
+    process.exitCode = 1
+  }
 }

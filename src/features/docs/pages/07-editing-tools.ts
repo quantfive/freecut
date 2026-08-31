@@ -18,7 +18,8 @@ const page = {
           rows: [
             ['Selection', '`V`', 'Select, move, and arrange clips.'],
             ['Trim edit', '`T`', 'Drag a clip edge to change where it starts or ends.'],
-            ['Razor', '`C`', 'Cut a clip wherever you click.'],
+            ['Hover split', '`C`', 'Split the clip under the pointer at its exact frame.'],
+            ['Razor', '`Shift+C`', 'Toggle persistent cut mode, then click clips to split them.'],
             ['Rate stretch', '`R`', 'Change duration by changing playback speed.'],
             ['Slip', '`Y`', 'Change the source frames inside a clip without moving it.'],
             ['Slide', '`U`', 'Move a clip while adjusting the neighboring cuts.'],

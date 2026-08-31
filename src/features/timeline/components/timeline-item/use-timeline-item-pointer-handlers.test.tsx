@@ -165,6 +165,23 @@ describe('useTimelineItemPointerHandlers', () => {
       expect(usePlaybackStore.getState().isPlaying).toBe(false)
     })
 
+    it('does not seek or select when a clip interaction control owns the click', () => {
+      const selectItems = vi.spyOn(useSelectionStore.getState(), 'selectItems')
+      usePlaybackStore.setState({ currentFrame: 12, previewFrame: 34, isPlaying: true })
+      const control = document.createElement('button')
+      control.setAttribute('data-trim-handle', 'end')
+      const handlers = renderHandlers(makeInput({ activeTool: 'select' }))
+
+      handlers.handleClick(makeMouseEvent({ target: control }))
+
+      expect(selectItems).not.toHaveBeenCalled()
+      expect(usePlaybackStore.getState()).toMatchObject({
+        currentFrame: 12,
+        previewFrame: 34,
+        isPlaying: true,
+      })
+    })
+
     it('selects without seeking or pausing while a microphone take is active', () => {
       usePlaybackStore.setState({ currentFrame: 12, previewFrame: 34, isPlaying: true })
       useMicRecordingStore.setState({ status: 'recording' })

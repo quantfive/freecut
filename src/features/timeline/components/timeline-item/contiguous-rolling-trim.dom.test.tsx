@@ -6,12 +6,16 @@ import { usePlaybackStore } from '@/shared/state/playback'
 import { useSelectionStore } from '@/shared/state/selection'
 import { makeTimelineAudioItem, makeTimelineTrack, makeTimelineVideoItem } from '../../test-helpers'
 import { useItemsStore } from '../../stores/items-store'
+import { useTimelineStore } from '../../stores/timeline-store'
 import { useKeyframesStore } from '../../stores/keyframes-store'
 import { useTimelineCommandStore } from '../../stores/timeline-command-store'
 import { useTimelineSettingsStore } from '../../stores/timeline-settings-store'
 import { useTransitionsStore } from '../../stores/transitions-store'
 import { useZoomStore } from '../../stores/zoom-store'
 import { TimelineItem } from './index'
+import { isTimelinePointerControl } from '../../utils/timeline-pointer'
+import { clearTimelineHover, setTimelineHover } from '../../utils/timeline-hover-state'
+import { useToolShortcuts } from '../../hooks/shortcuts/use-tool-shortcuts'
 
 vi.mock('./clip-content', () => ({
   ClipContent: ({ item }: { item: TimelineItemType }) => (
@@ -170,6 +174,11 @@ function itemSnapshot() {
   return structuredClone(useItemsStore.getState().items)
 }
 
+function MountedShortcutHarness() {
+  useToolShortcuts({})
+  return null
+}
+
 describe('TimelineItem contiguous rolling trim affordance', () => {
   beforeEach(() => {
     rafCallbacks = []
@@ -211,6 +220,47 @@ describe('TimelineItem contiguous rolling trim affordance', () => {
 
     act(() => useSelectionStore.getState().setActiveTool('razor'))
     expect(view.container.querySelector('[data-rolling-trim-handle]')).toBeNull()
+  })
+
+  it('splits the mounted clip when a real Razor click targets its hit surface', () => {
+    const clip = makeTimelineVideoItem({ id: 'razor-target', from: 0, durationInFrames: 60 })
+    resetStores(makeTracks(), [clip])
+    const view = renderItems([clip])
+    const shortcutView = render(<MountedShortcutHarness />)
+    const root = view.container.querySelector<HTMLElement>('[data-item-id="razor-target"]')!
+    const splitItem = vi.spyOn(useTimelineStore.getState(), 'splitItem')
+    const hit = root.querySelector<HTMLElement>('[data-timeline-item]')!
+    expect(hit).toBeTruthy()
+    expect(isTimelinePointerControl(hit)).toBe(false)
+
+    fireEvent.keyDown(document, { key: 'C', code: 'KeyC', shiftKey: true })
+    expect(useSelectionStore.getState().activeTool).toBe('razor')
+    fireEvent.click(hit, { button: 0, clientX: 30, clientY: 40 })
+
+    expect(splitItem).toHaveBeenCalled()
+    expect(useItemsStore.getState().items).toHaveLength(2)
+    expect(useItemsStore.getState().items.map((item) => item.durationInFrames)).toEqual([30, 30])
+
+    shortcutView.unmount()
+    view.unmount()
+  })
+
+  it('splits the mounted hovered clip from the unmodified C shortcut without moving playback', () => {
+    const clip = makeTimelineVideoItem({ id: 'hover-target', from: 0, durationInFrames: 60 })
+    resetStores(makeTracks(), [clip])
+    const view = renderItems([clip])
+    const shortcutView = render(<MountedShortcutHarness />)
+
+    setTimelineHover('hover-target', 24)
+    fireEvent.keyDown(document, { key: 'c', code: 'KeyC' })
+
+    expect(useItemsStore.getState().items).toHaveLength(2)
+    expect(useItemsStore.getState().items.map((item) => item.durationInFrames)).toEqual([24, 36])
+    expect(usePlaybackStore.getState().currentFrame).toBe(0)
+
+    clearTimelineHover()
+    shortcutView.unmount()
+    view.unmount()
   })
 
   it('drags a linked A/V cut by one frame as one command and undo restores all four clips', () => {

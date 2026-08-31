@@ -15,6 +15,7 @@ import { useRollingEditPreviewStore } from '../stores/rolling-edit-preview-store
 import { useRippleEditPreviewStore } from '../stores/ripple-edit-preview-store'
 import { useTransitionBreakPreviewStore } from '../stores/transition-break-preview-store'
 import { useLinkedEditPreviewStore } from '../stores/linked-edit-preview-store'
+import { useTrimPreviewStore } from '@/shared/state/trim-preview'
 import { useTimelineTrim } from './use-timeline-trim'
 
 const TIMELINE_DURATION = 600
@@ -45,6 +46,7 @@ function setupStores() {
   useRippleEditPreviewStore.getState().clearPreview()
   useTransitionBreakPreviewStore.getState().clearPreview()
   useLinkedEditPreviewStore.getState().clear()
+  useTrimPreviewStore.getState().clearPreview()
   resetPlaybackPreviewState()
 }
 
@@ -718,6 +720,48 @@ describe('useTimelineTrim', () => {
 
       expect(getItem('a').durationInFrames).toBe(60)
       expect(useTimelineCommandStore.getState().undoStack.length).toBe(undoDepthBefore)
+    })
+
+    it.each(['Escape', 'pointercancel'] as const)(
+      'cancels a %s gesture without mutating the authoritative timeline',
+      (cancellation) => {
+        const clip = makeTimelineVideoItem({ id: 'a' })
+        useItemsStore.getState().setItems([clip])
+        const { result } = renderTrimHook(clip)
+
+        startTrim(result, 'end')
+        moveMouse(20)
+        expect(useTrimPreviewStore.getState().projection).not.toBeNull()
+
+        act(() => {
+          if (cancellation === 'Escape') {
+            window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+          } else {
+            window.dispatchEvent(new Event('pointercancel'))
+          }
+        })
+
+        expect(result.current.isTrimming).toBe(false)
+        expect(getItem('a').durationInFrames).toBe(60)
+        expect(useTimelineCommandStore.getState().undoStack).toHaveLength(0)
+        expect(useTrimPreviewStore.getState().projection).toBeNull()
+        expect(useSelectionStore.getState().dragState).toBeNull()
+      },
+    )
+
+    it('clears an active trim presentation when the owner unmounts', () => {
+      const clip = makeTimelineVideoItem({ id: 'a' })
+      useItemsStore.getState().setItems([clip])
+      const { result, unmount } = renderTrimHook(clip)
+
+      startTrim(result, 'end')
+      moveMouse(20)
+      expect(useTrimPreviewStore.getState().projection).not.toBeNull()
+
+      unmount()
+
+      expect(useTrimPreviewStore.getState().projection).toBeNull()
+      expect(getItem('a').durationInFrames).toBe(60)
     })
   })
 

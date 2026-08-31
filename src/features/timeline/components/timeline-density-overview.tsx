@@ -15,6 +15,7 @@ import {
 import { DENSE_TIMELINE_MAX_OVERVIEW_BUCKETS_PER_TRACK } from '../utils/timeline-dom-density'
 import { registerTimelineDensityMarqueeBucket } from '../utils/timeline-density-marquee-preview'
 import { useLinkedEditPreviewStore } from '../stores/linked-edit-preview-store'
+import { clearTimelineHover, setTimelineHover } from '../utils/timeline-hover-state'
 
 interface TimelineDensityOverviewProps {
   items: ReadonlyArray<TimelineItem>
@@ -80,10 +81,7 @@ export const TimelineDensityOverview = memo(function TimelineDensityOverview({
   const itemIds = useMemo(() => items.map((item) => item.id), [items])
   const previewUpdates = useLinkedEditPreviewStore(
     useShallow(
-      useCallback(
-        (state) => itemIds.map((itemId) => state.updatesById[itemId] ?? null),
-        [itemIds],
-      ),
+      useCallback((state) => itemIds.map((itemId) => state.updatesById[itemId] ?? null), [itemIds]),
     ),
   )
   const previewItems = useMemo(
@@ -97,11 +95,7 @@ export const TimelineDensityOverview = memo(function TimelineDensityOverview({
     [items, previewUpdates],
   )
   const buckets = useMemo(
-    () =>
-      buildTimelineDensityBuckets(
-        previewItems,
-        DENSE_TIMELINE_MAX_OVERVIEW_BUCKETS_PER_TRACK,
-      ),
+    () => buildTimelineDensityBuckets(previewItems, DENSE_TIMELINE_MAX_OVERVIEW_BUCKETS_PER_TRACK),
     [previewItems],
   )
 
@@ -150,9 +144,22 @@ export const TimelineDensityOverview = memo(function TimelineDensityOverview({
               opacity: trackHidden ? 0.3 : trackLocked ? 0.6 : 1,
               contain: 'layout style paint',
             }}
+            onMouseMove={(event) => {
+              const rect = event.currentTarget.getBoundingClientRect()
+              const ratio = rect.width > 0 ? (event.clientX - rect.left) / rect.width : 0.5
+              const frame = bucket.from + ratio * bucket.durationInFrames
+              const item = findTimelineDensityBucketItem(bucket, frame)
+              const roundedFrame = Math.round(frame)
+              if (roundedFrame > item.from && roundedFrame < item.from + item.durationInFrames) {
+                setTimelineHover(item.id, roundedFrame)
+              } else {
+                clearTimelineHover()
+              }
+            }}
             onMouseDown={(event) => {
               if (event.button !== 0) return
               event.stopPropagation()
+              clearTimelineHover()
               if (trackLocked) {
                 emitUiSound('error')
                 return
@@ -171,7 +178,9 @@ export const TimelineDensityOverview = memo(function TimelineDensityOverview({
                 : [item.id]
               if (event.metaKey || event.ctrlKey) {
                 const targetSet = new Set(targetIds)
-                const alreadySelected = targetIds.some((id) => selection.selectedItemIds.includes(id))
+                const alreadySelected = targetIds.some((id) =>
+                  selection.selectedItemIds.includes(id),
+                )
                 flushSync(() =>
                   selection.selectItems(
                     alreadySelected

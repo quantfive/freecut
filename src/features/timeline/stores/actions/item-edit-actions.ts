@@ -19,7 +19,12 @@ export {
   slipItem,
   slideItem,
 } from './edit/trim-actions'
-export { splitItem, splitAllItemsAtFrame, splitItemAtFrames } from './edit/split-actions'
+export {
+  splitItem,
+  splitAllItemsAtFrame,
+  splitItemAtFrames,
+  notifySplitRejection,
+} from './edit/split-actions'
 export { joinItems } from './edit/join-actions'
 export {
   rateStretchItemWithoutHistory,

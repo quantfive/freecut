@@ -1,4 +1,5 @@
 import type { TimelineItem } from '@/types/timeline'
+import { projectTrimItem } from '@/shared/timeline/trim-preview'
 import { isMediaItem, timelineToSourceFrames } from './source-calculations'
 
 export interface PreviewItemUpdate {
@@ -11,31 +12,29 @@ export interface PreviewItemUpdate {
   hidden?: boolean
 }
 
+function toTrimPreviewUpdate(item: TimelineItem, projected: TimelineItem): PreviewItemUpdate {
+  const update: PreviewItemUpdate = { id: item.id }
+
+  if (projected.from !== item.from) update.from = projected.from
+  if (projected.durationInFrames !== item.durationInFrames) {
+    update.durationInFrames = projected.durationInFrames
+  }
+  if (projected.sourceStart !== item.sourceStart || item.sourceStart !== undefined) {
+    update.sourceStart = projected.sourceStart
+  }
+  if (projected.sourceEnd !== item.sourceEnd || item.sourceEnd !== undefined) {
+    update.sourceEnd = projected.sourceEnd
+  }
+
+  return update
+}
+
 export function applyTrimStartPreview(
   item: TimelineItem,
   trimDelta: number,
   fps: number,
 ): PreviewItemUpdate {
-  const update: PreviewItemUpdate = {
-    id: item.id,
-    from: item.from + trimDelta,
-    durationInFrames: item.durationInFrames - trimDelta,
-  }
-
-  if (item.type === 'video' || item.type === 'audio' || item.type === 'composition') {
-    const sourceStart = item.sourceStart ?? 0
-    const sourceEnd = item.sourceEnd
-    const speed = item.speed ?? 1
-    const sourceFps = item.sourceFps ?? fps
-    const sourceFramesToTrim = timelineToSourceFrames(trimDelta, speed, fps, sourceFps)
-
-    update.sourceStart = sourceStart + sourceFramesToTrim
-    if (sourceEnd !== undefined) {
-      update.sourceEnd = sourceEnd
-    }
-  }
-
-  return update
+  return toTrimPreviewUpdate(item, projectTrimItem(item, 'start', trimDelta, { timelineFps: fps }))
 }
 
 export function applyTrimEndPreview(
@@ -43,25 +42,7 @@ export function applyTrimEndPreview(
   trimDelta: number,
   fps: number,
 ): PreviewItemUpdate {
-  const update: PreviewItemUpdate = {
-    id: item.id,
-    durationInFrames: item.durationInFrames + trimDelta,
-  }
-
-  if (item.type === 'video' || item.type === 'audio' || item.type === 'composition') {
-    const sourceStart = item.sourceStart ?? 0
-    const speed = item.speed ?? 1
-    const sourceFps = item.sourceFps ?? fps
-    const sourceFramesNeeded = timelineToSourceFrames(
-      update.durationInFrames ?? item.durationInFrames,
-      speed,
-      fps,
-      sourceFps,
-    )
-    update.sourceEnd = sourceStart + sourceFramesNeeded
-  }
-
-  return update
+  return toTrimPreviewUpdate(item, projectTrimItem(item, 'end', trimDelta, { timelineFps: fps }))
 }
 
 export function applyMovePreview(item: TimelineItem, fromDelta: number): PreviewItemUpdate {

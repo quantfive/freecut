@@ -8,6 +8,7 @@ import type { ResolvedTransform } from '@/types/transform'
 import { blobUrlManager } from '@/infrastructure/browser/blob-url-manager'
 import { isColorGradeEffectType } from '@/infrastructure/gpu-effects'
 import { usePlaybackStore } from '@/shared/state/playback'
+import type { TrimProjection } from '@/shared/timeline/trim-preview'
 import { resolveEffectiveTrackStates } from '@/features/preview/deps/timeline-utils'
 import {
   useCompositionsStore,
@@ -83,6 +84,8 @@ interface BuildPreviewCompositionDataParams {
   resolveProxyUrlFn?: (mediaId: string) => string | null
   getBlobUrlFn?: (mediaId: string) => string | null
   authoritativeSourceUrls?: ReadonlyMap<string, string>
+  trimProjection?: TrimProjection | null
+  transitionIdsToRemove?: readonly string[]
 }
 
 interface UsePreviewCompositionModelParams {
@@ -98,6 +101,8 @@ interface UsePreviewCompositionModelParams {
   blobUrlVersion: number
   project: PreviewProject
   playerSize: PreviewPlayerSize
+  trimProjection?: TrimProjection | null
+  transitionIdsToRemove?: readonly string[]
 }
 
 interface UsePreviewCompositionBaseModelParams {
@@ -269,6 +274,8 @@ export function usePreviewCompositionModel({
   blobUrlVersion,
   project,
   playerSize,
+  trimProjection = null,
+  transitionIdsToRemove = [],
 }: UsePreviewCompositionModelParams) {
   const projectWidth = project.width
   const projectHeight = project.height
@@ -329,6 +336,8 @@ export function usePreviewCompositionModel({
       project,
       previewRenderSize,
       authoritativeSourceUrls: sourceBindings.urls,
+      trimProjection,
+      transitionIdsToRemove,
     })
   }, [
     blobUrlVersion,
@@ -342,6 +351,8 @@ export function usePreviewCompositionModel({
     proxyReadyCount,
     resolvedUrls,
     sourceBindings.urls,
+    transitionIdsToRemove,
+    trimProjection,
     transitions,
     useProxy,
   ])
@@ -438,6 +449,12 @@ export function usePreviewCompositionModel({
     return fastScrubKeyframesByItemIdRef.current.get(itemId)
   }, [])
 
+  const previewTransitions = useMemo(
+    () =>
+      (transitions ?? []).filter((transition) => !transitionIdsToRemove.includes(transition.id)),
+    [transitionIdsToRemove, transitions],
+  )
+
   return {
     playbackVideoSourceSpans,
     scrubVideoSourceSpans,
@@ -452,6 +469,7 @@ export function usePreviewCompositionModel({
     fastScrubInputProps,
     fastScrubPreviewItems,
     fastScrubTracksTopologyFingerprint,
+    transitions: previewTransitions,
     sourceBindingIdentity: sourceBindings.identity,
     getPreviewTransformOverride,
     getPreviewEffectsOverride,
@@ -477,8 +495,14 @@ export function buildPreviewCompositionData({
   resolveProxyUrlFn = resolveProxyUrl,
   getBlobUrlFn = (mediaId: string) => blobUrlManager.get(mediaId),
   authoritativeSourceUrls,
+  trimProjection = null,
+  transitionIdsToRemove = [],
 }: BuildPreviewCompositionDataParams) {
   void blobUrlVersion
+  const transitionList = transitions ?? []
+  const projectedItemsById = new Map(
+    (trimProjection?.timeline.updates ?? []).map((item) => [item.id, item]),
+  )
   const resolvedTrackList: CompositionInputProps['tracks'] = []
   const fastScrubTrackList: CompositionInputProps['tracks'] = []
   const playbackSpans: VideoSourceSpan[] = []
@@ -490,7 +514,8 @@ export function buildPreviewCompositionData({
     const resolvedItems: typeof track.items = []
     const fastScrubItems: typeof track.items = []
 
-    for (const item of track.items) {
+    for (const sourceItem of track.items) {
+      const item = projectedItemsById.get(sourceItem.id) ?? sourceItem
       if (
         !item.mediaId ||
         (item.type !== 'video' &&
@@ -589,7 +614,11 @@ export function buildPreviewCompositionData({
     project.height,
   )
   const fastScrubTracksTopologyFingerprint = toTrackTopologyFingerprint(fastScrubTracks)
-  const furthestItemEndFrame = items.reduce(
+  const projectedItems = items.map((item) => projectedItemsById.get(item.id) ?? item)
+  const projectedTransitions = transitionList.filter(
+    (transition) => !transitionIdsToRemove.includes(transition.id),
+  )
+  const furthestItemEndFrame = projectedItems.reduce(
     (max, item) => Math.max(max, item.from + item.durationInFrames),
     0,
   )
@@ -599,7 +628,7 @@ export function buildPreviewCompositionData({
     width: project.width,
     height: project.height,
     tracks: resolvedTracks as CompositionInputProps['tracks'],
-    transitions,
+    transitions: projectedTransitions,
     backgroundColor: project.backgroundColor,
     keyframes,
     busAudioEq,
@@ -616,7 +645,7 @@ export function buildPreviewCompositionData({
     width: project.width,
     height: project.height,
     tracks: fastScrubScaledTracks,
-    transitions,
+    transitions: projectedTransitions,
     backgroundColor: project.backgroundColor,
     keyframes: fastScrubScaledKeyframes,
     busAudioEq,

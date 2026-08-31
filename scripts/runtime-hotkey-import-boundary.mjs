@@ -21,6 +21,8 @@ import {
   isPrefixUnaryExpression,
   isPropertyAccessExpression,
   isStringLiteral,
+  isToken,
+  isTokenKind,
 } from 'typescript/unstable/ast'
 
 const REACT_HOTKEYS_HOOK_MODULE = 'react-hotkeys-hook'
@@ -82,6 +84,21 @@ const BLOCK_VAR_SCOPE_KINDS = new Set([
 const BARRIER_DECLARATION_KINDS = new Set([
   SyntaxKind.EnumDeclaration,
   SyntaxKind.ModuleDeclaration,
+])
+
+const LEXICAL_SCOPE_KINDS = new Set([
+  ...FUNCTION_SCOPE_KINDS,
+  ...CLASS_SCOPE_KINDS,
+  SyntaxKind.CatchClause,
+  SyntaxKind.SwitchStatement,
+  ...BLOCK_SCOPE_KINDS,
+])
+
+const BINDING_DECLARATION_KINDS = new Set([
+  SyntaxKind.VariableDeclarationList,
+  SyntaxKind.ImportDeclaration,
+  SyntaxKind.ImportEqualsDeclaration,
+  ...BARRIER_DECLARATION_KINDS,
 ])
 
 const UNCERTAIN_WRITE_ANCESTOR_KINDS = new Set([
@@ -333,11 +350,78 @@ function predeclareNodeBindings(node, currentScope) {
 function buildLexicalScopes(sourceFile) {
   const sourceScope = createScope(undefined, 'source', true, true, sourceFile)
   const nodeScopes = new WeakMap()
+  const importNodes = []
+  const writeDescriptors = []
+
+  const view = sourceFile.view
+  const offsetNodes = sourceFile._offsetNodes
+  const nodeLength = sourceFile.constructor.NODE_LEN
+  const nodeAt = (index, offset) => view.getUint32(offsetNodes + index * nodeLength + offset, true)
+  const hasChild = (parentIndex, childIndex) =>
+    childIndex < sourceFile.nodes.length &&
+    nodeAt(childIndex, REMOTE_NODE_PARENT_OFFSET) === parentIndex
+
+  function visitRawNode(index, currentScope) {
+    const kind = nodeAt(index, REMOTE_NODE_KIND_OFFSET)
+    if (kind === REMOTE_NODE_LIST_KIND || kind === SyntaxKind.JSDoc || isTokenKind(kind)) return
+    if (!TRAVERSAL_NODE_KINDS.has(kind)) {
+      visitRawChildren(index, currentScope)
+      return
+    }
+    visit(sourceFile.getOrCreateNodeAtIndex(index), currentScope)
+  }
+
+  function visitRawChildren(parentIndex, currentScope) {
+    const firstChildIndex = parentIndex + 1
+    if (!hasChild(parentIndex, firstChildIndex)) return
+
+    let childIndex = firstChildIndex
+    do {
+      const childKind = nodeAt(childIndex, REMOTE_NODE_KIND_OFFSET)
+      if (childKind === REMOTE_NODE_LIST_KIND) {
+        visitRawNodeList(childIndex, currentScope)
+      } else visitRawNode(childIndex, currentScope)
+      childIndex = nodeAt(childIndex, REMOTE_NODE_NEXT_OFFSET)
+    } while (childIndex)
+  }
+
+  function visitRawNodeList(listIndex, currentScope) {
+    const firstElementIndex = listIndex + 1
+    if (!hasChild(listIndex, firstElementIndex)) return
+
+    let elementIndex = firstElementIndex
+    do {
+      const elementKind = nodeAt(elementIndex, REMOTE_NODE_KIND_OFFSET)
+      if (elementKind === REMOTE_NODE_LIST_KIND) {
+        visitRawNodeList(elementIndex, currentScope)
+      } else visitRawNode(elementIndex, currentScope)
+      elementIndex = nodeAt(elementIndex, REMOTE_NODE_NEXT_OFFSET)
+    } while (elementIndex)
+  }
+
+  function recordNode(node, currentScope) {
+    if (IMPORT_NODE_KINDS.has(node.kind)) {
+      nodeScopes.set(node, currentScope)
+      importNodes.push(node)
+    }
+    if (node.kind === SyntaxKind.IfStatement || node.kind === SyntaxKind.ConditionalExpression) {
+      nodeScopes.set(node.expression ?? node.condition, currentScope)
+    } else if (
+      isBinaryExpression(node) &&
+      SHORT_CIRCUIT_OPERATORS.has(node.operatorToken.kind)
+    ) {
+      nodeScopes.set(node.left, currentScope)
+    }
+    if (WRITE_NODE_KINDS.has(node.kind)) {
+      const descriptors = assignmentWriteDescriptors(node)
+      if (descriptors.length > 0) writeDescriptors.push({ node, descriptors, scope: currentScope })
+    }
+  }
 
   function visitLoopHeader(node, currentScope) {
-    if (!node) return
-    nodeScopes.set(node, currentScope)
-    node.forEachChild((child) => visit(child, currentScope))
+    if (!node || isToken(node)) return
+    recordNode(node, currentScope)
+    visitRawChildren(node.index, currentScope)
   }
 
   function visitLoop(node, currentScope) {
@@ -391,20 +475,24 @@ function buildLexicalScopes(sourceFile) {
   }
 
   function visit(node, currentScope) {
-    if (!node) return
-    nodeScopes.set(node, currentScope)
+    if (!node || isToken(node)) return
+    recordNode(node, currentScope)
     if (LOOP_SCOPE_KINDS.has(node.kind)) {
       visitLoop(node, currentScope)
       return
     }
-    const childScope = createChildLexicalScope(node, currentScope)
-    if (!childScope) predeclareNodeBindings(node, currentScope)
-    node.forEachChild((child) => visit(child, childScope ?? currentScope))
+    const childScope = LEXICAL_SCOPE_KINDS.has(node.kind)
+      ? createChildLexicalScope(node, currentScope)
+      : undefined
+    if (!childScope && BINDING_DECLARATION_KINDS.has(node.kind)) {
+      predeclareNodeBindings(node, currentScope)
+    }
+    visitRawChildren(node.index, childScope ?? currentScope)
   }
 
   visit(sourceFile, sourceScope)
-  markMutableBindingWrites(sourceFile, nodeScopes, sourceScope)
-  return { nodeScopes, sourceScope }
+  markMutableBindingWrites(writeDescriptors, nodeScopes, sourceScope)
+  return { importNodes, nodeScopes, sourceScope }
 }
 
 function findBinding(scope, name) {
@@ -552,12 +640,9 @@ function loopWriteDescriptors(node) {
   }))
 }
 
-function markMutableBindingWrites(sourceFile, nodeScopes, sourceScope) {
+function markMutableBindingWrites(writeDescriptors, nodeScopes, sourceScope) {
   const writes = []
-  walkAst(sourceFile, (node) => {
-    const descriptors = assignmentWriteDescriptors(node)
-    if (descriptors.length === 0) return
-    const scope = nodeScopes.get(node) ?? sourceScope
+  for (const { node, descriptors, scope } of writeDescriptors) {
     for (const descriptor of descriptors) {
       const binding = findLexicalBinding(scope, descriptor.name)
       if (binding?.kind !== 'mutable') continue
@@ -574,7 +659,7 @@ function markMutableBindingWrites(sourceFile, nodeScopes, sourceScope) {
       binding.writes.push(write)
       writes.push({ binding, write })
     }
-  })
+  }
 
   for (const { binding, write } of writes) {
     const status =
@@ -1379,6 +1464,42 @@ const IMPORT_NODE_CHECKS = [
   isReactHotkeysCallImport,
 ]
 
+// Most source nodes cannot introduce a runtime module dependency. Keep the
+// full AST walk for scope construction, but avoid invoking all three import
+// checks for every expression, token wrapper, and declaration in the scan.
+const IMPORT_NODE_KINDS = new Set([
+  SyntaxKind.ImportDeclaration,
+  SyntaxKind.ExportDeclaration,
+  SyntaxKind.ImportEqualsDeclaration,
+  SyntaxKind.CallExpression,
+])
+
+const WRITE_NODE_KINDS = new Set([
+  SyntaxKind.BinaryExpression,
+  SyntaxKind.PrefixUnaryExpression,
+  SyntaxKind.PostfixUnaryExpression,
+  SyntaxKind.ForInStatement,
+  SyntaxKind.ForOfStatement,
+])
+
+const TRAVERSAL_NODE_KINDS = new Set([
+  ...LEXICAL_SCOPE_KINDS,
+  ...LOOP_SCOPE_KINDS,
+  ...BINDING_DECLARATION_KINDS,
+  ...IMPORT_NODE_KINDS,
+  ...WRITE_NODE_KINDS,
+  SyntaxKind.IfStatement,
+  SyntaxKind.ConditionalExpression,
+])
+
+// The TypeScript 7 remote AST stores each node in a fixed-width record. Read
+// the traversal links directly so the full-source boundary scan does not
+// materialize token and NodeList wrapper objects that it never inspects.
+const REMOTE_NODE_LIST_KIND = 0xffffffff
+const REMOTE_NODE_KIND_OFFSET = 0
+const REMOTE_NODE_NEXT_OFFSET = 12
+const REMOTE_NODE_PARENT_OFFSET = 16
+
 function walkAst(node, onNode) {
   onNode(node)
   node.forEachChild((child) => walkAst(child, onNode))
@@ -1461,7 +1582,7 @@ export function findReactHotkeysHookImportViolations(
     for (const [virtualPath, { path }] of virtualSources) {
       const sourceFile = project?.program.getSourceFile(virtualPath)
       if (!sourceFile) throw new Error(`TypeScript could not parse in-memory source: ${path}`)
-      const { nodeScopes, sourceScope } = buildLexicalScopes(sourceFile)
+      const { importNodes, nodeScopes, sourceScope } = buildLexicalScopes(sourceFile)
 
       function record(node) {
         if (path === allowedPath) return
@@ -1477,10 +1598,10 @@ export function findReactHotkeysHookImportViolations(
         })
       }
 
-      walkAst(sourceFile, (node) => {
+      for (const node of importNodes) {
         const scope = nodeScopes.get(node) ?? sourceScope
         if (IMPORT_NODE_CHECKS.some((check) => check(node, scope))) record(node)
-      })
+      }
     }
   } finally {
     snapshot?.dispose()

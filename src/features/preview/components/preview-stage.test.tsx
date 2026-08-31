@@ -198,6 +198,89 @@ describe('getPreviewDisplayEdgePadding', () => {
 })
 
 describe('PreviewStage', () => {
+  it('keeps the last program surface visible while an active trim resolves replacement frames', () => {
+    render(
+      <PreviewStage
+        backgroundRef={createRef<HTMLDivElement>()}
+        playerRef={createRef()}
+        scrubCanvasRef={createRef<HTMLCanvasElement>()}
+        gpuEffectsCanvasRef={createRef<HTMLCanvasElement>()}
+        needsOverflow={false}
+        playerSize={{ width: 1280, height: 720 }}
+        playerRenderSize={{ width: 1280, height: 720 }}
+        overlayRenderSize={{ width: 1280, height: 720 }}
+        totalFrames={120}
+        fps={30}
+        isResolving={true}
+        isRenderedOverlayVisible={true}
+        trimPreview={{
+          handle: 'end',
+          deltaFrames: 8,
+          editPointBeforeFrame: 120,
+          editPointAfterFrame: 128,
+          constrained: false,
+          constraintLabel: null,
+          totalFrames: 240,
+        }}
+        inputProps={createInputProps()}
+        onBackgroundClick={() => {}}
+        onFrameChange={() => {}}
+        onPlayStateChange={() => {}}
+        setPlayerContainerRefCallback={() => {}}
+      />,
+    )
+
+    expect(screen.queryByText('Loading Media')).toBeNull()
+    expect(document.querySelector('[data-trim-preview-presentation]')).toBeTruthy()
+    expect(document.querySelector('[data-trim-preview-ghost]')).toHaveAttribute(
+      'data-trim-preview-delta',
+      '+8f',
+    )
+    expect(document.querySelector('[data-player-container]')).toHaveAttribute(
+      'data-trim-preview-active',
+      'true',
+    )
+  })
+
+  it('marks a constrained start trim at the projected edit edge', () => {
+    render(
+      <PreviewStage
+        backgroundRef={createRef<HTMLDivElement>()}
+        playerRef={createRef()}
+        scrubCanvasRef={createRef<HTMLCanvasElement>()}
+        gpuEffectsCanvasRef={createRef<HTMLCanvasElement>()}
+        needsOverflow={false}
+        playerSize={{ width: 1280, height: 720 }}
+        playerRenderSize={{ width: 1280, height: 720 }}
+        overlayRenderSize={{ width: 1280, height: 720 }}
+        totalFrames={120}
+        fps={30}
+        isResolving={false}
+        isRenderedOverlayVisible={false}
+        trimPreview={{
+          handle: 'start',
+          deltaFrames: -6,
+          editPointBeforeFrame: 40,
+          editPointAfterFrame: 34,
+          constrained: true,
+          constraintLabel: 'no handle',
+          totalFrames: 120,
+        }}
+        inputProps={createInputProps()}
+        onBackgroundClick={() => {}}
+        onFrameChange={() => {}}
+        onPlayStateChange={() => {}}
+        setPlayerContainerRefCallback={() => {}}
+      />,
+    )
+
+    const presentation = document.querySelector('[data-trim-preview-presentation]')
+    expect(presentation).toHaveAttribute('data-trim-preview-constrained', 'true')
+    expect(presentation).toHaveAttribute('data-trim-preview-edit-point-after', '34')
+    expect(document.querySelector('[data-trim-preview-mask]')).toHaveStyle({ left: '0px' })
+    expect(document.querySelector('[data-trim-preview-ghost]')).toHaveTextContent('-6f · no handle')
+  })
+
   it('passes proxy playback mode down to nested composition rendering', () => {
     playbackState.useProxy = true
 
