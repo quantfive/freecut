@@ -246,16 +246,6 @@
       "reason": "Called through the canvas-audio namespace from export rendering."
     },
     {
-      "path": "src/features/export/utils/canvas-audio.ts",
-      "exportName": "hasAudioContent",
-      "reason": "Called through the canvas-audio namespace from export rendering."
-    },
-    {
-      "path": "src/features/export/utils/canvas-render-orchestrator.ts",
-      "exportName": "renderSingleFrame",
-      "reason": "Dynamically imported by thumbnail and timeline persistence flows."
-    },
-    {
       "path": "src/features/keyframes/utils/easing-presets.ts",
       "exportName": "areBezierPointsEqual",
       "reason": "unreviewed: carried over by the 2026-07-09 re-baseline; trace individually before deleting."
@@ -306,18 +296,8 @@
       "reason": "unreviewed: carried over by the 2026-07-09 re-baseline; trace individually before deleting."
     },
     {
-      "path": "src/features/media-library/transcription/transcription-engine.ts",
-      "exportName": "PARAKEET_SUPPORTED_LANGUAGES",
-      "reason": "unreviewed: carried over by the 2026-07-09 re-baseline; trace individually before deleting."
-    },
-    {
       "path": "src/features/preview/components/color-scopes-monitor.tsx",
       "exportName": "ColorScopesMonitor",
-      "reason": "Lazy-loaded from the preview area."
-    },
-    {
-      "path": "src/features/preview/components/inline-source-preview.tsx",
-      "exportName": "InlineSourcePreview",
       "reason": "Lazy-loaded from the preview area."
     },
     {
