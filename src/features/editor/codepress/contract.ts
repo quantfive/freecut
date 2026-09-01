@@ -846,6 +846,20 @@ function checkArray(value: unknown, path: string, errors: VideoCommandError[]): 
   return true
 }
 
+function checkUniqueIdentifiers(
+  values: readonly unknown[],
+  path: string,
+  errors: VideoCommandError[],
+): void {
+  const ids = new Set<string>()
+  for (const [index, id] of values.entries()) {
+    const itemPath = `${path}[${index}]`
+    if (!checkIdentifier(id, itemPath, errors)) continue
+    if (ids.has(id)) errors.push(invalidRequest(itemPath, 'must be unique'))
+    ids.add(id)
+  }
+}
+
 function checkTrackKind(value: unknown): value is TrackKind {
   return typeof value === 'string' && (TRACK_KINDS as readonly string[]).includes(value)
 }
@@ -1184,16 +1198,7 @@ function validateCommand(value: unknown, path: string, errors: VideoCommandError
       if (!checkArray(value.item_ids, `${path}.item_ids`, errors)) return
       if (value.item_ids.length === 0)
         errors.push(invalidRequest(`${path}.item_ids`, 'must not be empty'))
-      {
-        const ids = new Set<string>()
-        for (const [index, id] of value.item_ids.entries()) {
-          if (checkIdentifier(id, `${path}.item_ids[${index}]`, errors)) {
-            if (ids.has(id))
-              errors.push(invalidRequest(`${path}.item_ids[${index}]`, 'must be unique'))
-            ids.add(id)
-          }
-        }
-      }
+      checkUniqueIdentifiers(value.item_ids, `${path}.item_ids`, errors)
       if (typeof value.ripple_linked !== 'boolean')
         errors.push(invalidRequest(`${path}.ripple_linked`, 'must be a boolean'))
       break
@@ -1217,16 +1222,8 @@ function validateCommand(value: unknown, path: string, errors: VideoCommandError
       checkInterval(value.start_us, value.end_us, path, errors)
       if (value.track_ids !== null && !checkArray(value.track_ids, `${path}.track_ids`, errors))
         return
-      if (Array.isArray(value.track_ids)) {
-        const ids = new Set<string>()
-        for (const [index, id] of value.track_ids.entries()) {
-          if (checkIdentifier(id, `${path}.track_ids[${index}]`, errors)) {
-            if (ids.has(id))
-              errors.push(invalidRequest(`${path}.track_ids[${index}]`, 'must be unique'))
-            ids.add(id)
-          }
-        }
-      }
+      if (Array.isArray(value.track_ids))
+        checkUniqueIdentifiers(value.track_ids, `${path}.track_ids`, errors)
       break
     case 'add_track':
       checkIndex(value.index, `${path}.index`, errors)
@@ -1325,16 +1322,8 @@ function validateCommand(value: unknown, path: string, errors: VideoCommandError
       break
     case 'remove_caption_cues':
       checkIdentifier(value.track_id, `${path}.track_id`, errors)
-      if (checkArray(value.cue_ids, `${path}.cue_ids`, errors)) {
-        const ids = new Set<string>()
-        for (const [index, id] of value.cue_ids.entries()) {
-          if (checkIdentifier(id, `${path}.cue_ids[${index}]`, errors)) {
-            if (ids.has(id))
-              errors.push(invalidRequest(`${path}.cue_ids[${index}]`, 'must be unique'))
-            ids.add(id)
-          }
-        }
-      }
+      if (checkArray(value.cue_ids, `${path}.cue_ids`, errors))
+        checkUniqueIdentifiers(value.cue_ids, `${path}.cue_ids`, errors)
       break
     case 'set_item_properties':
       checkIdentifier(value.item_id, `${path}.item_id`, errors)

@@ -107,10 +107,9 @@ export class EmbeddedEditorHostRuntime implements EmbeddedEditorHostRuntimeContr
     }
   }
 
-  readonly requestSetItemAttachment = async (
-    itemIds: readonly string[],
-    rippleLinked: boolean,
-  ): Promise<void> => {
+  // Passed through EditorHostProvider and invoked by timeline item actions.
+  // fallow-ignore-next-line unused-class-member
+  async requestSetItemAttachment(itemIds: readonly string[], rippleLinked: boolean): Promise<void> {
     try {
       await this.controller.requestSetItemAttachment(itemIds, rippleLinked)
     } catch (error) {

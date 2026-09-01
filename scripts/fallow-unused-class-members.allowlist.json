@@ -1,17 +1,6 @@
 {
   "unusedClassMembers": [
     {
-      "path": "src/features/editor/host/runtime.ts",
-      "reason": "Host attachment requests flow through the EditorHostProvider callback object into timeline item actions; the class-member scan does not trace that React context handoff.",
-      "members": [
-        {
-          "parentName": "EmbeddedEditorHostRuntime",
-          "memberName": "requestSetItemAttachment",
-          "kind": "class_property"
-        }
-      ]
-    },
-    {
       "path": "src/features/export/utils/canvas-pool.ts",
       "reason": "Audited as a live typed-call surface after the unused-class-members cleanup pass.",
       "members": [

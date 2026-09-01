@@ -16,6 +16,33 @@ function attached(item: TimelineItem): boolean {
   return item.ripple_linked !== false
 }
 
+function enqueueLinkedCohort(
+  items: readonly TimelineItem[],
+  current: TimelineItem,
+  seen: ReadonlySet<string>,
+  queue: TimelineItem[],
+): void {
+  if (current.item_type === 'caption_cue' || !current.linked_group_id) return
+  for (const cohort of items) {
+    if (cohort.linked_group_id === current.linked_group_id && !seen.has(itemId(cohort)))
+      queue.push(cohort)
+  }
+}
+
+function findTouchingAttachedItem(
+  items: readonly TimelineItem[],
+  current: TimelineItem,
+): TimelineItem | undefined {
+  const currentId = itemId(current)
+  return items.find(
+    (candidate) =>
+      candidate.track_id === current.track_id &&
+      itemId(candidate) !== currentId &&
+      start(candidate) === end(current) &&
+      attached(candidate),
+  )
+}
+
 /** Neutral-wire counterpart of the frame-native attachment resolver. */
 export function resolveAttachedChainIds(timeline: TimelineState, anchorId: string): string[] {
   const items = timeline.tracks.flatMap((track) => track.items)
@@ -31,21 +58,9 @@ export function resolveAttachedChainIds(timeline: TimelineState, anchorId: strin
     if (seen.has(currentId)) continue
     seen.add(currentId)
     result.push(currentId)
-    if (current.item_type !== 'caption_cue' && current.linked_group_id) {
-      for (const cohort of items) {
-        if (cohort.linked_group_id === current.linked_group_id && !seen.has(itemId(cohort)))
-          queue.push(cohort)
-      }
-    }
+    enqueueLinkedCohort(items, current, seen, queue)
     if (!attached(current)) continue
-    const currentTrack = current.track_id
-    const next = items.find(
-      (candidate) =>
-        candidate.track_id === currentTrack &&
-        itemId(candidate) !== currentId &&
-        start(candidate) === end(current) &&
-        attached(candidate),
-    )
+    const next = findTouchingAttachedItem(items, current)
     if (next && !seen.has(itemId(next))) queue.push(next)
   }
   return result

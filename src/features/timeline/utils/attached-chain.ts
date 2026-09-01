@@ -6,6 +6,38 @@ function isRippleLinked(item: Pick<TimelineItem, 'rippleLinked'>): boolean {
   return item.rippleLinked !== false
 }
 
+function enqueueIfMissing(item: TimelineItem, included: Set<string>, queue: TimelineItem[]): void {
+  if (included.has(item.id)) return
+  included.add(item.id)
+  queue.push(item)
+}
+
+function enqueueLinkedCohort(
+  items: readonly TimelineItem[],
+  current: TimelineItem,
+  included: Set<string>,
+  queue: TimelineItem[],
+): void {
+  for (const cohort of getLinkedItems([...items], current.id))
+    enqueueIfMissing(cohort, included, queue)
+}
+
+function enqueueRippleDownstream(
+  items: readonly TimelineItem[],
+  current: TimelineItem,
+  included: Set<string>,
+  queue: TimelineItem[],
+): void {
+  const end = current.from + current.durationInFrames
+  const downstream = items
+    .filter((candidate) => candidate.trackId === current.trackId && candidate.from >= end)
+    .sort((left, right) => left.from - right.from || left.id.localeCompare(right.id))
+  for (const candidate of downstream) {
+    if (!isRippleLinked(candidate)) break
+    enqueueIfMissing(candidate, included, queue)
+  }
+}
+
 /**
  * Resolve the forward attachment chain for an anchor. A chain advances only
  * across an exact touching boundary on the same lane. Linked A/V cohorts are
@@ -63,23 +95,8 @@ export function resolveAttachedRippleTail(
   while (queue.length) {
     const current = queue.shift()!
     if (!isRippleLinked(current)) continue
-    for (const cohort of getLinkedItems([...items], current.id)) {
-      if (!result.has(cohort.id)) {
-        result.add(cohort.id)
-        queue.push(cohort)
-      }
-    }
-    const end = current.from + current.durationInFrames
-    const downstream = items
-      .filter((candidate) => candidate.trackId === current.trackId && candidate.from >= end)
-      .sort((left, right) => left.from - right.from || left.id.localeCompare(right.id))
-    for (const candidate of downstream) {
-      if (!isRippleLinked(candidate)) break
-      if (!result.has(candidate.id)) {
-        result.add(candidate.id)
-        queue.push(candidate)
-      }
-    }
+    enqueueLinkedCohort(items, current, result, queue)
+    enqueueRippleDownstream(items, current, result, queue)
   }
   return items.filter((item) => result.has(item.id)).map((item) => item.id)
 }

@@ -128,7 +128,8 @@ export function FreeCutEditorSurface({ host }: { host: EditorHost }) {
             host,
             timeline: {
               requestRippleDelete: state.runtime.requestRippleDelete,
-              requestSetItemAttachment: state.runtime.requestSetItemAttachment,
+              requestSetItemAttachment: (itemIds, rippleLinked) =>
+                state.runtime.requestSetItemAttachment(itemIds, rippleLinked),
             },
           }}
         >
