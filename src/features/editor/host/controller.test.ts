@@ -330,6 +330,44 @@ describe('embedded FreeCut host controller', () => {
     expect(derived.batch?.commands[0]).toMatchObject({ type: 'move_item', item_id: 'text-1' })
   })
 
+  it('preserves detached regular text through native host reconciliation', () => {
+    const initial = snapshot({
+      tracks: [
+        {
+          id: 'text-track',
+          kind: 'overlay',
+          name: 'Text',
+          locked: false,
+          muted: false,
+          items: [
+            {
+              type: 'text',
+              id: 'detached-text',
+              trackId: 'text-track',
+              from: 150,
+              durationInFrames: 30,
+              text: 'Detached tail',
+              rippleLinked: false,
+            },
+          ],
+        },
+      ],
+    })
+    const native = hostSnapshotToNativeTimeline(initial)
+    const reconciled = nativeTimelineToFrameDocument(
+      { tracks: native.tracks, items: native.items, fps: native.fps },
+      initial.timeline,
+    )
+
+    expect(reconciled).toMatchObject({ ok: true })
+    if (!reconciled.ok) return
+    expect(reconciled.document.tracks[0]?.items[0]).toMatchObject({ rippleLinked: false })
+    expect(deriveSupportedHostEdit(initial.timeline, reconciled.document)).toEqual({
+      batch: null,
+      reason: NO_SUPPORTED_EDIT_REASON,
+    })
+  })
+
   it.each([
     ['null', null],
     ['absent', undefined],

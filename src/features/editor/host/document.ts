@@ -343,6 +343,7 @@ function frameItemToNativeComparable(
       durationInFrames: item.durationInFrames,
       text: item.text,
       ...linkedGroupMetadata(item.linkedGroupId),
+      ...(item.rippleLinked !== undefined ? { rippleLinked: item.rippleLinked } : {}),
       ...(Object.keys(style).length > 0 ? { style } : {}),
       ...(opacityOnly ? { opacity: transform.opacity } : {}),
       ...(transform !== undefined && !opacityOnly ? { transform } : {}),
