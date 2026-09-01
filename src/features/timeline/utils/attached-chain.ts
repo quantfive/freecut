@@ -2,7 +2,7 @@ import type { TimelineItem } from '@/types/timeline'
 import { getLinkedItems } from './linked-items'
 
 /** Missing attachment metadata is intentionally attached for compatibility. */
-export function isRippleLinked(item: Pick<TimelineItem, 'rippleLinked'>): boolean {
+function isRippleLinked(item: Pick<TimelineItem, 'rippleLinked'>): boolean {
   return item.rippleLinked !== false
 }
 
@@ -48,16 +48,6 @@ export function resolveAttachedChain(items: readonly TimelineItem[], anchorId: s
   }
 
   return result
-}
-
-export function resolveAttachedChainItems(
-  items: readonly TimelineItem[],
-  anchorId: string,
-): TimelineItem[] {
-  const byId = new Map(items.map((item) => [item.id, item]))
-  return resolveAttachedChain(items, anchorId)
-    .map((id) => byId.get(id))
-    .filter((item): item is TimelineItem => item !== undefined)
 }
 
 /** Ripple edits retain their historical tail behavior, but stop at a break. */

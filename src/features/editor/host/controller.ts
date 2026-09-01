@@ -522,7 +522,7 @@ export function deriveRippleDelete(
   }
 }
 
-export function deriveSetItemAttachment(
+function deriveSetItemAttachment(
   previous: FreeCutFrameDocument,
   itemIds: readonly string[],
   rippleLinked: boolean,
