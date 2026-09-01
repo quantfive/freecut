@@ -1,6 +1,17 @@
 {
   "unusedClassMembers": [
     {
+      "path": "src/features/editor/host/runtime.ts",
+      "reason": "Host attachment requests flow through the EditorHostProvider callback object into timeline item actions; the class-member scan does not trace that React context handoff.",
+      "members": [
+        {
+          "parentName": "EmbeddedEditorHostRuntime",
+          "memberName": "requestSetItemAttachment",
+          "kind": "class_property"
+        }
+      ]
+    },
+    {
       "path": "src/features/export/utils/canvas-pool.ts",
       "reason": "Audited as a live typed-call surface after the unused-class-members cleanup pass.",
       "members": [
@@ -42,17 +53,7 @@
         },
         {
           "parentName": "VideoFrameExtractor",
-          "memberName": "init",
-          "kind": "class_method"
-        },
-        {
-          "parentName": "VideoFrameExtractor",
           "memberName": "isBatchPrewarmAvailable",
-          "kind": "class_method"
-        },
-        {
-          "parentName": "VideoFrameExtractor",
-          "memberName": "prewarmBatch",
           "kind": "class_method"
         }
       ]
@@ -341,11 +342,6 @@
         },
         {
           "parentName": "Clock",
-          "memberName": "isPlaying",
-          "kind": "class_method"
-        },
-        {
-          "parentName": "Clock",
           "memberName": "loop",
           "kind": "class_method",
           "count": 2
@@ -367,18 +363,7 @@
         },
         {
           "parentName": "Clock",
-          "memberName": "playbackRate",
-          "kind": "class_method",
-          "count": 2
-        },
-        {
-          "parentName": "Clock",
           "memberName": "seekToTime",
-          "kind": "class_method"
-        },
-        {
-          "parentName": "Clock",
-          "memberName": "setAudioContext",
           "kind": "class_method"
         },
         {
