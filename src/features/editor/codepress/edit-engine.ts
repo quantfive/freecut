@@ -216,6 +216,11 @@ function setItemFramePosition(
   )
 }
 
+function moveItemToFrame(item: TimelineItem, startFrame: number, fps: FrameRateLike): TimelineItem {
+  const range = frameRangeFor(item, fps)
+  return setItemFramePosition(item, startFrame, startFrame + range.end - range.start, fps)
+}
+
 function shiftItemByFrames(
   item: TimelineItem,
   deltaFrames: number,
@@ -379,6 +384,7 @@ function applyAddText(timeline: MutableTimeline, command: AddTextCommand): Comma
 function applyDuplicate(
   timeline: MutableTimeline,
   command: Extract<EditCommand, { type: 'duplicate_item' }>,
+  fps: FrameRateLike,
 ): CommandEffect {
   const source = findItem(timeline, command.item_id, command.command_id).item
   const target = findTrack(timeline, command.to_track_id, command.command_id)
@@ -386,11 +392,7 @@ function applyDuplicate(
   const duplicate = cloneItem(source)
   const sourceStart = itemStart(source)
   const targetStart = command.timeline_start_us ?? sourceStart
-  const shifted = setItemPosition(
-    duplicate,
-    targetStart,
-    targetStart + (itemEnd(source) - sourceStart),
-  )
+  const shifted = moveItemToFrame(duplicate, assertFrameAligned(targetStart, fps), fps)
   const withId =
     shifted.item_type === 'caption_cue'
       ? { ...shifted, cue_id: command.new_item_id, track_id: target.track_id }
@@ -414,27 +416,28 @@ function applyRemoveItem(
   return { ...emptyEffect(), deleted_item_ids: [command.item_id] }
 }
 
-function applyMoveItem(timeline: MutableTimeline, command: MoveItemCommand): CommandEffect {
+function applyMoveItem(
+  timeline: MutableTimeline,
+  command: MoveItemCommand,
+  fps: FrameRateLike,
+): CommandEffect {
   const located = findItem(timeline, command.item_id, command.command_id)
   const target = findTrack(timeline, command.to_track_id, command.command_id)
   ensureTrackCompatibility(target, located.item, command.command_id)
   if (command.ripple) {
     const chainIds = resolveAttachedChainIds(timeline, command.item_id)
-    const oldStarts = new Map(
-      chainIds.map((id) => {
-        const item = findItem(timeline, id, command.command_id).item
-        return [id, itemStart(item)] as const
-      }),
-    )
-    const delta = command.timeline_start_us - itemStart(located.item)
-    const moved = applyMoveItem(timeline, { ...command, ripple: undefined })
+    const anchorStartFrame = frameRangeFor(located.item, fps).start
+    const targetStartFrame = assertFrameAligned(command.timeline_start_us, fps)
+    const deltaFrames = targetStartFrame - anchorStartFrame
+    const moved = applyMoveItem(timeline, { ...command, ripple: undefined }, fps)
     for (const id of chainIds) {
       if (id === command.item_id) continue
       const member = findItem(timeline, id, command.command_id)
+      const range = frameRangeFor(member.item, fps)
       setItemAt(
         timeline,
         member,
-        setItemPosition(member.item, oldStarts.get(id)! + delta, itemEnd(member.item) + delta),
+        setItemFramePosition(member.item, range.start + deltaFrames, range.end + deltaFrames, fps),
       )
     }
     return {
@@ -443,11 +446,10 @@ function applyMoveItem(timeline: MutableTimeline, command: MoveItemCommand): Com
       updated_item_ids: chainIds,
     }
   }
-  const oldStart = itemStart(located.item)
-  const moved = setItemPosition(
+  const moved = moveItemToFrame(
     setItemTrack(located.item, target.track_id),
-    command.timeline_start_us,
-    command.timeline_start_us + itemEnd(located.item) - oldStart,
+    assertFrameAligned(command.timeline_start_us, fps),
+    fps,
   )
   const sourceTrack = timeline.tracks[located.trackIndex]!
   const sourceItems = sourceTrack.items.filter((_, index) => index !== located.itemIndex)
@@ -883,12 +885,12 @@ function applyCommand(
     case 'duplicate_item':
       if (command.timeline_start_us !== undefined)
         assertFrameAligned(command.timeline_start_us, fps)
-      return applyDuplicate(timeline, command)
+      return applyDuplicate(timeline, command, fps)
     case 'remove_item':
       return applyRemoveItem(timeline, command)
     case 'move_item':
       assertFrameAligned(command.timeline_start_us, fps)
-      return applyMoveItem(timeline, command)
+      return applyMoveItem(timeline, command, fps)
     case 'set_item_attachment':
       return applySetItemAttachment(timeline, command)
     case 'trim_item':
