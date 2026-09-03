@@ -25,6 +25,7 @@ export type EditorCapability =
   | 'media.relink'
   | 'timeline.add'
   | 'timeline.move'
+  | 'timeline.attachment'
   | 'timeline.trim'
   | 'timeline.split'
   | 'timeline.remove'
@@ -50,6 +51,7 @@ export const DEFAULT_HOST_CAPABILITIES: EditorCapabilityMap = {
   'media.relink': false,
   'timeline.add': true,
   'timeline.move': true,
+  'timeline.attachment': true,
   'timeline.trim': true,
   'timeline.split': true,
   'timeline.remove': true,
@@ -383,6 +385,7 @@ export const SUPPORTED_HOST_COMMANDS = [
   'add_clip',
   'add_text',
   'move_item',
+  'set_item_attachment',
   'trim_item',
   'split_item',
   'remove_item',
@@ -404,6 +407,8 @@ export function capabilityForCommand(command: EditCommand['type']): EditorCapabi
       return 'timeline.add'
     case 'move_item':
       return 'timeline.move'
+    case 'set_item_attachment':
+      return 'timeline.attachment'
     case 'trim_item':
       return 'timeline.trim'
     case 'split_item':

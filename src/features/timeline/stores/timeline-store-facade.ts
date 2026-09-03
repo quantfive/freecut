@@ -126,6 +126,7 @@ function getSnapshot(): TimelineState & TimelineActions {
       moveItem: timelineActions.moveItem,
       moveItems: timelineActions.moveItems,
       moveItemsWithTrackChanges: timelineActions.moveItemsWithTrackChanges,
+      setItemAttachment: timelineActions.setItemAttachment,
       duplicateItems: timelineActions.duplicateItems,
       duplicateItemsWithTrackChanges: timelineActions.duplicateItemsWithTrackChanges,
       trimItemStart: timelineActions.trimItemStart,

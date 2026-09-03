@@ -42,17 +42,7 @@
         },
         {
           "parentName": "VideoFrameExtractor",
-          "memberName": "init",
-          "kind": "class_method"
-        },
-        {
-          "parentName": "VideoFrameExtractor",
           "memberName": "isBatchPrewarmAvailable",
-          "kind": "class_method"
-        },
-        {
-          "parentName": "VideoFrameExtractor",
-          "memberName": "prewarmBatch",
           "kind": "class_method"
         }
       ]
@@ -341,11 +331,6 @@
         },
         {
           "parentName": "Clock",
-          "memberName": "isPlaying",
-          "kind": "class_method"
-        },
-        {
-          "parentName": "Clock",
           "memberName": "loop",
           "kind": "class_method",
           "count": 2
@@ -367,18 +352,7 @@
         },
         {
           "parentName": "Clock",
-          "memberName": "playbackRate",
-          "kind": "class_method",
-          "count": 2
-        },
-        {
-          "parentName": "Clock",
           "memberName": "seekToTime",
-          "kind": "class_method"
-        },
-        {
-          "parentName": "Clock",
-          "memberName": "setAudioContext",
           "kind": "class_method"
         },
         {

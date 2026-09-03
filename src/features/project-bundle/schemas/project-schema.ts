@@ -461,6 +461,7 @@ const timelineItemSchema = z
     mediaId: z.string().optional(),
     originId: z.string().optional(),
     linkedGroupId: z.string().optional(),
+    rippleLinked: z.boolean().optional(),
     type: itemTypeSchema,
     // Source fields
     src: z.string().optional(),

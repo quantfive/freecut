@@ -72,14 +72,18 @@ export function clampTrimAmount(
         maxExtend =
           item.isReversed === true && sourceDuration !== undefined
             ? getMaxStartExtension(
-                sourceDuration - (sourceEnd ?? sourceDuration),
+                // A sourceDuration shorter than the clip's own sourceEnd is
+                // inconsistent data (e.g. an asset whose duration failed to
+                // probe). Floor at zero so an extend clamps to a no-op instead
+                // of a positive delta that shrinks the clip.
+                Math.max(0, sourceDuration - (sourceEnd ?? sourceDuration)),
                 speed,
                 effectiveSourceFps,
                 timelineFps,
               )
             : getMaxStartExtension(sourceStart, speed, effectiveSourceFps, timelineFps)
         if (-trimAmount > maxExtend) {
-          clampedAmount = -maxExtend
+          clampedAmount = maxExtend === 0 ? 0 : -maxExtend
         }
       }
     } else {
@@ -90,9 +94,9 @@ export function clampTrimAmount(
         const maxDuration =
           item.durationInFrames +
           getMaxStartExtension(sourceStart, speed, effectiveSourceFps, timelineFps)
-        maxExtend = maxDuration - item.durationInFrames
-        if (item.durationInFrames + trimAmount > maxDuration) {
-          clampedAmount = maxDuration - item.durationInFrames
+        maxExtend = Math.max(0, maxDuration - item.durationInFrames)
+        if (trimAmount > maxExtend) {
+          clampedAmount = maxExtend
         }
       } else if (sourceDuration !== undefined) {
         const maxDuration = calcMaxDuration(
@@ -102,10 +106,14 @@ export function clampTrimAmount(
           effectiveSourceFps,
           timelineFps,
         )
-        maxExtend = maxDuration - item.durationInFrames
+        // A maxDuration below the clip's current duration means the stored
+        // source bound contradicts the clip's window (e.g. an asset whose
+        // duration is unknown). An extend must clamp to a no-op then, never
+        // to a negative delta that would collapse the clip toward 1 frame.
+        maxExtend = Math.max(0, maxDuration - item.durationInFrames)
 
-        if (item.durationInFrames + trimAmount > maxDuration) {
-          clampedAmount = maxDuration - item.durationInFrames
+        if (trimAmount > maxExtend) {
+          clampedAmount = maxExtend
         }
       }
     }

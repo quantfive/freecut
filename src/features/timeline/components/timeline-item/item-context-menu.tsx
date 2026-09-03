@@ -117,12 +117,18 @@ type DestructiveActionsProps = ItemContextMenuSectionProps & {
   onDelete: () => void
 }
 
+type AttachmentActionsProps = ItemContextMenuSectionProps & {
+  isRippleLinked: boolean
+  onToggle: () => void
+}
+
 type JoinActionsConfig = Omit<JoinActionsProps, keyof ItemContextMenuSectionProps>
 type LinkActionsConfig = Omit<LinkActionsProps, keyof ItemContextMenuSectionProps>
 type MediaActionsConfig = Omit<MediaActionsProps, keyof ItemContextMenuSectionProps>
 type CaptionActionsConfig = Omit<CaptionActionsProps, keyof ItemContextMenuSectionProps>
 type CompositionActionsConfig = Omit<CompositionActionsProps, keyof ItemContextMenuSectionProps>
 type DestructiveActionsConfig = Omit<DestructiveActionsProps, keyof ItemContextMenuSectionProps>
+type AttachmentActionsConfig = Omit<AttachmentActionsProps, keyof ItemContextMenuSectionProps>
 
 type KeyframeActionsConfig = Omit<
   KeyframeActionsProps,
@@ -145,6 +151,7 @@ interface ItemContextMenuProps {
   trackLocked: boolean
   joinActions: JoinActionsConfig
   destructiveActions: DestructiveActionsConfig
+  attachmentActions?: AttachmentActionsConfig
   linkActions?: LinkActionsConfig
   keyframeActions?: KeyframeActionsConfig
   layoutActions?: LayoutActionsConfig
@@ -168,6 +175,7 @@ export const ItemContextMenu = memo(function ItemContextMenu({
   trackLocked,
   joinActions,
   destructiveActions,
+  attachmentActions,
   linkActions,
   keyframeActions,
   layoutActions,
@@ -202,6 +210,7 @@ export const ItemContextMenu = memo(function ItemContextMenu({
       trackLocked={trackLocked}
       joinActions={joinActions}
       destructiveActions={destructiveActions}
+      attachmentActions={attachmentActions}
       linkActions={linkActions}
       keyframeActions={keyframeActions}
       layoutActions={layoutActions}
@@ -254,6 +263,7 @@ const ItemContextMenuFull = memo(function ItemContextMenuFull({
   trackLocked,
   joinActions,
   destructiveActions,
+  attachmentActions,
   linkActions,
   keyframeActions,
   layoutActions,
@@ -343,6 +353,13 @@ const ItemContextMenuFull = memo(function ItemContextMenuFull({
           canRippleDelete={!hostMode}
           canDelete={canDeleteItem}
         />
+        {attachmentActions && (
+          <ContextMenuItem onClick={attachmentActions.onToggle}>
+            {attachmentActions.isRippleLinked
+              ? t('timeline.contextMenu.detachFromSequence', 'Detach from sequence')
+              : t('timeline.contextMenu.reattachToSequence', 'Reattach to sequence')}
+          </ContextMenuItem>
+        )}
       </ContextMenuContent>
     </ContextMenu>
   )

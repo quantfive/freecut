@@ -84,6 +84,7 @@ export interface TimelineActions {
     tracks: TimelineTrack[],
     updates: Array<{ id: string; from: number; trackId?: string }>,
   ) => void
+  setItemAttachment: (itemIds: readonly string[], rippleLinked: boolean) => void
   duplicateItems: (itemIds: string[], positions: Array<{ from: number; trackId: string }>) => void
   duplicateItemsWithTrackChanges: (
     tracks: TimelineTrack[],

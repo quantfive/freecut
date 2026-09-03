@@ -65,6 +65,8 @@ type BaseTimelineItem = {
   compositionId?: string // Reference to a sub-composition for compound wrappers
   originId?: string // Tracks lineage - items from same split share this for stable React keys
   linkedGroupId?: string // Links paired timeline items like synced video/audio companions
+  /** Sequence attachment; omitted means attached, false is an explicit break. */
+  rippleLinked?: boolean
   // Trim properties for media items
   trimStart?: number // Frames trimmed from start of source media
   trimEnd?: number // Frames trimmed from end of source media

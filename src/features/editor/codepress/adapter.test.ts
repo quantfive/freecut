@@ -152,6 +152,24 @@ describe('PR1 conformance fixtures', () => {
     })
   })
 
+  it('rejects a non-boolean ripple move intent', () => {
+    const fixture = readFixture<ValidFixture>('valid/core-edit-batch.json')
+    const request = structuredClone(fixture.request) as unknown as Record<string, unknown>
+    request.commands = [
+      {
+        command_id: 'invalid-ripple-move',
+        type: 'move_item',
+        item_id: 'clip-a',
+        to_track_id: 'track-video',
+        timeline_start_us: 1_000_000,
+        index: 0,
+        ripple: 'true',
+      },
+    ]
+
+    expect(validateCommandBatch(request).ok).toBe(false)
+  })
+
   it.each(['errors/revision-conflict.json', 'errors/idempotency-conflict.json'])(
     'keeps the canonical structured error shape for %s',
     (path) => {
@@ -178,6 +196,71 @@ describe('deterministic microsecond/frame conversion', () => {
     expect(assertFrameAligned(1_001_000, ntsc)).toBe(30)
     expect(isFrameAligned(33_334, 30)).toBe(false)
     expect(() => assertFrameAligned(33_334, 30)).toThrow(FrameTimingError)
+  })
+
+  it('keeps ripple-moved touching clips frame-aligned across rounded endpoints', () => {
+    const frame = (value: number) => framesToMicroseconds(value, 30)
+    const items = [
+      clip({
+        item_id: 'clip-one',
+        timeline_start_us: frame(10),
+        timeline_end_us: frame(50),
+      }),
+      clip({
+        item_id: 'clip-two',
+        timeline_start_us: frame(50),
+        timeline_end_us: frame(90),
+      }),
+      clip({
+        item_id: 'clip-three',
+        timeline_start_us: frame(90),
+        timeline_end_us: frame(130),
+      }),
+    ]
+    const adapter = new CodePressCommandAdapter({
+      document: documentFor(
+        timeline({
+          duration_us: frame(180),
+          tracks: [
+            {
+              track_id: 'track-video',
+              kind: 'video',
+              name: 'Video',
+              locked: false,
+              muted: false,
+              items,
+            },
+          ],
+        }),
+      ),
+    })
+
+    const result = applyRequest(adapter, {
+      contract_version: 1,
+      timeline_id: 'timeline-test',
+      operation_id: 'frame-aligned-ripple-move',
+      idempotency_key: 'frame-aligned-ripple-move:1',
+      base_revision: 0,
+      preconditions: [],
+      commands: [
+        {
+          command_id: 'move-attached-chain',
+          type: 'move_item',
+          item_id: 'clip-one',
+          to_track_id: 'track-video',
+          timeline_start_us: frame(26),
+          index: 0,
+          ripple: true,
+        },
+      ],
+    })
+
+    expect(result.timeline.tracks[0]?.items).toMatchObject([
+      { item_id: 'clip-one', timeline_start_us: frame(26), timeline_end_us: frame(66) },
+      { item_id: 'clip-two', timeline_start_us: frame(66), timeline_end_us: frame(106) },
+      { item_id: 'clip-three', timeline_start_us: frame(106), timeline_end_us: frame(146) },
+    ])
+    expect(validateTimelineState(result.timeline).ok).toBe(true)
   })
 
   it('translates every public timestamp in a batch before application', () => {

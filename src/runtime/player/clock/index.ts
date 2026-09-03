@@ -10,7 +10,6 @@ export {
   ClockBridgeProvider,
   useBridgedTimelineContext,
   useBridgedSetTimelineContext,
-  useBridgedCurrentFrame,
   useBridgedIsPlaying,
   useBridgedSetTimelineFrame,
   useBridgedActualFirstFrame,

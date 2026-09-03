@@ -128,6 +128,8 @@ export interface ClipItem {
   source_end_us: Microseconds
   /** Stable identity for an atomically linked media/caption cohort. */
   linked_group_id?: string | null
+  /** Sequence attachment; omitted is attached, false is a detached break. */
+  ripple_linked?: boolean
   transform?: Transform
   opacity?: number
   volume?: number
@@ -149,6 +151,7 @@ export interface TextItem {
   text: string
   /** Reserved for host-authored synchronized text cohorts. */
   linked_group_id?: string | null
+  ripple_linked?: boolean
   style?: TextStyle
   transform?: Transform
   opacity?: number
@@ -164,6 +167,7 @@ export interface CaptionCue {
   text: string
   /** Stable identity when a caption is part of a linked edit cohort. */
   linked_group_id?: string | null
+  ripple_linked?: boolean
   speaker?: string | null
   style?: CaptionStyle
 }
@@ -236,6 +240,13 @@ export interface MoveItemCommand {
   to_track_id: TrackId
   timeline_start_us: Microseconds
   index: number
+  ripple?: boolean
+}
+export interface SetItemAttachmentCommand {
+  command_id: CommandId
+  type: 'set_item_attachment'
+  item_ids: readonly TimelineItemId[]
+  ripple_linked: boolean
 }
 export interface TrimItemCommand {
   command_id: CommandId
@@ -381,6 +392,7 @@ export type EditCommand =
   | DuplicateItemCommand
   | RemoveItemCommand
   | MoveItemCommand
+  | SetItemAttachmentCommand
   | TrimItemCommand
   | SplitItemCommand
   | RippleDeleteCommand
@@ -433,6 +445,8 @@ export function itemIdFromCommand(command: EditCommand): TimelineItemId | null {
     case 'split_item':
     case 'set_item_properties':
       return command.item_id
+    case 'set_item_attachment':
+      return command.item_ids[0] ?? null
     case 'upsert_caption_cues':
       return command.cues[0]?.cue_id ?? null
     case 'remove_caption_cues':
@@ -460,6 +474,7 @@ export function isTimelineItemCommand(
   | SetCaptionStyleCommand
   | RequestJobCommand
   | RippleDeleteCommand
+  | SetItemAttachmentCommand
 > {
   return itemIdFromCommand(command) !== null
 }
@@ -831,6 +846,20 @@ function checkArray(value: unknown, path: string, errors: VideoCommandError[]): 
   return true
 }
 
+function checkUniqueIdentifiers(
+  values: readonly unknown[],
+  path: string,
+  errors: VideoCommandError[],
+): void {
+  const ids = new Set<string>()
+  for (const [index, id] of values.entries()) {
+    const itemPath = `${path}[${index}]`
+    if (!checkIdentifier(id, itemPath, errors)) continue
+    if (ids.has(id)) errors.push(invalidRequest(itemPath, 'must be unique'))
+    ids.add(id)
+  }
+}
+
 function checkTrackKind(value: unknown): value is TrackKind {
   return typeof value === 'string' && (TRACK_KINDS as readonly string[]).includes(value)
 }
@@ -1162,6 +1191,16 @@ function validateCommand(value: unknown, path: string, errors: VideoCommandError
       checkIdentifier(value.to_track_id, `${path}.to_track_id`, errors)
       checkMicroseconds(value.timeline_start_us, `${path}.timeline_start_us`, errors)
       checkIndex(value.index, `${path}.index`, errors)
+      if (value.ripple !== undefined && typeof value.ripple !== 'boolean')
+        errors.push(invalidRequest(`${path}.ripple`, 'must be a boolean'))
+      break
+    case 'set_item_attachment':
+      if (!checkArray(value.item_ids, `${path}.item_ids`, errors)) return
+      if (value.item_ids.length === 0)
+        errors.push(invalidRequest(`${path}.item_ids`, 'must not be empty'))
+      checkUniqueIdentifiers(value.item_ids, `${path}.item_ids`, errors)
+      if (typeof value.ripple_linked !== 'boolean')
+        errors.push(invalidRequest(`${path}.ripple_linked`, 'must be a boolean'))
       break
     case 'trim_item':
       checkIdentifier(value.item_id, `${path}.item_id`, errors)
@@ -1183,16 +1222,8 @@ function validateCommand(value: unknown, path: string, errors: VideoCommandError
       checkInterval(value.start_us, value.end_us, path, errors)
       if (value.track_ids !== null && !checkArray(value.track_ids, `${path}.track_ids`, errors))
         return
-      if (Array.isArray(value.track_ids)) {
-        const ids = new Set<string>()
-        for (const [index, id] of value.track_ids.entries()) {
-          if (checkIdentifier(id, `${path}.track_ids[${index}]`, errors)) {
-            if (ids.has(id))
-              errors.push(invalidRequest(`${path}.track_ids[${index}]`, 'must be unique'))
-            ids.add(id)
-          }
-        }
-      }
+      if (Array.isArray(value.track_ids))
+        checkUniqueIdentifiers(value.track_ids, `${path}.track_ids`, errors)
       break
     case 'add_track':
       checkIndex(value.index, `${path}.index`, errors)
@@ -1291,16 +1322,8 @@ function validateCommand(value: unknown, path: string, errors: VideoCommandError
       break
     case 'remove_caption_cues':
       checkIdentifier(value.track_id, `${path}.track_id`, errors)
-      if (checkArray(value.cue_ids, `${path}.cue_ids`, errors)) {
-        const ids = new Set<string>()
-        for (const [index, id] of value.cue_ids.entries()) {
-          if (checkIdentifier(id, `${path}.cue_ids[${index}]`, errors)) {
-            if (ids.has(id))
-              errors.push(invalidRequest(`${path}.cue_ids[${index}]`, 'must be unique'))
-            ids.add(id)
-          }
-        }
-      }
+      if (checkArray(value.cue_ids, `${path}.cue_ids`, errors))
+        checkUniqueIdentifiers(value.cue_ids, `${path}.cue_ids`, errors)
       break
     case 'set_item_properties':
       checkIdentifier(value.item_id, `${path}.item_id`, errors)

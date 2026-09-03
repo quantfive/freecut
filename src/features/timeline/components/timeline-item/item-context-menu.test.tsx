@@ -1,6 +1,6 @@
 import type { ComponentProps, ReactNode } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vite-plus/test'
-import { fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { useSelectionStore } from '@/shared/state/selection'
 import { ItemContextMenu } from './item-context-menu'
 import { EditorHostProvider } from '../../deps/editor'
@@ -168,6 +168,22 @@ describe('ItemContextMenu scene detection', () => {
 
     expect(screen.getByRole('button', { name: /^Delete/ })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /Ripple Delete/ })).toBeNull()
+  })
+})
+
+describe('ItemContextMenu sequence attachment', () => {
+  it('offers detach and reattach toggles', () => {
+    const onToggle = vi.fn()
+    renderContextMenu({ attachmentActions: { isRippleLinked: true, onToggle } })
+    fireEvent.click(screen.getByRole('button', { name: 'Detach from sequence' }))
+    expect(onToggle).toHaveBeenCalledTimes(1)
+    cleanup()
+
+    // The menu stays mounted after activation; rerendering is represented by
+    // the same component contract with the detached state.
+    renderContextMenu({ attachmentActions: { isRippleLinked: false, onToggle } })
+    fireEvent.click(screen.getByRole('button', { name: 'Reattach to sequence' }))
+    expect(onToggle).toHaveBeenCalledTimes(2)
   })
 })
 

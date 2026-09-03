@@ -190,6 +190,23 @@ describe('embedded FreeCut host controller', () => {
     })
   })
 
+  it('floors sourceDuration at the clip source range when asset duration is unprobed', () => {
+    const initial = snapshot()
+    // Cloud/AI assets sit at durationSeconds 0 until the probe job lands. The
+    // native item must not get a 1-frame sourceDuration: the trim clamp would
+    // turn any end-extend drag into a collapse toward 1 frame.
+    const unprobed = {
+      ...initial,
+      assets: [{ ...initial.assets[0]!, durationSeconds: 0 }],
+    }
+    const native = hostSnapshotToNativeTimeline(unprobed)
+    expect(native.items[0]).toMatchObject({
+      sourceStart: 0,
+      sourceEnd: 60,
+      sourceDuration: 60,
+    })
+  })
+
   it('keeps caption styles and caption-role items on the host-backed native bridge', () => {
     const initial = snapshot({
       tracks: [
@@ -328,6 +345,44 @@ describe('embedded FreeCut host controller', () => {
       idempotencyKey: 'idempotency-text-move',
     })
     expect(derived.batch?.commands[0]).toMatchObject({ type: 'move_item', item_id: 'text-1' })
+  })
+
+  it('preserves detached regular text through native host reconciliation', () => {
+    const initial = snapshot({
+      tracks: [
+        {
+          id: 'text-track',
+          kind: 'overlay',
+          name: 'Text',
+          locked: false,
+          muted: false,
+          items: [
+            {
+              type: 'text',
+              id: 'detached-text',
+              trackId: 'text-track',
+              from: 150,
+              durationInFrames: 30,
+              text: 'Detached tail',
+              rippleLinked: false,
+            },
+          ],
+        },
+      ],
+    })
+    const native = hostSnapshotToNativeTimeline(initial)
+    const reconciled = nativeTimelineToFrameDocument(
+      { tracks: native.tracks, items: native.items, fps: native.fps },
+      initial.timeline,
+    )
+
+    expect(reconciled).toMatchObject({ ok: true })
+    if (!reconciled.ok) return
+    expect(reconciled.document.tracks[0]?.items[0]).toMatchObject({ rippleLinked: false })
+    expect(deriveSupportedHostEdit(initial.timeline, reconciled.document)).toEqual({
+      batch: null,
+      reason: NO_SUPPORTED_EDIT_REASON,
+    })
   })
 
   it.each([
@@ -698,6 +753,7 @@ describe('embedded FreeCut host controller', () => {
       'add_clip',
       'add_text',
       'move_item',
+      'set_item_attachment',
       'trim_item',
       'split_item',
       'remove_item',
@@ -719,6 +775,24 @@ describe('embedded FreeCut host controller', () => {
       },
     })
     expect(adapter.capabilities).toEqual({})
+  })
+
+  it('derives attachment toggles as one command with item preconditions', () => {
+    const initial = snapshot()
+    const track = initial.timeline.tracks[0]!
+    const next = {
+      ...initial.timeline,
+      tracks: [{ ...track, items: [{ ...track.items[0]!, rippleLinked: false }] }],
+    }
+    const derived = deriveSupportedHostEdit(initial.timeline, next)
+    expect(derived.batch?.commands).toEqual([
+      expect.objectContaining({
+        type: 'set_item_attachment',
+        item_ids: ['clip-1'],
+        ripple_linked: false,
+      }),
+    ])
+    expect(derived.batch?.preconditions).toHaveLength(1)
   })
 
   describe('host round-trip stability', () => {
@@ -1278,13 +1352,9 @@ describe('embedded FreeCut host controller', () => {
 
       const derived = deriveSupportedHostEdit(initial.timeline, next)
 
-      expect(derived.batch).toBeNull()
-      expect(derived.reason).toMatch(/^Multiple or ambiguous timeline changes are unsupported\b/)
-      expect(derived.reason).toContain('added 0, removed 0, changed 2')
-      expect(derived.detail).toEqual({
-        code: 'ambiguous_change',
-        changeCounts: { added: 0, removed: 0, changed: 2 },
-      })
+      expect(derived.batch?.commands).toEqual([
+        expect.objectContaining({ type: 'move_item', item_id: 'clip-1', ripple: true }),
+      ])
     })
 
     it('derives a move_item command for a store drag of a clip carrying an identity transform', async () => {

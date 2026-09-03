@@ -107,6 +107,19 @@ export class EmbeddedEditorHostRuntime implements EmbeddedEditorHostRuntimeContr
     }
   }
 
+  // Passed through EditorHostProvider and invoked by timeline item actions.
+  // fallow-ignore-next-line unused-class-member
+  async requestSetItemAttachment(itemIds: readonly string[], rippleLinked: boolean): Promise<void> {
+    try {
+      await this.controller.requestSetItemAttachment(itemIds, rippleLinked)
+    } catch (error) {
+      this.host.notify?.({
+        kind: 'error',
+        message: error instanceof Error ? error.message : 'Attachment change submission failed',
+      })
+    }
+  }
+
   /**
    * The host serves cross-origin media URLs, which rules out the Web Audio
    * clip graph (non-CORS cross-origin resources are silenced through

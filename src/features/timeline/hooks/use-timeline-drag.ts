@@ -34,6 +34,7 @@ import { createLogger } from '@/shared/logging/logger'
 import { createRafCoalescedCallback } from '../utils/raf-coalesced-callback'
 import { resolveEffectiveTrackStates } from '../utils/group-utils'
 import { suppressPostTimelineGestureClick } from '../components/timeline-item/post-drag-click-guard'
+import { resolveAttachedChain } from '../utils/attached-chain'
 
 const logger = createLogger('TimelineDrag')
 
@@ -542,7 +543,8 @@ function resolveDraggedItemStates(
       ? expandSelectionWithLinkedItems(allItems, currentSelectedIds)
       : currentSelectedIds
     : linkedIds
-  const itemsToDrag = expandItemIdsWithAttachedCaptions(allItems, baseItemsToDrag)
+  const attachedBaseIds = baseItemsToDrag.flatMap((id) => resolveAttachedChain(allItems, id))
+  const itemsToDrag = expandItemIdsWithAttachedCaptions(allItems, [...new Set(attachedBaseIds)])
   const unlockedItemIds = filterUnlockedItemIds(
     allItems,
     resolveEffectiveTrackStates(currentTracks),

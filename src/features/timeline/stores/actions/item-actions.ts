@@ -56,6 +56,7 @@ import {
   isTimelineTrackLocked,
   partitionItemMutationIdsByLock,
 } from '../../utils/track-lock-invariants'
+import { resolveAttachedChain, resolveAttachedRippleTail } from '../../utils/attached-chain'
 
 const LOCK_PROTECTED_ITEM_FIELDS = new Set([
   'from',
@@ -116,6 +117,34 @@ function areMoveUpdatesUnlocked(
   return updates.every(
     (update) => !update.trackId || !isTimelineTrackLocked(destinationTracks, update.trackId),
   )
+}
+
+function expandMoveUpdatesWithAttachedChain(
+  updates: Array<{ id: string; from: number; trackId?: string }>,
+): Array<{ id: string; from: number; trackId?: string }> {
+  const items = useItemsStore.getState().items
+  const byId = new Map(items.map((item) => [item.id, item]))
+  const result = new Map<string, { id: string; from: number; trackId?: string }>()
+  for (const update of updates) {
+    const anchor = byId.get(update.id)
+    if (!anchor) continue
+    const delta = update.from - anchor.from
+    for (const id of resolveAttachedChain(items, update.id)) {
+      const attached = byId.get(id)
+      if (!attached || result.has(id)) continue
+      result.set(id, {
+        id,
+        from: attached.from + delta,
+        ...(id === update.id && update.trackId ? { trackId: update.trackId } : {}),
+      })
+    }
+  }
+  for (const update of updates) {
+    // Explicit cohort/selection assignments (including destination tracks)
+    // always win over an implicit attachment expansion.
+    result.set(update.id, { ...update, from: update.from })
+  }
+  return [...result.values()]
 }
 
 function pruneLayerGroupsAfterItemRemoval(): void {
@@ -1041,7 +1070,12 @@ function buildBaseRippleShifts(
   for (const item of remainingItems) {
     let shiftAmount = 0
     for (const deletedItem of deletedItems) {
+      const chainIds = resolveAttachedRippleTail(
+        [...remainingItems, ...deletedItems],
+        deletedItem.id,
+      )
       if (
+        chainIds.includes(item.id) &&
         deletedItem.trackId === item.trackId &&
         deletedItem.from + deletedItem.durationInFrames <= item.from
       ) {
@@ -1371,32 +1405,36 @@ export function trackPushItems(anchorId: string, delta: number): void {
 export function moveItem(id: string, newFrom: number, newTrackId?: string): void {
   const item = useItemsStore.getState().itemById[id]
   if (!item) return
-  if (!areMoveUpdatesUnlocked([{ id, from: newFrom, trackId: newTrackId }])) return
+  const expandedUpdates = expandMoveUpdatesWithAttachedChain([
+    { id, from: newFrom, trackId: newTrackId },
+  ])
+  if (!areMoveUpdatesUnlocked(expandedUpdates)) return
 
   execute(
     'MOVE_ITEM',
     () => {
-      useItemsStore.getState()._moveItem(id, newFrom, newTrackId)
+      useItemsStore.getState()._moveItems(expandedUpdates)
 
       // Repair transitions
-      applyTransitionRepairs([id])
+      applyTransitionRepairs(expandedUpdates.map((update) => update.id))
 
       useTimelineSettingsStore.getState().markDirty()
       warnIfOverlapping('MOVE_ITEM')
     },
-    { id, newFrom, newTrackId },
+    { id, newFrom, newTrackId, attachedCount: expandedUpdates.length },
   )
 }
 
 export function moveItems(updates: Array<{ id: string; from: number; trackId?: string }>): void {
-  if (!areMoveUpdatesUnlocked(updates)) return
+  const expandedUpdates = expandMoveUpdatesWithAttachedChain(updates)
+  if (!areMoveUpdatesUnlocked(expandedUpdates)) return
 
   execute(
     'MOVE_ITEMS',
     () => {
-      useItemsStore.getState()._moveItems(updates)
+      useItemsStore.getState()._moveItems(expandedUpdates)
 
-      const movedItemIds = new Set(updates.map((u) => u.id))
+      const movedItemIds = new Set(expandedUpdates.map((u) => u.id))
       const items = useItemsStore.getState().items
       const transitions = useTransitionsStore.getState().transitions
 
@@ -1419,12 +1457,12 @@ export function moveItems(updates: Array<{ id: string; from: number; trackId?: s
 
       // Apply updated transitions (with trackId fixes) then repair
       useTransitionsStore.getState().setTransitions(updatedTransitions)
-      applyTransitionRepairs(updates.map((u) => u.id))
+      applyTransitionRepairs(expandedUpdates.map((u) => u.id))
 
       useTimelineSettingsStore.getState().markDirty()
       warnIfOverlapping('MOVE_ITEMS')
     },
-    { count: updates.length },
+    { count: expandedUpdates.length },
   )
 }
 
@@ -1432,15 +1470,16 @@ export function moveItemsWithTrackChanges(
   tracks: TimelineTrack[],
   updates: Array<{ id: string; from: number; trackId?: string }>,
 ): void {
-  if (!areMoveUpdatesUnlocked(updates, tracks)) return
+  const expandedUpdates = expandMoveUpdatesWithAttachedChain(updates)
+  if (!areMoveUpdatesUnlocked(expandedUpdates, tracks)) return
 
   execute(
     'MOVE_ITEMS_WITH_TRACKS',
     () => {
       useItemsStore.getState().setTracks(tracks)
-      useItemsStore.getState()._moveItems(updates)
+      useItemsStore.getState()._moveItems(expandedUpdates)
 
-      const movedItemIds = new Set(updates.map((u) => u.id))
+      const movedItemIds = new Set(expandedUpdates.map((u) => u.id))
       const items = useItemsStore.getState().items
       const transitions = useTransitionsStore.getState().transitions
 
@@ -1460,11 +1499,25 @@ export function moveItemsWithTrackChanges(
       })
 
       useTransitionsStore.getState().setTransitions(updatedTransitions)
-      applyTransitionRepairs(updates.map((u) => u.id))
+      applyTransitionRepairs(expandedUpdates.map((u) => u.id))
       useTimelineSettingsStore.getState().markDirty()
       warnIfOverlapping('MOVE_ITEMS_WITH_TRACKS')
     },
-    { count: updates.length, trackCount: tracks.length },
+    { count: expandedUpdates.length, trackCount: tracks.length },
+  )
+}
+
+export function setItemAttachment(itemIds: readonly string[], rippleLinked: boolean): void {
+  const ids = [...new Set(itemIds)]
+  if (ids.length === 0 || !areItemMutationsUnlocked(ids)) return
+  execute(
+    'SET_ITEM_ATTACHMENT',
+    () => {
+      const store = useItemsStore.getState()
+      for (const id of ids) store._updateItem(id, { rippleLinked })
+      useTimelineSettingsStore.getState().markDirty()
+    },
+    { itemIds: ids, rippleLinked },
   )
 }
 

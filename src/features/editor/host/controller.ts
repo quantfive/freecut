@@ -67,6 +67,48 @@ function isFrameClip(item: FreeCutFrameItem): item is FrameClip {
   return item.type === 'video' || item.type === 'audio' || item.type === 'image'
 }
 
+function frameItemAttached(item: FreeCutFrameItem): boolean {
+  return item.rippleLinked !== false
+}
+
+function frameAttachedChain(document: FreeCutFrameDocument, anchorId: string): string[] {
+  const items = document.tracks.flatMap((track) => track.items)
+  const byId = new Map(items.map((item) => [item.id, item]))
+  const anchor = byId.get(anchorId)
+  if (!anchor) return []
+  const result: string[] = []
+  const seen = new Set<string>()
+  const queue: FreeCutFrameItem[] = [anchor]
+  while (queue.length) {
+    const current = queue.shift()!
+    if (seen.has(current.id)) continue
+    seen.add(current.id)
+    result.push(current.id)
+    for (const cohort of items.filter(
+      (candidate) => candidate.linkedGroupId && candidate.linkedGroupId === current.linkedGroupId,
+    )) {
+      if (!seen.has(cohort.id)) queue.push(cohort)
+    }
+    if (!frameItemAttached(current)) continue
+    const end = current.from + current.durationInFrames
+    const next = items.find(
+      (candidate) =>
+        candidate.trackId === current.trackId &&
+        candidate.id !== current.id &&
+        candidate.from === end &&
+        frameItemAttached(candidate),
+    )
+    if (next && !seen.has(next.id)) queue.push(next)
+  }
+  return result
+}
+
+function withoutAttachment(item: FreeCutFrameItem): unknown {
+  const copy = { ...item } as Record<string, unknown>
+  delete copy.rippleLinked
+  return copy
+}
+
 /**
  * The concrete source window of a clip that states none: a clip with no
  * source range plays from the start of its media for its timeline duration.
@@ -480,6 +522,53 @@ export function deriveRippleDelete(
   }
 }
 
+function deriveSetItemAttachment(
+  previous: FreeCutFrameDocument,
+  itemIds: readonly string[],
+  rippleLinked: boolean,
+  options: { operationId?: string; idempotencyKey?: string } = {},
+): DerivedHostEdit {
+  const ids = [...new Set(itemIds)]
+  const items = itemMap(previous)
+  if (ids.length === 0) return { batch: null, reason: 'No timeline item is selected' }
+  const selected = ids.map((id) => items.get(id))
+  if (selected.some((item) => item === undefined)) {
+    return { batch: null, reason: 'The selected timeline item is no longer authoritative' }
+  }
+  const trackById = new Map(previous.tracks.map((track) => [track.id, track]))
+  const isTrackLocked = (trackId: string, visited = new Set<string>()): boolean => {
+    if (visited.has(trackId)) return true
+    visited.add(trackId)
+    const track = trackById.get(trackId)
+    return (
+      !!track?.locked || (!!track?.parentTrackId && isTrackLocked(track.parentTrackId, visited))
+    )
+  }
+  if (selected.some((item) => isTrackLocked(item!.trackId))) {
+    return { batch: null, reason: 'Cannot change attachment on a locked track' }
+  }
+  const operationId = options.operationId ?? `op-${crypto.randomUUID()}`
+  const idempotencyKey = options.idempotencyKey ?? `idem-${crypto.randomUUID()}`
+  return {
+    batch: {
+      contract_version: 1,
+      timeline_id: previous.timelineId,
+      operation_id: operationId,
+      idempotency_key: idempotencyKey,
+      base_revision: previous.revision,
+      preconditions: selected.map((item) => preconditionForItem(item!, previous.fps)),
+      commands: [
+        {
+          command_id: `attachment-${operationId}`,
+          type: 'set_item_attachment',
+          item_ids: ids,
+          ripple_linked: rippleLinked,
+        },
+      ],
+    },
+  }
+}
+
 /**
  * Derive one bounded command batch from the real editor's frame-native store
  * change.  Ambiguous or unsupported changes fail closed instead of being
@@ -519,7 +608,30 @@ export function deriveSupportedHostEdit(
     preconditions.push({ type: 'track_absent', track_id: track.id })
   }
 
-  if (removed.length === 0 && added.length === 0 && changed.length === 0) {
+  const attachmentOnlyChange =
+    removed.length === 0 &&
+    added.length === 0 &&
+    changed.length > 0 &&
+    changed.every((id) => {
+      const before = previousItems.get(id)
+      const after = nextItems.get(id)
+      return (
+        before !== undefined &&
+        after !== undefined &&
+        before.rippleLinked !== after.rippleLinked &&
+        stableSerialize(withoutAttachment(before)) === stableSerialize(withoutAttachment(after))
+      )
+    })
+
+  if (attachmentOnlyChange) {
+    commands.push({
+      command_id: `attachment-${operationId}`,
+      type: 'set_item_attachment',
+      item_ids: changed,
+      ripple_linked: nextItems.get(changed[0]!)!.rippleLinked !== false,
+    })
+    for (const id of changed) preconditions.push(preconditionForItem(previousItems.get(id)!, fps))
+  } else if (removed.length === 0 && added.length === 0 && changed.length === 0) {
     // Any track creation is already represented by the add_track commands
     // above.  With no tracks added either, nothing changed at all: `commands`
     // stays empty and the caller gets the silent "No supported edit was
@@ -603,124 +715,163 @@ export function deriveSupportedHostEdit(
     })
     preconditions.push(preconditionForItem(before, fps))
   } else if (removed.length === 0 && added.length === 0 && changed.length > 1) {
-    // Host mode defaults contiguous trims to ripple edits. The native store
-    // applies that as one trimmed clip plus uniformly shifted downstream
-    // clips, so recognize the full gesture and serialize it as one command
-    // batch instead of restoring the authoritative snapshot as ambiguous.
-    const trimIds = changed.filter((id) => {
+    const movedOnly = changed.every((id) => {
       const before = previousItems.get(id)!
       const after = nextItems.get(id)!
-      if (before.type === 'caption_cue' || after.type === 'caption_cue') return false
       const facts = itemChangeFacts(before, after)
       return (
         facts.metadataUnchanged &&
         facts.transformUnchanged &&
-        facts.sameTrack &&
-        (!facts.sourceUnchanged || !facts.durationUnchanged)
+        facts.sourceUnchanged &&
+        facts.durationUnchanged &&
+        !facts.timelineUnchanged
       )
     })
-    const trimId = trimIds.length === 1 ? trimIds[0] : null
-    const beforeTrim = trimId ? previousItems.get(trimId) : null
-    const afterTrim = trimId ? nextItems.get(trimId) : null
-    const shift =
-      beforeTrim && afterTrim ? afterTrim.durationInFrames - beforeTrim.durationInFrames : 0
-    const oldTrimEnd = beforeTrim ? beforeTrim.from + beforeTrim.durationInFrames : 0
-    const movedIds = trimId ? changed.filter((id) => id !== trimId) : []
-    const isUniformContiguousRipple =
-      !!trimId &&
-      !!beforeTrim &&
-      !!afterTrim &&
-      isFrameClip(beforeTrim) &&
-      isFrameClip(afterTrim) &&
-      shift !== 0 &&
-      movedIds.length > 0 &&
-      movedIds.every((id) => {
+    const movedAnchor = movedOnly
+      ? changed
+          .map((id) => previousItems.get(id)!)
+          .sort((left, right) => left.from - right.from || left.id.localeCompare(right.id))[0]
+      : undefined
+    const chainIds = movedAnchor ? frameAttachedChain(previous, movedAnchor.id) : []
+    if (
+      movedOnly &&
+      movedAnchor &&
+      chainIds.length === changed.length &&
+      new Set(chainIds).size === changed.length
+    ) {
+      const afterAnchor = nextItems.get(movedAnchor.id)!
+      const location = itemLocation(next, movedAnchor.id)
+      if (!location) return { batch: null, reason: 'A rippled item no longer has a track' }
+      commands.push({
+        command_id: `move-${movedAnchor.id}`,
+        type: 'move_item',
+        item_id: movedAnchor.id,
+        to_track_id: afterAnchor.trackId,
+        timeline_start_us: framesToMicroseconds(afterAnchor.from, fps),
+        index: location.index,
+        ripple: true,
+      })
+      for (const id of changed) preconditions.push(preconditionForItem(previousItems.get(id)!, fps))
+    } else {
+      // Host mode defaults contiguous trims to ripple edits. The native store
+      // applies that as one trimmed clip plus uniformly shifted downstream
+      // clips, so recognize the full gesture and serialize it as one command
+      // batch instead of restoring the authoritative snapshot as ambiguous.
+      const trimIds = changed.filter((id) => {
         const before = previousItems.get(id)!
         const after = nextItems.get(id)!
+        if (before.type === 'caption_cue' || after.type === 'caption_cue') return false
         const facts = itemChangeFacts(before, after)
         return (
           facts.metadataUnchanged &&
           facts.transformUnchanged &&
-          facts.sourceUnchanged &&
-          facts.durationUnchanged &&
-          !facts.timelineUnchanged &&
           facts.sameTrack &&
-          before.trackId === beforeTrim.trackId &&
-          before.from >= oldTrimEnd &&
-          after.from - before.from === shift
+          (!facts.sourceUnchanged || !facts.durationUnchanged)
         )
       })
+      const trimId = trimIds.length === 1 ? trimIds[0] : null
+      const beforeTrim = trimId ? previousItems.get(trimId) : null
+      const afterTrim = trimId ? nextItems.get(trimId) : null
+      const shift =
+        beforeTrim && afterTrim ? afterTrim.durationInFrames - beforeTrim.durationInFrames : 0
+      const oldTrimEnd = beforeTrim ? beforeTrim.from + beforeTrim.durationInFrames : 0
+      const movedIds = trimId ? changed.filter((id) => id !== trimId) : []
+      const isUniformContiguousRipple =
+        !!trimId &&
+        !!beforeTrim &&
+        !!afterTrim &&
+        isFrameClip(beforeTrim) &&
+        isFrameClip(afterTrim) &&
+        shift !== 0 &&
+        movedIds.length > 0 &&
+        movedIds.every((id) => {
+          const before = previousItems.get(id)!
+          const after = nextItems.get(id)!
+          const facts = itemChangeFacts(before, after)
+          return (
+            facts.metadataUnchanged &&
+            facts.transformUnchanged &&
+            facts.sourceUnchanged &&
+            facts.durationUnchanged &&
+            !facts.timelineUnchanged &&
+            facts.sameTrack &&
+            before.trackId === beforeTrim.trackId &&
+            before.from >= oldTrimEnd &&
+            after.from - before.from === shift
+          )
+        })
 
-    if (!isUniformContiguousRipple || !trimId || !beforeTrim || !afterTrim) {
-      const detail: HostEditRejectionDetail = {
-        code: 'ambiguous_change',
-        changeCounts: { added: added.length, removed: removed.length, changed: changed.length },
+      if (!isUniformContiguousRipple || !trimId || !beforeTrim || !afterTrim) {
+        const detail: HostEditRejectionDetail = {
+          code: 'ambiguous_change',
+          changeCounts: { added: added.length, removed: removed.length, changed: changed.length },
+        }
+        return {
+          batch: null,
+          reason: `Multiple or ambiguous timeline changes are unsupported${describeRejection(detail)}`,
+          detail,
+        }
       }
-      return {
-        batch: null,
-        reason: `Multiple or ambiguous timeline changes are unsupported${describeRejection(detail)}`,
-        detail,
+
+      const [beforeSourceStart, beforeSourceEnd] = sourceBounds(beforeTrim)
+      const [afterSourceStart, afterSourceEnd] = sourceBounds(afterTrim)
+      const edge =
+        afterTrim.from !== beforeTrim.from ||
+        (afterSourceStart !== beforeSourceStart && afterSourceEnd === beforeSourceEnd)
+          ? 'start'
+          : 'end'
+      const trimTimelineFrame =
+        edge === 'start' ? beforeTrim.from - shift : afterTrim.from + afterTrim.durationInFrames
+      const trimSourceFrame = edge === 'start' ? afterSourceStart : afterSourceEnd
+      const requiredCommands = changed.length + (edge === 'start' ? 1 : 0)
+      if (commands.length + requiredCommands > MAX_COMMANDS_PER_OPERATION) {
+        return {
+          batch: null,
+          reason: `Ripple trim exceeds the ${MAX_COMMANDS_PER_OPERATION}-command host operation limit`,
+        }
       }
-    }
 
-    const [beforeSourceStart, beforeSourceEnd] = sourceBounds(beforeTrim)
-    const [afterSourceStart, afterSourceEnd] = sourceBounds(afterTrim)
-    const edge =
-      afterTrim.from !== beforeTrim.from ||
-      (afterSourceStart !== beforeSourceStart && afterSourceEnd === beforeSourceEnd)
-        ? 'start'
-        : 'end'
-    const trimTimelineFrame =
-      edge === 'start' ? beforeTrim.from - shift : afterTrim.from + afterTrim.durationInFrames
-    const trimSourceFrame = edge === 'start' ? afterSourceStart : afterSourceEnd
-    const requiredCommands = changed.length + (edge === 'start' ? 1 : 0)
-    if (commands.length + requiredCommands > MAX_COMMANDS_PER_OPERATION) {
-      return {
-        batch: null,
-        reason: `Ripple trim exceeds the ${MAX_COMMANDS_PER_OPERATION}-command host operation limit`,
-      }
-    }
-
-    commands.push({
-      command_id: `trim-${trimId}`,
-      type: 'trim_item',
-      item_id: trimId,
-      edge,
-      timeline_us: framesToMicroseconds(trimTimelineFrame, fps),
-      source_us: framesToMicroseconds(trimSourceFrame, fps),
-    })
-    preconditions.push(preconditionForItem(beforeTrim, fps))
-
-    // Ripple-start anchors the trimmed item at its original timeline position.
-    // The wire trim moves its leading edge first, then this move restores the
-    // anchor while preserving the newly shortened source/timeline span.
-    if (edge === 'start') {
-      const location = itemLocation(next, trimId)
-      if (!location) return { batch: null, reason: 'The trimmed item no longer has a track' }
       commands.push({
-        command_id: `anchor-${trimId}`,
-        type: 'move_item',
+        command_id: `trim-${trimId}`,
+        type: 'trim_item',
         item_id: trimId,
-        to_track_id: afterTrim.trackId,
-        timeline_start_us: framesToMicroseconds(afterTrim.from, fps),
-        index: location.index,
+        edge,
+        timeline_us: framesToMicroseconds(trimTimelineFrame, fps),
+        source_us: framesToMicroseconds(trimSourceFrame, fps),
       })
-    }
+      preconditions.push(preconditionForItem(beforeTrim, fps))
 
-    for (const id of movedIds) {
-      const before = previousItems.get(id)!
-      const after = nextItems.get(id)!
-      const location = itemLocation(next, id)
-      if (!location) return { batch: null, reason: 'A rippled item no longer has a track' }
-      commands.push({
-        command_id: `move-${id}`,
-        type: 'move_item',
-        item_id: id,
-        to_track_id: after.trackId,
-        timeline_start_us: framesToMicroseconds(after.from, fps),
-        index: location.index,
-      })
-      preconditions.push(preconditionForItem(before, fps))
+      // Ripple-start anchors the trimmed item at its original timeline position.
+      // The wire trim moves its leading edge first, then this move restores the
+      // anchor while preserving the newly shortened source/timeline span.
+      if (edge === 'start') {
+        const location = itemLocation(next, trimId)
+        if (!location) return { batch: null, reason: 'The trimmed item no longer has a track' }
+        commands.push({
+          command_id: `anchor-${trimId}`,
+          type: 'move_item',
+          item_id: trimId,
+          to_track_id: afterTrim.trackId,
+          timeline_start_us: framesToMicroseconds(afterTrim.from, fps),
+          index: location.index,
+        })
+      }
+
+      for (const id of movedIds) {
+        const before = previousItems.get(id)!
+        const after = nextItems.get(id)!
+        const location = itemLocation(next, id)
+        if (!location) return { batch: null, reason: 'A rippled item no longer has a track' }
+        commands.push({
+          command_id: `move-${id}`,
+          type: 'move_item',
+          item_id: id,
+          to_track_id: after.trackId,
+          timeline_start_us: framesToMicroseconds(after.from, fps),
+          index: location.index,
+        })
+        preconditions.push(preconditionForItem(before, fps))
+      }
     }
   } else if (removed.length === 0 && added.length === 0 && changed.length === 1) {
     const id = changed[0]!
@@ -874,6 +1025,25 @@ export class HostEditorController {
         status: 'unsupported',
         snapshot: this.getSnapshot(),
         reason: derived.reason ?? 'Ripple delete is unavailable',
+      }
+    }
+    return this.submitEdit(derived.batch)
+  }
+
+  async requestSetItemAttachment(
+    itemIds: readonly string[],
+    rippleLinked: boolean,
+  ): Promise<HostControllerResult> {
+    const derived = deriveSetItemAttachment(this.snapshot.timeline, itemIds, rippleLinked)
+    if (!derived.batch) {
+      this.notify({
+        kind: 'unsupported',
+        message: derived.reason ?? 'Attachment change is unavailable',
+      })
+      return {
+        status: 'unsupported',
+        snapshot: this.getSnapshot(),
+        reason: derived.reason ?? 'Attachment change is unavailable',
       }
     }
     return this.submitEdit(derived.batch)

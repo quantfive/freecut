@@ -25,6 +25,7 @@ import type {
 } from './contract'
 import { MAX_ID_LENGTH, validateTimelineState } from './contract'
 import type { ControlledEditEngine, EditEngineContext, EditEngineResult } from './interfaces'
+import { resolveAttachedChainIds } from './attached-chain'
 
 export class EditEngineError extends Error {
   readonly code:
@@ -215,6 +216,11 @@ function setItemFramePosition(
   )
 }
 
+function moveItemToFrame(item: TimelineItem, startFrame: number, fps: FrameRateLike): TimelineItem {
+  const range = frameRangeFor(item, fps)
+  return setItemFramePosition(item, startFrame, startFrame + range.end - range.start, fps)
+}
+
 function shiftItemByFrames(
   item: TimelineItem,
   deltaFrames: number,
@@ -378,6 +384,7 @@ function applyAddText(timeline: MutableTimeline, command: AddTextCommand): Comma
 function applyDuplicate(
   timeline: MutableTimeline,
   command: Extract<EditCommand, { type: 'duplicate_item' }>,
+  fps: FrameRateLike,
 ): CommandEffect {
   const source = findItem(timeline, command.item_id, command.command_id).item
   const target = findTrack(timeline, command.to_track_id, command.command_id)
@@ -385,11 +392,7 @@ function applyDuplicate(
   const duplicate = cloneItem(source)
   const sourceStart = itemStart(source)
   const targetStart = command.timeline_start_us ?? sourceStart
-  const shifted = setItemPosition(
-    duplicate,
-    targetStart,
-    targetStart + (itemEnd(source) - sourceStart),
-  )
+  const shifted = moveItemToFrame(duplicate, assertFrameAligned(targetStart, fps), fps)
   const withId =
     shifted.item_type === 'caption_cue'
       ? { ...shifted, cue_id: command.new_item_id, track_id: target.track_id }
@@ -413,15 +416,40 @@ function applyRemoveItem(
   return { ...emptyEffect(), deleted_item_ids: [command.item_id] }
 }
 
-function applyMoveItem(timeline: MutableTimeline, command: MoveItemCommand): CommandEffect {
+function applyMoveItem(
+  timeline: MutableTimeline,
+  command: MoveItemCommand,
+  fps: FrameRateLike,
+): CommandEffect {
   const located = findItem(timeline, command.item_id, command.command_id)
   const target = findTrack(timeline, command.to_track_id, command.command_id)
   ensureTrackCompatibility(target, located.item, command.command_id)
-  const oldStart = itemStart(located.item)
-  const moved = setItemPosition(
+  if (command.ripple) {
+    const chainIds = resolveAttachedChainIds(timeline, command.item_id)
+    const anchorStartFrame = frameRangeFor(located.item, fps).start
+    const targetStartFrame = assertFrameAligned(command.timeline_start_us, fps)
+    const deltaFrames = targetStartFrame - anchorStartFrame
+    const moved = applyMoveItem(timeline, { ...command, ripple: undefined }, fps)
+    for (const id of chainIds) {
+      if (id === command.item_id) continue
+      const member = findItem(timeline, id, command.command_id)
+      const range = frameRangeFor(member.item, fps)
+      setItemAt(
+        timeline,
+        member,
+        setItemFramePosition(member.item, range.start + deltaFrames, range.end + deltaFrames, fps),
+      )
+    }
+    return {
+      ...moved,
+      moved_item_ids: chainIds,
+      updated_item_ids: chainIds,
+    }
+  }
+  const moved = moveItemToFrame(
     setItemTrack(located.item, target.track_id),
-    command.timeline_start_us,
-    command.timeline_start_us + itemEnd(located.item) - oldStart,
+    assertFrameAligned(command.timeline_start_us, fps),
+    fps,
   )
   const sourceTrack = timeline.tracks[located.trackIndex]!
   const sourceItems = sourceTrack.items.filter((_, index) => index !== located.itemIndex)
@@ -434,6 +462,31 @@ function applyMoveItem(timeline: MutableTimeline, command: MoveItemCommand): Com
     moved_item_ids: [command.item_id],
     updated_item_ids: [command.item_id],
   }
+}
+
+function applySetItemAttachment(
+  timeline: MutableTimeline,
+  command: Extract<EditCommand, { type: 'set_item_attachment' }>,
+): CommandEffect {
+  const requested = new Set(command.item_ids)
+  const updated: string[] = []
+  for (const track of timeline.tracks) {
+    const items = track.items.map((item) => {
+      const id = itemId(item)
+      if (!requested.has(id)) return item
+      if (item.ripple_linked === command.ripple_linked) return item
+      updated.push(id)
+      return { ...item, ripple_linked: command.ripple_linked }
+    })
+    replaceTrackItems(timeline, timeline.tracks.indexOf(track), items)
+  }
+  if (updated.length !== requested.size)
+    throw new EditEngineError(
+      'unknown_item',
+      'One or more attachment items do not exist',
+      command.command_id,
+    )
+  return { ...emptyEffect(), updated_item_ids: updated }
 }
 
 function applyTrim(
@@ -832,12 +885,14 @@ function applyCommand(
     case 'duplicate_item':
       if (command.timeline_start_us !== undefined)
         assertFrameAligned(command.timeline_start_us, fps)
-      return applyDuplicate(timeline, command)
+      return applyDuplicate(timeline, command, fps)
     case 'remove_item':
       return applyRemoveItem(timeline, command)
     case 'move_item':
       assertFrameAligned(command.timeline_start_us, fps)
-      return applyMoveItem(timeline, command)
+      return applyMoveItem(timeline, command, fps)
+    case 'set_item_attachment':
+      return applySetItemAttachment(timeline, command)
     case 'trim_item':
       assertFrameAligned(command.timeline_us, fps)
       assertFrameAligned(command.source_us, fps)

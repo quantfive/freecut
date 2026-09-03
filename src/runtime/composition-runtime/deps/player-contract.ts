@@ -12,7 +12,7 @@ export {
 } from '@/runtime/player/composition'
 export { VideoConfigProvider } from '@/runtime/player/VideoConfigProvider'
 export { useVideoConfig } from '@/runtime/player/video-config-context'
-export { useBridgedCurrentFrame, useBridgedIsPlaying } from '@/runtime/player/clock'
+export { useBridgedIsPlaying } from '@/runtime/player/clock'
 export {
   useClock,
   useClockFrameSelector,

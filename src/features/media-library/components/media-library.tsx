@@ -820,6 +820,7 @@ export const MediaLibrary = memo(function MediaLibrary({ onMediaSelect }: MediaL
                   <button
                     onClick={handleDeleteSelected}
                     disabled={!canDeleteMedia}
+                    aria-label={t('media.library.deleteSelectedAssets')}
                     className="flex items-center gap-1.5 h-7 px-2.5 rounded-md shrink-0
                       bg-destructive/10 border border-destructive/25 text-destructive
                       hover:bg-destructive/20 hover:border-destructive/40

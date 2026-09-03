@@ -726,6 +726,7 @@ export const TimelineItem = memo(function TimelineItem({
     handleJoinRight,
     handleDelete,
     handleRippleDelete,
+    handleToggleAttachment,
     handleLinkSelected,
     handleUnlinkSelected,
     handleReverseSelected,
@@ -992,6 +993,10 @@ export const TimelineItem = memo(function TimelineItem({
           isSelected,
           onRippleDelete: handleRippleDelete,
           onDelete: handleDelete,
+        }}
+        attachmentActions={{
+          isRippleLinked: item.rippleLinked !== false,
+          onToggle: handleToggleAttachment,
         }}
       >
         <div

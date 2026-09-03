@@ -64,6 +64,12 @@ frame timestamp.
 
 ## Ripple and captions
 
+Timeline items carry optional `ripple_linked` attachment metadata; missing means
+attached for compatibility, while `false` is a durable break. `move_item` may
+carry `ripple: true` to ask the authority to resolve the forward touching chain
+from one anchor. `set_item_attachment` changes the break explicitly and keeps
+the A/V `linked_group_id` cohort concept separate.
+
 `ripple_delete` operates on `[start_us, end_us)` in the selected tracks (or all
 tracks for `track_ids: null`). Downstream items shift left by the exact frame
 delta, with each shifted endpoint re-encoded from its resulting frame index.

@@ -126,7 +126,11 @@ export function FreeCutEditorSurface({ host }: { host: EditorHost }) {
             mode: 'host',
             capabilities,
             host,
-            timeline: { requestRippleDelete: state.runtime.requestRippleDelete },
+            timeline: {
+              requestRippleDelete: state.runtime.requestRippleDelete,
+              requestSetItemAttachment: (itemIds, rippleLinked) =>
+                state.runtime.requestSetItemAttachment(itemIds, rippleLinked),
+            },
           }}
         >
           <HostCaptionEditorProvider runtime={state.runtime}>
