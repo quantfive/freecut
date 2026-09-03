@@ -25,9 +25,17 @@ export type NativeTimelineConversionResult =
   | { ok: true; document: FreeCutFrameDocument }
   | { ok: false; failure: NativeTimelineConversionFailure }
 
-function safeDurationFrames(asset: EmbeddedEditorAsset, fps: number): number {
-  if (!Number.isFinite(asset.durationSeconds) || asset.durationSeconds <= 0) return 1
-  return Math.max(1, Math.round(asset.durationSeconds * fps))
+function safeDurationFrames(asset: EmbeddedEditorAsset, fps: number, sourceEnd?: number): number {
+  const probed =
+    Number.isFinite(asset.durationSeconds) && asset.durationSeconds > 0
+      ? Math.max(1, Math.round(asset.durationSeconds * fps))
+      : 1
+  // Never let the bound undercut the source range the clip already occupies:
+  // an unprobed (or bogus-tiny) asset duration would otherwise surface as a
+  // 1-frame sourceDuration, and the trim clamp turns any end-extend drag on
+  // such a clip into a collapse to 1 frame. Flooring at the in-use range
+  // keeps the clip intact; the handle re-opens once the probe lands.
+  return Math.max(probed, Math.ceil(sourceEnd ?? 0), 1)
 }
 
 // fallow-ignore-next-line complexity
@@ -204,7 +212,9 @@ function nativeItemFromHostItem(
   }
 
   const asset = assets.get(item.mediaId)
-  const sourceDuration = asset ? safeDurationFrames(asset, asset.fps || 30) : undefined
+  const sourceDuration = asset
+    ? safeDurationFrames(asset, asset.fps || 30, item.sourceEnd)
+    : undefined
   const common = {
     id: item.id,
     trackId: item.trackId,

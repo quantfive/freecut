@@ -190,6 +190,23 @@ describe('embedded FreeCut host controller', () => {
     })
   })
 
+  it('floors sourceDuration at the clip source range when asset duration is unprobed', () => {
+    const initial = snapshot()
+    // Cloud/AI assets sit at durationSeconds 0 until the probe job lands. The
+    // native item must not get a 1-frame sourceDuration: the trim clamp would
+    // turn any end-extend drag into a collapse toward 1 frame.
+    const unprobed = {
+      ...initial,
+      assets: [{ ...initial.assets[0]!, durationSeconds: 0 }],
+    }
+    const native = hostSnapshotToNativeTimeline(unprobed)
+    expect(native.items[0]).toMatchObject({
+      sourceStart: 0,
+      sourceEnd: 60,
+      sourceDuration: 60,
+    })
+  })
+
   it('keeps caption styles and caption-role items on the host-backed native bridge', () => {
     const initial = snapshot({
       tracks: [

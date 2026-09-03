@@ -270,4 +270,49 @@ describe('clampToAdjacentItems', () => {
       expect(clampTrimAmount(reversed, 'start', -100, 30).clampedAmount).toBe(-60)
     })
   })
+
+  describe('inconsistent source bounds (unprobed asset duration)', () => {
+    // Host snapshots map an asset with missing/zero duration to a 1-frame
+    // sourceDuration. An extend drag must no-op against such a bound — never
+    // clamp to a negative delta that collapses the clip toward 1 frame.
+    const poisoned = makeItem({
+      id: 'poisoned',
+      trackId,
+      from: 0,
+      durationInFrames: 150,
+      type: 'video',
+      sourceStart: 0,
+      sourceEnd: 150,
+      sourceDuration: 1,
+      sourceFps: 30,
+      speed: 1,
+    })
+
+    it('end-extend clamps to a no-op instead of collapsing the clip', () => {
+      expect(clampTrimAmount(poisoned, 'end', 10, 30).clampedAmount).toBe(0)
+      expect(clampTrimAmount(poisoned, 'end', 10, 30).maxExtend).toBe(0)
+    })
+
+    it('end-shrink still passes through', () => {
+      expect(clampTrimAmount(poisoned, 'end', -30, 30).clampedAmount).toBe(-30)
+    })
+
+    it('reversed start-extend clamps to a no-op when sourceDuration undercuts sourceEnd', () => {
+      const reversedPoisoned = makeItem({
+        id: 'reversed-poisoned',
+        trackId,
+        from: 0,
+        durationInFrames: 150,
+        type: 'video',
+        isReversed: true,
+        sourceStart: 0,
+        sourceEnd: 150,
+        sourceDuration: 1,
+        sourceFps: 30,
+        speed: 1,
+      })
+      expect(clampTrimAmount(reversedPoisoned, 'start', -10, 30).clampedAmount).toBe(0)
+      expect(clampTrimAmount(reversedPoisoned, 'start', -10, 30).maxExtend).toBe(0)
+    })
+  })
 })
