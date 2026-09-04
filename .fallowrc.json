@@ -12,7 +12,12 @@
   "ignorePatterns": [
     // Static reachability cannot see URL-loaded assets such as /sw.js
     // and /moss-tts/moss_tts.worker.js.
-    "public/**"
+    "public/**",
+    // Storybook loads *.stories.tsx through its own glob, so every story export
+    // is unreachable from the app entries by construction. Ignoring them keeps
+    // the dead-code ratchet meaningful instead of demanding an allowlist entry
+    // per story — and keeps stories from counting as "usage" of a component.
+    "**/*.stories.tsx"
   ],
   "duplicates": {
     // Hide pair-only clones; focus on widespread copy-paste

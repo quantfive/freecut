@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "bootstrapped_at": "2026-09-04T16:32:20Z",
+  "discovery_branch": "codepress/stevekriz/setup-storybook-component-catalog-91f1ea3a",
+  "frontends": [
+    {
+      "label": "editor",
+      "working_dir": "",
+      "description": "FreeCut — the browser-based multi-track video editor (the whole app; there is no separate site or admin).",
+      "dockerfile_path": ".codepress/dev-server/Dockerfile.editor",
+      "dev_command": "npm exec --no -- vp dev --host \"${CODEPRESS_BIND_HOST:-0.0.0.0}\" --port \"$PORT\"",
+      "prebuild_command": "",
+      "prebuild_inputs": [],
+      "framework": "vite",
+      "package_manager": "npm",
+      "install_command": "npm install",
+      "dependency_manifests": ["package-lock.json"],
+      "dev_port": 5173,
+      "system_packages": ["procps"],
+      "size": "large",
+      "companions": [
+        {
+          "label": "storybook",
+          "dev_command": "npm exec --no -- storybook dev -p \"$PORT\" -h \"${CODEPRESS_BIND_HOST:-0.0.0.0}\" --ci --no-open",
+          "dev_port": 6006
+        }
+      ]
+    }
+  ]
+}

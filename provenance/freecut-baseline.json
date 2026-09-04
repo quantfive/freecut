@@ -34,10 +34,10 @@
   ],
   "dependencies": {
     "packageJson": "package.json",
-    "packageJsonSha256": "7786ffe5cde5b09b6f88fc4fd13af399365ac0d6dc32f320d6f719c6f62edc89",
+    "packageJsonSha256": "c40bf894a34dc7677f6c45979775ee3987c8dcd57fd8498126bd0b4f7e7c4bbe",
     "lockfile": "package-lock.json",
     "lockfileVersion": 3,
-    "lockfileSha256": "b4a86741ce7891da1f63df01b6fdd4ed507e8887d5097c6a0f93fc2ea6f3420e",
+    "lockfileSha256": "5dcdd7fe99c39fd6d7e4eb90d87dc1817b631392d66d163cf1c9695cc6c7b363",
     "inventory": "provenance/dependency-inventory.json"
   },
   "assets": {

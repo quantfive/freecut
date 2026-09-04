@@ -1,4 +1,4 @@
-import { defineConfig, lazyPlugins } from 'vite-plus'
+import { coverageConfigDefaults, defineConfig, lazyPlugins } from 'vite-plus'
 import type { Plugin } from 'vite-plus'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
@@ -83,6 +83,9 @@ export default defineConfig({
     coverage: {
       provider: 'v8',
       reporter: ['text', 'json', 'html'],
+      // Storybook stories are a catalog, not product code — counting them as
+      // uncovered would drag the ratchet down without saying anything true.
+      exclude: [...coverageConfigDefaults.exclude, '**/*.stories.tsx'],
       // Ratchet floor, not a target: set just below measured coverage
       // (2026-06-10: 50.2% stmts / 43.7% branch / 54.9% funcs / 51.5% lines)
       // so CI fails on regressions. Raise these as coverage grows.
@@ -106,6 +109,17 @@ export default defineConfig({
   server: {
     port: 5173,
     strictPort: true,
+    // CodePress Live Dev Server (managed): the preview is served from a public proxied
+    // origin on 443, so Vite must accept the proxied Host header and the HMR client
+    // must dial the proxy instead of the container's own dev port. Both values are
+    // injected by the runtime; unset locally, where Vite keeps its same-origin defaults.
+    allowedHosts: true,
+    hmr: {
+      protocol: process.env.CODEPRESS_HMR_PROTOCOL,
+      clientPort: process.env.CODEPRESS_HMR_CLIENT_PORT
+        ? Number.parseInt(process.env.CODEPRESS_HMR_CLIENT_PORT, 10)
+        : undefined,
+    },
     headers: {
       'Cross-Origin-Embedder-Policy': 'require-corp',
       'Cross-Origin-Opener-Policy': 'same-origin',
