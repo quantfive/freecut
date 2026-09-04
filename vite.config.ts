@@ -106,6 +106,17 @@ export default defineConfig({
   server: {
     port: 5173,
     strictPort: true,
+    // CodePress Live Dev Server (managed): the preview is served from a public proxied
+    // origin on 443, so Vite must accept the proxied Host header and the HMR client
+    // must dial the proxy instead of the container's own dev port. Both values are
+    // injected by the runtime; unset locally, where Vite keeps its same-origin defaults.
+    allowedHosts: true,
+    hmr: {
+      protocol: process.env.CODEPRESS_HMR_PROTOCOL,
+      clientPort: process.env.CODEPRESS_HMR_CLIENT_PORT
+        ? Number.parseInt(process.env.CODEPRESS_HMR_CLIENT_PORT, 10)
+        : undefined,
+    },
     headers: {
       'Cross-Origin-Embedder-Policy': 'require-corp',
       'Cross-Origin-Opener-Policy': 'same-origin',
