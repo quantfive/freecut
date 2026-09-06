@@ -440,8 +440,8 @@ const TimelineShortcutsController = memo(function TimelineShortcutsController() 
 })
 
 // Host mode mounts only the host-safe shortcut slice (playback, tools,
-// delete, zoom/snap) — undo/redo, ripple delete, clipboard, markers, and
-// nudges would mutate local stores without crossing the host bridge.
+// delete, zoom/snap, and optional host-owned undo/redo) — ripple delete,
+// clipboard, markers, and nudges remain outside the host bridge.
 const HostTimelineShortcutsController = memo(function HostTimelineShortcutsController() {
   useHostTimelineShortcuts()
   return null

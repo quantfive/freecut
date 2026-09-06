@@ -456,6 +456,11 @@ export interface EditorShortcutPort {
   subscribe?(listener: (settings: HostShortcutSettings) => void): () => void
 }
 
+export interface EditorHistoryPort {
+  undo(): Promise<void> | void
+  redo(): Promise<void> | void
+}
+
 export declare function createHostShortcutSettings(
   overrides?: HotkeyOverrideMap,
 ): HostShortcutSettings
@@ -469,6 +474,7 @@ export interface EditorHost {
   submitEdit(batch: EditCommandBatch): Promise<HostEditResult> | HostEditResult
   subscribe?(listener: (snapshot: EmbeddedEditorSnapshot) => void): () => void
   shortcuts?: EditorShortcutPort
+  history?: EditorHistoryPort
   transcript?: EditorTranscriptPort
   navigation?: EditorHostNavigation
   notify?(notice: HostNotice): void

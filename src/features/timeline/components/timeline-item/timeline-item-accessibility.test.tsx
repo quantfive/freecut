@@ -165,7 +165,7 @@ describe('TimelineItem keyboard accessibility', () => {
   it.each([
     ['Enter', 'Enter'],
     [' ', 'Space'],
-  ])('activates exactly once with %s after global capture declines it', (key, code) => {
+  ])('activates exactly once with %s while the clip root owns focus', (key, code) => {
     const selectItems = vi.spyOn(useSelectionStore.getState(), 'selectItems')
     const togglePlayPause = vi.spyOn(usePlaybackStore.getState(), 'togglePlayPause')
     const captureListener = vi.fn()
@@ -190,7 +190,11 @@ describe('TimelineItem keyboard accessibility', () => {
     expect(event.defaultPrevented).toBe(true)
     expect(selectItems).toHaveBeenCalledTimes(1)
     expect(selectItems).toHaveBeenLastCalledWith([ITEM.id])
-    expect(togglePlayPause).not.toHaveBeenCalled()
+    if (key === ' ') {
+      expect(togglePlayPause).toHaveBeenCalledTimes(1)
+    } else {
+      expect(togglePlayPause).not.toHaveBeenCalled()
+    }
   })
 
   it('keeps native clip controls outside button semantics and lets them own keyboard events', () => {
@@ -210,7 +214,7 @@ describe('TimelineItem keyboard accessibility', () => {
     expect(selectItems).not.toHaveBeenCalled()
   })
 
-  it('semantically declines J, K, and L transport while the clip root is focused', () => {
+  it('routes J, K, and L transport while the clip root is focused', () => {
     const { container } = render(
       <PlaybackShortcutHarness>
         <TimelineItem
@@ -230,9 +234,9 @@ describe('TimelineItem keyboard accessibility', () => {
     dispatchKey(clip, 'l', 'KeyL')
 
     expect(usePlaybackStore.getState()).toMatchObject({
-      isPlaying: false,
+      isPlaying: true,
       playbackRate: 1,
-      transportMode: 'normal',
+      transportMode: 'shuttle',
     })
   })
 

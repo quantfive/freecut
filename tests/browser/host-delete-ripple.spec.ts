@@ -3,40 +3,106 @@ import { expect, test, type Page } from 'playwright/test'
 test.setTimeout(120_000)
 
 test.describe('host authoritative delete/ripple', () => {
-  test('Delete submits one ripple command and updates only after the receipt', async ({
-    page,
-  }: {
-    page: Page
-  }) => {
-    await page.goto('/tests/browser/host-delete-ripple.html')
-    await page.waitForSelector('[data-freecut-editor-surface="host"]')
-    await page.waitForFunction(() => Boolean(window.__freecutDeleteRippleFixture))
+  for (const key of ['Delete', 'Backspace']) {
+    test(`${key} from a focused clip submits one ripple command and waits for the receipt`, async ({
+      page,
+    }: {
+      page: Page
+    }) => {
+      await page.setViewportSize({ width: 1600, height: 1000 })
+      await page.goto('/tests/browser/host-delete-ripple.html')
+      await page.waitForSelector('[data-freecut-editor-surface="host"]')
+      await page.waitForFunction(() => Boolean(window.__freecutDeleteRippleFixture))
 
-    await page.evaluate(() => window.__freecutDeleteRippleFixture.selectClip())
-    await page.keyboard.press('Delete')
+      const clip = page.locator('[data-timeline-item][data-item-id="video-1"]')
+      await clip.click()
+      await expect(clip).toBeFocused()
+      await expect(clip).toHaveAttribute('aria-pressed', 'true')
+      await page.keyboard.press(key)
 
-    await page.waitForFunction(
-      () => window.__freecutDeleteRippleFixture.getLastBatch()?.commands.length === 1,
-    )
-    const batch = await page.evaluate(() => window.__freecutDeleteRippleFixture.getLastBatch())
-    expect(batch).toMatchObject({
-      commands: [
-        {
-          type: 'ripple_delete',
-          start_us: 0,
-          end_us: 1_000_000,
-          track_ids: null,
-          item_ids: ['video-1'],
-          intent: 'ripple',
-        },
-      ],
+      await page.waitForFunction(
+        () => window.__freecutDeleteRippleFixture.getLastBatch()?.commands.length === 1,
+      )
+      const batch = await page.evaluate(() => window.__freecutDeleteRippleFixture.getLastBatch())
+      expect(batch).toMatchObject({
+        commands: [
+          {
+            type: 'ripple_delete',
+            start_us: 0,
+            end_us: 1_000_000,
+            track_ids: null,
+            item_ids: ['video-1', 'audio-1', 'caption-1'],
+            intent: 'ripple',
+          },
+        ],
+      })
+      await expect(page.locator('[data-timeline-item="true"][data-item-id="video-1"]')).toHaveCount(
+        1,
+      )
+      await page.evaluate(() => window.__freecutDeleteRippleFixture.releaseReceipt())
+      await expect(page.locator('[data-timeline-item="true"][data-item-id="video-1"]')).toHaveCount(
+        0,
+      )
+      await expect(page.locator('[data-timeline-item="true"][data-item-id="video-2"]')).toHaveCount(
+        1,
+      )
+      await page.screenshot({
+        path: `artifacts/host-${key.toLowerCase()}-ripple-after.png`,
+        fullPage: true,
+      })
     })
-    await expect(page.locator('[data-timeline-item="true"][data-item-id="video-1"]')).toHaveCount(1)
-    await page.evaluate(() => window.__freecutDeleteRippleFixture.releaseReceipt())
-    await expect(page.locator('[data-timeline-item="true"][data-item-id="video-1"]')).toHaveCount(0)
-    await expect(page.locator('[data-timeline-item="true"][data-item-id="video-2"]')).toHaveCount(1)
-    await page.screenshot({ path: 'artifacts/host-delete-ripple-after.png', fullPage: true })
-  })
+  }
+
+  for (const modifier of ['Meta', 'Control']) {
+    test(`${modifier}+Z and Shift+Z restore host history after a focused clip deletion`, async ({
+      page,
+    }) => {
+      await page.setViewportSize({ width: 1600, height: 1000 })
+      await page.goto('/tests/browser/host-delete-ripple.html')
+      const first = page.locator('[data-timeline-item][data-item-id="video-1"]')
+      const second = page.locator('[data-timeline-item][data-item-id="video-2"]')
+      await first.click()
+      await expect(first).toBeFocused()
+      await page.keyboard.press('Delete')
+      await page.waitForFunction(() => Boolean(window.__freecutDeleteRippleFixture.getLastBatch()))
+      await page.evaluate(() => window.__freecutDeleteRippleFixture.releaseReceipt())
+      await expect(first).toHaveCount(0)
+      await second.click()
+      await expect(second).toBeFocused()
+
+      await page.keyboard.press(`${modifier}+z`)
+      await expect
+        .poll(() => page.evaluate(() => window.__freecutDeleteRippleFixture.getHistoryCalls()))
+        .toEqual(['undo'])
+      // No local temporal rollback: only the host's snapshot restores the clip.
+      await expect(first).toHaveCount(0)
+      await page.evaluate(() => window.__freecutDeleteRippleFixture.releaseHistory())
+      await expect(first).toHaveCount(1)
+      await expect(first).toHaveAttribute('data-timeline-start-frame', '0')
+      await expect(first).toHaveAttribute('data-timeline-duration-frames', '30')
+      await expect(second).toHaveAttribute('data-timeline-start-frame', '30')
+      await first.scrollIntoViewIfNeeded()
+      await page.screenshot({
+        path: `artifacts/host-history-${modifier.toLowerCase()}-undone.png`,
+        fullPage: true,
+      })
+      await first.click()
+      await expect(first).toBeFocused()
+
+      await page.keyboard.press(`${modifier}+Shift+z`)
+      await expect
+        .poll(() => page.evaluate(() => window.__freecutDeleteRippleFixture.getHistoryCalls()))
+        .toEqual(['undo', 'redo'])
+      await expect(first).toHaveCount(1)
+      await page.evaluate(() => window.__freecutDeleteRippleFixture.releaseHistory())
+      await expect(first).toHaveCount(0)
+      await expect(second).toHaveAttribute('data-timeline-start-frame', '0')
+      await page.screenshot({
+        path: `artifacts/host-history-${modifier.toLowerCase()}-after.png`,
+        fullPage: true,
+      })
+    })
+  }
 
   test('right-click Delete uses the same authoritative ripple path', async ({
     page,
@@ -84,6 +150,11 @@ test.describe('host authoritative delete/ripple', () => {
     const rejectedBatch = await page.evaluate(() =>
       window.__freecutDeleteRippleFixture.getLastBatch(),
     )
+    // Reacquire selection/focus after the rejected authoritative receipt.
+    const retryClip = page.locator('[data-timeline-item][data-item-id="video-1"]')
+    await retryClip.click()
+    await expect(retryClip).toBeFocused()
+    await expect(retryClip).toHaveAttribute('aria-pressed', 'true')
     await page.keyboard.press('Delete')
     await page.waitForFunction(
       (previousId) =>

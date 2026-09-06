@@ -3,6 +3,7 @@
  */
 
 import { useCommandHotkey } from '@/hooks/use-hotkey-registration'
+import { usePlaybackStore } from '@/shared/state/playback'
 import { useTimelineStore } from '../../stores/timeline-store'
 import { useTimelineCommandStore } from '../../stores/timeline-command-store'
 import { useSelectionStore } from '@/shared/state/selection'
@@ -19,7 +20,18 @@ function splitHoveredTimelineItemAtPointer(): boolean {
     return false
   }
 
-  const { itemId, frame } = getTimelineHover()
+  let { itemId, frame } = getTimelineHover()
+  if (!itemId || frame === null) {
+    const { selectedItemIds } = useSelectionStore.getState()
+    if (selectedItemIds.length !== 1) {
+      notifySplitRejection('no-hover')
+      return false
+    }
+
+    itemId = selectedItemIds[0] ?? null
+    frame = usePlaybackStore.getState().currentFrame
+  }
+
   const { items } = useTimelineStore.getState()
 
   if (!itemId || frame === null) {
@@ -84,9 +96,9 @@ export function useToolShortcuts(callbacks: TimelineShortcutCallbacks) {
     [activeTool, setActiveTool],
   )
 
-  // Editing: C - Split the clip currently under the pointer at its exact hover frame.
-  // This intentionally does not fall back to currentFrame or the throttled
-  // playback preview: a stale preview must never become an edit location.
+  // Editing: C - Split the clip under the pointer at its exact hover frame,
+  // or the sole selected clip at the authoritative playhead when the pointer
+  // is away. The throttled playback preview is never an edit location.
   useCommandHotkey(
     'SPLIT_AT_PLAYHEAD',
     (event) => {

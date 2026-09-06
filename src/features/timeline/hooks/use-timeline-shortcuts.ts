@@ -55,9 +55,10 @@ export function useTimelineShortcuts(callbacks: TimelineShortcutCallbacks = {}) 
  * - Delete/Backspace — produces one authoritative ripple_delete request.
  * - UI zoom/snap (S, Shift+S, Cmd/Ctrl+=/-, \, Shift+\) — local view state.
  *
- * Deliberately excluded: undo/redo (mutate the temporal store without host
- * commands), modifier ripple delete, clipboard, markers, in/out points, nudges, join,
- * freeze frame, and clear-keyframes — all unsupported by the host slice.
+ * Undo/redo use the optional host history port when supplied and stay disabled
+ * when it is absent. Deliberately excluded otherwise: modifier ripple delete,
+ * clipboard, markers, in/out points, nudges, join, freeze frame, and
+ * clear-keyframes — all unsupported by the host slice.
  */
 export function useHostTimelineShortcuts(callbacks: TimelineShortcutCallbacks = {}) {
   usePlaybackShortcuts(callbacks)

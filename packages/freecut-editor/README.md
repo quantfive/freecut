@@ -69,6 +69,40 @@ shortcut editor, including J/K/L transport. UI changes call `setSettings`, and
 host or agent changes can flow back through `subscribe`, so embedded shortcut
 configuration never becomes a UI-only setting.
 
+As of 0.3.13, Delete/Backspace and cut shortcuts work when the timeline clip
+itself has keyboard focus. Editable fields, nested controls, ordinary buttons,
+and clips inside dialogs retain shortcut protection. C cuts the hovered clip at
+the pointer frame; with the pointer away, it cuts exactly one selected clip at
+the playhead. No selection, multiple selections, and a playhead at either clip
+endpoint produce no fallback cut.
+
+Host-backed undo/redo in 0.3.13 is opt-in through `EditorHost.history`:
+
+```ts
+history: {
+  undo: () => restoreSavedHistory('undo'),
+  redo: () => restoreSavedHistory('redo'),
+}
+```
+
+Cmd/Ctrl+Z and Cmd/Ctrl+Shift+Z invoke those callbacks. The host owns history,
+request serialization, conflict handling and persistence, and publishes the
+resulting authoritative snapshot through its existing `subscribe` port. The
+surface never rolls back its local temporal store in host mode. Without the
+history port, host-mode undo/redo stays disabled; standalone history continues
+to use the local store. Input fields, nested controls and dialogs keep their
+native keyboard behavior.
+
+CodePress requires its durable-history implementation (quantfive/codepress#6428)
+and the companion history-port wiring in addition to the 0.3.13 package update;
+a package upgrade alone cannot enable saved undo in a host without history.
+
+This release incorporates the source equivalents of the focused-clip and
+selected-playhead shortcut hunks in CodePress's 0.3.12 vendor patch
+(quantfive/codepress#7001). Once CodePress pins this published version, remove
+those two shortcut hunks while preserving unrelated vendor fixes, regenerate
+the patch hash, and verify the installed package through the real host.
+
 As of 0.3.12, host-mode timeline clips use durable forward attachment chains by
 default. A detached clip is an explicit ripple break and can be reattached from
 its context menu. The host-mode Delete action and Delete/Backspace shortcuts submit
@@ -137,5 +171,5 @@ Consumers install the exact published version and keep it pinned in their
 lockfile:
 
 ```bash
-npm install @quantfive/freecut-editor-surface@0.3.12
+npm install @quantfive/freecut-editor-surface@0.3.13
 ```

@@ -13,6 +13,8 @@ declare global {
       rejectNextDelete(): void
       getLastBatch(): EditCommandBatch | null
       releaseReceipt(): void
+      getHistoryCalls(): string[]
+      releaseHistory(): void
     }
   }
 }
@@ -23,7 +25,7 @@ const cohortItems = [
   { type: 'caption_cue' as const, id: 'caption-1', trackId: 'captions' },
 ]
 
-function fixtureSnapshot(revision = 0): EmbeddedEditorSnapshot {
+function fixtureSnapshot(revision = 0, deleted = revision !== 0): EmbeddedEditorSnapshot {
   // fallow-ignore-next-line complexity
   const makeItems = (trackId: string) => {
     const cohort = cohortItems.find((item) => item.trackId === trackId)!
@@ -53,7 +55,7 @@ function fixtureSnapshot(revision = 0): EmbeddedEditorSnapshot {
         ...(downstream.type !== 'caption_cue' ? { sourceStart: 30, sourceEnd: 60 } : {}),
       },
     ]
-    return revision === 0 ? items : [{ ...items[1]!, from: 0 }]
+    return !deleted ? items : [{ ...items[1]!, from: 0 }]
   }
 
   return {
@@ -68,7 +70,7 @@ function fixtureSnapshot(revision = 0): EmbeddedEditorSnapshot {
       timelineId: 'delete-ripple-timeline',
       revision,
       fps: 30,
-      durationInFrames: revision === 0 ? 90 : 60,
+      durationInFrames: !deleted ? 90 : 60,
       media: [
         {
           media_id: 'media-1',
@@ -131,11 +133,36 @@ let currentSnapshot = fixtureSnapshot()
 let lastBatch: EditCommandBatch | null = null
 let releaseReceipt: (() => void) | null = null
 let rejectNextDelete = false
+const snapshotListeners = new Set<(snapshot: EmbeddedEditorSnapshot) => void>()
+const historyCalls: string[] = []
+let releaseHistory: (() => void) | null = null
+
+function performHistory(action: 'undo' | 'redo'): Promise<void> {
+  historyCalls.push(action)
+  return new Promise((resolve) => {
+    releaseHistory = () => {
+      releaseHistory = null
+      currentSnapshot = fixtureSnapshot(currentSnapshot.timeline.revision + 1, action === 'redo')
+      for (const listener of snapshotListeners) listener(currentSnapshot)
+      resolve()
+    }
+  })
+}
 
 const host: EditorHost = {
   capabilities: { 'timeline.remove': true, 'media.resolve': false },
   load: () => currentSnapshot,
   resolveMedia: () => null,
+  subscribe: (listener) => {
+    snapshotListeners.add(listener)
+    return () => {
+      snapshotListeners.delete(listener)
+    }
+  },
+  history: {
+    undo: () => performHistory('undo'),
+    redo: () => performHistory('redo'),
+  },
   submitEdit: (batch) => {
     lastBatch = batch
     const command = batch.commands[0]
@@ -179,6 +206,8 @@ window.__freecutDeleteRippleFixture = {
   },
   getLastBatch: () => lastBatch,
   releaseReceipt: () => releaseReceipt?.(),
+  getHistoryCalls: () => [...historyCalls],
+  releaseHistory: () => releaseHistory?.(),
 }
 
 const hostBox = document.querySelector<HTMLElement>('#host-box')

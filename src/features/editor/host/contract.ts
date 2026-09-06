@@ -347,6 +347,16 @@ export interface EditorShortcutPort {
   subscribe?(listener: (settings: HostShortcutSettings) => void): () => void
 }
 
+/**
+ * Optional host-owned history boundary. The host persists and serializes the
+ * authoritative history; after applying an action it pushes the resulting
+ * snapshot through EditorHost.subscribe when the surface needs an update.
+ */
+export interface EditorHistoryPort {
+  undo(): Promise<void> | void
+  redo(): Promise<void> | void
+}
+
 export function createHostShortcutSettings(
   overrides: HotkeyOverrideMap = {},
 ): HostShortcutSettings {
@@ -374,6 +384,8 @@ export interface EditorHost {
   subscribe?(listener: (snapshot: EmbeddedEditorSnapshot) => void): () => void
   /** Optional host/agent round-trip for user-configurable keyboard shortcuts. */
   shortcuts?: EditorShortcutPort
+  /** Optional host-owned undo/redo boundary for host-mode timeline history. */
+  history?: EditorHistoryPort
   /** Optional application-issued transcript read/preview boundary. */
   transcript?: EditorTranscriptPort
   navigation?: EditorHostNavigation

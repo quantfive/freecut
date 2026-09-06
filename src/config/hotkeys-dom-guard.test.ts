@@ -127,6 +127,46 @@ describe('global shortcut DOM guards', () => {
     })
   })
 
+  it('allows shortcuts when the exact timeline item root owns focus', () => {
+    expect(
+      dispatchFrom(
+        '<div data-timeline-item data-item-id="clip-1" role="button" id="clip">Clip</div>',
+        '#clip',
+        'k',
+      ),
+    ).toEqual({ captureSawEvent: true, defaultPrevented: true })
+  })
+
+  it('keeps nested controls inside a timeline item protected', () => {
+    expect(
+      dispatchFrom(
+        '<div data-timeline-item data-item-id="clip-1" role="button"><button id="control">Run</button></div>',
+        '#control',
+        'k',
+      ),
+    ).toEqual({ captureSawEvent: true, defaultPrevented: false })
+  })
+
+  it('keeps a focused timeline item inside a dialog protected', () => {
+    expect(
+      dispatchFrom(
+        '<div role="dialog"><div data-timeline-item data-item-id="clip-1" role="button" id="clip">Clip</div></div>',
+        '#clip',
+        'k',
+      ),
+    ).toEqual({ captureSawEvent: true, defaultPrevented: false })
+  })
+
+  it('keeps a contenteditable timeline item protected', () => {
+    expect(
+      dispatchFrom(
+        '<div data-timeline-item data-item-id="clip-1" role="button" contenteditable="true" id="clip">Clip</div>',
+        '#clip',
+        'k',
+      ),
+    ).toEqual({ captureSawEvent: true, defaultPrevented: false })
+  })
+
   it('preserves explicit canvas opt-in inside a native dialog', () => {
     expect(
       dispatchFrom(
