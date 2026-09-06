@@ -150,5 +150,5 @@ Consumers install the exact published version and keep it pinned in their
 lockfile:
 
 ```bash
-npm install @quantfive/freecut-editor-surface@0.3.12
+npm install @quantfive/freecut-editor-surface@0.3.13
 ```
