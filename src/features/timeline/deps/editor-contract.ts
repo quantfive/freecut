@@ -2,3 +2,4 @@
 
 export { useEditorCapability, useEditorHostContext } from '@/features/editor/host/context'
 export { EditorHostProvider } from '@/features/editor/host/context-provider'
+export type { EditorHost, EditorHistoryPort } from '@/features/editor/host/contract'

@@ -15,6 +15,7 @@ import {
   type EditorTranscriptPort,
   type EmbeddedEditorSnapshot,
   type HostEditPredicate,
+  type EditorHistoryPort,
   type HostNotice,
   type HostTimelineEditPort,
 } from '@quantfive/freecut-editor-surface'
@@ -146,9 +147,11 @@ describe('published FreeCut browser entry', () => {
     }
     const requestTranscription = vi.fn<NonNullable<EditorTranscriptPort['requestTranscription']>>()
     const timelinePort: HostTimelineEditPort = { requestRippleDelete: vi.fn() }
+    const historyPort: EditorHistoryPort = { undo: vi.fn(), redo: vi.fn() }
     expect(notice.detail?.failedPredicates).toEqual(['sourceRange'])
     expect(requestTranscription).toBeTypeOf('function')
     expect(timelinePort.requestRippleDelete).toBeTypeOf('function')
+    expect(historyPort.undo).toBeTypeOf('function')
 
     const typedMetadataSnapshot: EmbeddedEditorSnapshot = {
       ...snapshot,

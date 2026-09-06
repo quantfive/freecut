@@ -1,5 +1,5 @@
 import { fireEvent, render } from '@testing-library/react'
-import { beforeEach, describe, expect, it, vi } from 'vite-plus/test'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vite-plus/test'
 import { useEditorStore } from '@/shared/state/editor'
 import { usePlaybackStore } from '@/shared/state/playback'
 import { useSelectionStore } from '@/shared/state/selection'
@@ -9,7 +9,7 @@ import { useKeyframeSelectionStore } from '../stores/keyframe-selection-store'
 import { clearTimelineHover, setTimelineHover } from '../utils/timeline-hover-state'
 import { useHostTimelineShortcuts, useTimelineShortcuts } from './use-timeline-shortcuts'
 import type { TimelineTrack, VideoItem } from '@/types/timeline'
-import { EditorHostProvider } from '../deps/editor'
+import { EditorHostProvider, type EditorHost } from '../deps/editor'
 
 // Some machines run jsdom with an opaque origin, leaving localStorage
 // undefined; the zustand persist middleware captures it at store creation
@@ -38,16 +38,30 @@ function HostShortcutBindings() {
 
 function HostShortcutHarness({
   onRippleDelete,
+  history,
+  host,
 }: {
   onRippleDelete?: (itemIds: readonly string[]) => void | Promise<void>
+  history?: { undo: () => Promise<void> | void; redo: () => Promise<void> | void }
+  host?: EditorHost
 }) {
-  if (!onRippleDelete) return <HostShortcutBindings />
+  if (!onRippleDelete && !history && !host) return <HostShortcutBindings />
+  const hostValue =
+    host ??
+    ({
+      capabilities: {},
+      load: vi.fn(),
+      resolveMedia: vi.fn(),
+      submitEdit: vi.fn(),
+      history,
+    } as unknown as EditorHost)
   return (
     <EditorHostProvider
       value={{
         mode: 'host',
         capabilities: { 'timeline.remove': true },
-        timeline: { requestRippleDelete: onRippleDelete },
+        host: hostValue,
+        timeline: { requestRippleDelete: onRippleDelete ?? vi.fn() },
       }}
     >
       <HostShortcutBindings />
@@ -118,6 +132,20 @@ describe('useHostTimelineShortcuts', () => {
       markers: [],
     })
   })
+
+  afterEach(() => {
+    document.body.replaceChildren()
+  })
+
+  function focusedClipTarget(): HTMLDivElement {
+    const target = document.createElement('div')
+    target.dataset.timelineItem = ''
+    target.dataset.itemId = ITEM.id
+    target.setAttribute('role', 'button')
+    target.tabIndex = 0
+    document.body.append(target)
+    return target
+  }
 
   it('toggles playback on Space', () => {
     render(<HostShortcutHarness />)
@@ -192,6 +220,128 @@ describe('useHostTimelineShortcuts', () => {
 
     expect(useTimelineCommandStore.getState().undoStack).toHaveLength(1)
     expect(useTimelineStore.getState().items[0]).toMatchObject({ id: 'clip-1', from: 30 })
+  })
+
+  it.each([
+    ['Ctrl+Z', { ctrlKey: true }],
+    ['Meta+Z', { metaKey: true }],
+  ] as const)('routes %s from a focused clip through host history', async (_name, modifier) => {
+    const undo = vi.fn(async () => undefined)
+    const redo = vi.fn(async () => undefined)
+    const target = focusedClipTarget()
+    useTimelineStore.getState().moveItem('clip-1', 30)
+    render(<HostShortcutHarness history={{ undo, redo }} />)
+
+    fireEvent.keyDown(target, { key: 'z', code: 'KeyZ', ...modifier })
+    await Promise.resolve()
+
+    expect(undo).toHaveBeenCalledTimes(1)
+    expect(redo).not.toHaveBeenCalled()
+    expect(useTimelineStore.getState().items[0]).toMatchObject({ id: 'clip-1', from: 30 })
+    expect(useTimelineCommandStore.getState().undoStack).toHaveLength(1)
+  })
+
+  it('routes Shift+Meta+Z from a focused clip through host redo', async () => {
+    const undo = vi.fn(async () => undefined)
+    const redo = vi.fn(async () => undefined)
+    const target = focusedClipTarget()
+    useTimelineStore.getState().moveItem('clip-1', 30)
+    render(<HostShortcutHarness history={{ undo, redo }} />)
+
+    fireEvent.keyDown(target, { key: 'z', code: 'KeyZ', metaKey: true, shiftKey: true })
+    await Promise.resolve()
+
+    expect(redo).toHaveBeenCalledTimes(1)
+    expect(undo).not.toHaveBeenCalled()
+    expect(useTimelineStore.getState().items[0]).toMatchObject({ id: 'clip-1', from: 30 })
+    expect(useTimelineCommandStore.getState().undoStack).toHaveLength(1)
+  })
+
+  it('notifies when a host history action rejects without an unhandled rejection', async () => {
+    const notify = vi.fn()
+    const undo = vi.fn(async () => {
+      throw new Error('history unavailable')
+    })
+    const redo = vi.fn(async () => undefined)
+    const target = focusedClipTarget()
+    const host = {
+      capabilities: {},
+      load: vi.fn(),
+      resolveMedia: vi.fn(),
+      submitEdit: vi.fn(),
+      history: { undo, redo },
+      notify,
+    } as unknown as EditorHost
+    render(<HostShortcutHarness host={host} />)
+
+    fireEvent.keyDown(target, { key: 'z', code: 'KeyZ', metaKey: true })
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(undo).toHaveBeenCalledTimes(1)
+    expect(notify).toHaveBeenCalledWith({ kind: 'error', message: 'Host undo failed' })
+  })
+
+  it('does nothing in host mode when the history port is missing', () => {
+    const target = focusedClipTarget()
+    useTimelineStore.getState().moveItem('clip-1', 30)
+    const host = {
+      capabilities: {},
+      load: vi.fn(),
+      resolveMedia: vi.fn(),
+      submitEdit: vi.fn(),
+    } as unknown as EditorHost
+    render(<HostShortcutHarness host={host} />)
+
+    fireEvent.keyDown(target, { key: 'z', code: 'KeyZ', metaKey: true })
+
+    expect(useTimelineStore.getState().items[0]).toMatchObject({ id: 'clip-1', from: 30 })
+    expect(useTimelineCommandStore.getState().undoStack).toHaveLength(1)
+  })
+
+  it.each([
+    [
+      'editable clip',
+      () => {
+        const target = focusedClipTarget()
+        target.setAttribute('contenteditable', 'true')
+        return target
+      },
+    ],
+    [
+      'nested control',
+      () => {
+        const target = focusedClipTarget()
+        const button = document.createElement('button')
+        button.textContent = 'Nested'
+        target.append(button)
+        return button
+      },
+    ],
+    [
+      'dialog clip',
+      () => {
+        const dialog = document.createElement('div')
+        dialog.setAttribute('role', 'dialog')
+        document.body.append(dialog)
+        const target = document.createElement('div')
+        target.dataset.timelineItem = ''
+        target.dataset.itemId = ITEM.id
+        target.setAttribute('role', 'button')
+        dialog.append(target)
+        return target
+      },
+    ],
+  ] as const)('protects %s from host history shortcuts', (_name, createTarget) => {
+    const undo = vi.fn(async () => undefined)
+    const redo = vi.fn(async () => undefined)
+    const target = createTarget()
+    render(<HostShortcutHarness history={{ undo, redo }} />)
+
+    fireEvent.keyDown(target, { key: 'z', code: 'KeyZ', metaKey: true })
+
+    expect(undo).not.toHaveBeenCalled()
+    expect(redo).not.toHaveBeenCalled()
   })
 
   it('still undoes on Mod+Z with the full timeline shortcuts (control)', () => {

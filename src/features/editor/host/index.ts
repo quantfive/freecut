@@ -26,6 +26,7 @@ export type {
   EditorCapability,
   EditorCapabilityMap,
   EditorHost,
+  EditorHistoryPort,
   EditorHostNavigation,
   EditorShortcutPort,
   EmbeddedEditorAsset,

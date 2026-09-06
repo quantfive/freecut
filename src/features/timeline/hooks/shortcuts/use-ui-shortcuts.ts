@@ -9,11 +9,33 @@ import { usePlaybackStore } from '@/shared/state/playback'
 import { HOTKEY_OPTIONS } from '@/config/hotkeys'
 import type { TimelineShortcutCallbacks } from '../use-timeline-shortcuts'
 import { useSettingsStore } from '@/features/timeline/deps/settings'
+import { useEditorHostContext } from '../../deps/editor'
+
+function invokeHostHistoryAction(
+  action: () => Promise<void> | void,
+  notify: ((notice: { kind: 'error'; message: string }) => void) | undefined,
+  label: 'undo' | 'redo',
+): void {
+  const reportFailure = () => {
+    try {
+      notify?.({ kind: 'error', message: `Host ${label} failed` })
+    } catch {
+      // A notification failure must not turn a rejected host action into an
+      // unhandled rejection.
+    }
+  }
+
+  try {
+    void Promise.resolve(action()).catch(reportFailure)
+  } catch {
+    reportFailure()
+  }
+}
 
 export interface UIShortcutOptions {
   /**
-   * Undo/redo mutate the timeline temporal store directly without emitting
-   * host commands, so host-embedded surfaces must mount with this disabled.
+   * Enables local temporal-store undo/redo. Host mode uses its optional
+   * history port instead, and disables these shortcuts when that port is absent.
    */
   enableHistory?: boolean
 }
@@ -23,6 +45,9 @@ export function useUIShortcuts(
   options: UIShortcutOptions = {},
 ) {
   const { enableHistory = true } = options
+  const { mode: editorMode, host } = useEditorHostContext()
+  const hostHistory = editorMode === 'host' ? host?.history : undefined
+  const historyEnabled = editorMode === 'host' ? hostHistory !== undefined : enableHistory
   const toggleSnap = useTimelineStore((s) => s.toggleSnap)
   const zoomIn = useZoomStore((s) => s.zoomIn)
   const zoomOut = useZoomStore((s) => s.zoomOut)
@@ -32,7 +57,15 @@ export function useUIShortcuts(
     'UNDO',
     (event) => {
       event.preventDefault()
-      useTimelineStore.temporal.getState().undo()
+      if (hostHistory) {
+        invokeHostHistoryAction(
+          () => hostHistory.undo(),
+          (notice) => host?.notify?.(notice),
+          'undo',
+        )
+      } else if (historyEnabled) {
+        useTimelineStore.temporal.getState().undo()
+      }
       if (callbacks.onUndo) {
         callbacks.onUndo()
       }
@@ -40,9 +73,9 @@ export function useUIShortcuts(
     {
       ...HOTKEY_OPTIONS,
       enableOnFormTags: true,
-      enabled: enableHistory,
+      enabled: historyEnabled,
     },
-    [callbacks, enableHistory],
+    [callbacks, historyEnabled, host, hostHistory],
   )
 
   // History: Cmd/Ctrl+Shift+Z - Redo
@@ -50,7 +83,15 @@ export function useUIShortcuts(
     'REDO',
     (event) => {
       event.preventDefault()
-      useTimelineStore.temporal.getState().redo()
+      if (hostHistory) {
+        invokeHostHistoryAction(
+          () => hostHistory.redo(),
+          (notice) => host?.notify?.(notice),
+          'redo',
+        )
+      } else if (historyEnabled) {
+        useTimelineStore.temporal.getState().redo()
+      }
       if (callbacks.onRedo) {
         callbacks.onRedo()
       }
@@ -58,9 +99,9 @@ export function useUIShortcuts(
     {
       ...HOTKEY_OPTIONS,
       enableOnFormTags: true,
-      enabled: enableHistory,
+      enabled: historyEnabled,
     },
-    [callbacks, enableHistory],
+    [callbacks, historyEnabled, host, hostHistory],
   )
 
   // UI: S - Toggle Snap

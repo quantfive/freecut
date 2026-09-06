@@ -53,6 +53,57 @@ test.describe('host authoritative delete/ripple', () => {
     })
   }
 
+  for (const modifier of ['Meta', 'Control']) {
+    test(`${modifier}+Z and Shift+Z restore host history after a focused clip deletion`, async ({
+      page,
+    }) => {
+      await page.setViewportSize({ width: 1600, height: 1000 })
+      await page.goto('/tests/browser/host-delete-ripple.html')
+      const first = page.locator('[data-timeline-item][data-item-id="video-1"]')
+      const second = page.locator('[data-timeline-item][data-item-id="video-2"]')
+      await first.click()
+      await expect(first).toBeFocused()
+      await page.keyboard.press('Delete')
+      await page.waitForFunction(() => Boolean(window.__freecutDeleteRippleFixture.getLastBatch()))
+      await page.evaluate(() => window.__freecutDeleteRippleFixture.releaseReceipt())
+      await expect(first).toHaveCount(0)
+      await second.click()
+      await expect(second).toBeFocused()
+
+      await page.keyboard.press(`${modifier}+z`)
+      await expect
+        .poll(() => page.evaluate(() => window.__freecutDeleteRippleFixture.getHistoryCalls()))
+        .toEqual(['undo'])
+      // No local temporal rollback: only the host's snapshot restores the clip.
+      await expect(first).toHaveCount(0)
+      await page.evaluate(() => window.__freecutDeleteRippleFixture.releaseHistory())
+      await expect(first).toHaveCount(1)
+      await expect(first).toHaveAttribute('data-timeline-start-frame', '0')
+      await expect(first).toHaveAttribute('data-timeline-duration-frames', '30')
+      await expect(second).toHaveAttribute('data-timeline-start-frame', '30')
+      await first.scrollIntoViewIfNeeded()
+      await page.screenshot({
+        path: `artifacts/host-history-${modifier.toLowerCase()}-undone.png`,
+        fullPage: true,
+      })
+      await first.click()
+      await expect(first).toBeFocused()
+
+      await page.keyboard.press(`${modifier}+Shift+z`)
+      await expect
+        .poll(() => page.evaluate(() => window.__freecutDeleteRippleFixture.getHistoryCalls()))
+        .toEqual(['undo', 'redo'])
+      await expect(first).toHaveCount(1)
+      await page.evaluate(() => window.__freecutDeleteRippleFixture.releaseHistory())
+      await expect(first).toHaveCount(0)
+      await expect(second).toHaveAttribute('data-timeline-start-frame', '0')
+      await page.screenshot({
+        path: `artifacts/host-history-${modifier.toLowerCase()}-after.png`,
+        fullPage: true,
+      })
+    })
+  }
+
   test('right-click Delete uses the same authoritative ripple path', async ({
     page,
   }: {
