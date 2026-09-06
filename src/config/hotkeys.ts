@@ -1261,6 +1261,12 @@ export function shouldIgnoreGlobalHotkey(event: KeyboardEvent): boolean {
   if (typeof Element === 'undefined' || !(target instanceof Element)) return false
   if (target.closest(GLOBAL_HOTKEY_OPT_IN)) return false
   if (isContentEditableTarget(target)) return true
+  if (
+    target.matches('[data-timeline-item][data-item-id][role="button"]') &&
+    !target.closest(DIALOG_SELECTOR)
+  ) {
+    return false
+  }
   // A Razor click leaves focus on the semantic clip root. Preserve the
   // interactive surface's normal transport/activation behavior, but let
   // history shortcuts reach the timeline controller so one click-cut can be

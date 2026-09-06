@@ -69,6 +69,19 @@ shortcut editor, including J/K/L transport. UI changes call `setSettings`, and
 host or agent changes can flow back through `subscribe`, so embedded shortcut
 configuration never becomes a UI-only setting.
 
+As of 0.3.13, Delete/Backspace and cut shortcuts work when the timeline clip
+itself has keyboard focus. Editable fields, nested controls, ordinary buttons,
+and clips inside dialogs retain shortcut protection. C cuts the hovered clip at
+the pointer frame; with the pointer away, it cuts exactly one selected clip at
+the playhead. No selection, multiple selections, and a playhead at either clip
+endpoint produce no fallback cut.
+
+This release incorporates the source equivalents of the focused-clip and
+selected-playhead shortcut hunks in CodePress's 0.3.12 vendor patch
+(quantfive/codepress#7001). Once CodePress pins this published version, remove
+those two shortcut hunks while preserving unrelated vendor fixes, regenerate
+the patch hash, and verify the installed package through the real host.
+
 As of 0.3.12, host-mode timeline clips use durable forward attachment chains by
 default. A detached clip is an explicit ripple break and can be reattached from
 its context menu. The host-mode Delete action and Delete/Backspace shortcuts submit
