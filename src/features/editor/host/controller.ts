@@ -978,6 +978,10 @@ export class HostEditorController {
   private readonly host: EditorHost
   private readonly capabilities
   private readonly adapter
+  private lastSettledBatch: EditCommandBatch | null = null
+  private pendingBatch: EditCommandBatch | null = null
+  private submission: Promise<HostControllerResult> | null = null
+  private readonly transactionListeners = new Set<() => void>()
   private readonly listeners = new Set<(snapshot: EmbeddedEditorSnapshot) => void>()
 
   constructor(host: EditorHost, snapshot: EmbeddedEditorSnapshot) {
@@ -1002,10 +1006,23 @@ export class HostEditorController {
   }
 
   replaceAuthoritativeSnapshot(snapshot: EmbeddedEditorSnapshot): void {
+    if (
+      snapshot.project.id !== this.snapshot.project.id ||
+      (snapshot.timeline.timelineId === this.snapshot.timeline.timelineId &&
+        snapshot.timeline.revision < this.snapshot.timeline.revision)
+    )
+      return
     this.snapshot = clone(snapshot)
     this.adapter.replaceDocument(hostSnapshotToControlledDocument(snapshot))
     for (const listener of this.listeners) {
-      listener(this.getSnapshot())
+      try {
+        listener(this.getSnapshot())
+      } catch {
+        this.notify({
+          kind: 'warning',
+          message: 'An editor view could not refresh. Reload the editor.',
+        })
+      }
     }
   }
 
@@ -1049,7 +1066,64 @@ export class HostEditorController {
     return this.submitEdit(derived.batch)
   }
 
-  async submitEdit(batch: EditCommandBatch): Promise<HostControllerResult> {
+  getTransactionState = (): 'saving' | 'retry' | 'saved' =>
+    this.submission ? 'saving' : this.pendingBatch ? 'retry' : 'saved'
+
+  subscribeTransaction = (listener: () => void): (() => void) => {
+    this.transactionListeners.add(listener)
+    return () => this.transactionListeners.delete(listener)
+  }
+
+  private transactionChanged(): void {
+    for (const listener of this.transactionListeners) {
+      try {
+        listener()
+      } catch {
+        console.warn('Host transaction listener failed')
+      }
+    }
+  }
+
+  retryPendingEdit = (): Promise<HostControllerResult> => {
+    if (this.submission) return this.submission
+    if (!this.pendingBatch)
+      return Promise.resolve({
+        status: 'unsupported',
+        snapshot: this.getSnapshot(),
+        reason: 'There is no edit to retry',
+      })
+    return this.submitEdit(this.pendingBatch)
+  }
+
+  submitEdit(batch: EditCommandBatch): Promise<HostControllerResult> {
+    if (this.pendingBatch && stableSerialize(batch) !== stableSerialize(this.pendingBatch)) {
+      const reason = this.submission
+        ? 'Saving the current edit. Try this edit again once it is saved.'
+        : 'The previous edit may have saved. Retry it to confirm before making another edit.'
+      this.notify({ kind: 'warning', message: reason })
+      return Promise.resolve({ status: 'unsupported', snapshot: this.getSnapshot(), reason })
+    }
+    if (this.submission) return this.submission
+    const retry =
+      this.pendingBatch !== null ||
+      (this.lastSettledBatch !== null &&
+        stableSerialize(batch) === stableSerialize(this.lastSettledBatch))
+    const promise = this.performSubmit(clone(batch), retry)
+    this.submission = promise
+    this.transactionChanged()
+    void promise
+      .finally(() => {
+        this.submission = null
+        this.transactionChanged()
+      })
+      .catch(() => undefined)
+    return promise
+  }
+
+  private async performSubmit(
+    batch: EditCommandBatch,
+    retry: boolean,
+  ): Promise<HostControllerResult> {
     const unsupported = batch.commands.find((command) => {
       const capability = capabilityForCommand(command.type)
       return !capability || !isHostCapabilityEnabled(this.capabilities, capability)
@@ -1060,8 +1134,14 @@ export class HostEditorController {
       return { status: 'unsupported', snapshot: this.getSnapshot(), reason }
     }
 
-    const localResult = this.adapter.apply(batch)
-    if (localResult.status === 'rejected') {
+    // Validation never advances the authoritative adapter. A fresh validator
+    // prevents a second request from seeing a speculative revision.
+    const localResult = retry
+      ? null
+      : createCodePressCommandAdapter({
+          document: this.adapter.getDocument(),
+        }).apply(batch)
+    if (localResult?.status === 'rejected') {
       this.notify({
         kind: 'error',
         message: localResult.error.message,
@@ -1070,17 +1150,18 @@ export class HostEditorController {
       return { status: 'rejected', snapshot: this.getSnapshot(), result: localResult }
     }
 
-    let remoteResult: HostEditResult
-    try {
-      remoteResult = await this.host.submitEdit(batch)
-    } catch (error) {
-      // The private adapter is only a validation aid. A transport failure has
-      // no authoritative receipt, so discard its speculative revision before
-      // allowing a retry derived from the unchanged host snapshot.
-      this.adapter.replaceDocument(freeCutDocumentToControlledDocument(this.snapshot.timeline))
-      throw error
+    // An unknown transport outcome must retain the identical operation and
+    // idempotency key even if a newer snapshot arrives before Retry.
+    this.pendingBatch = clone(batch)
+    const remoteResult = await this.host.submitEdit(clone(batch))
+    this.pendingBatch = null
+    this.lastSettledBatch = batch
+    if (
+      this.snapshot.timeline.timelineId === batch.timeline_id &&
+      remoteResult.snapshot.timeline.timelineId === batch.timeline_id
+    ) {
+      this.replaceAuthoritativeSnapshot(remoteResult.snapshot)
     }
-    this.replaceAuthoritativeSnapshot(remoteResult.snapshot)
     if (remoteResult.status === 'conflict') {
       this.notify({
         kind: 'conflict',

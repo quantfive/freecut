@@ -492,6 +492,18 @@ export interface EditorHostContextValue {
 }
 
 export interface HostTimelineEditPort {
+  beginTrim?: (itemId: string) => string | null
+  commitTrim?: (
+    token: string,
+    intent: {
+      handle: 'start' | 'end'
+      deltaFrames: number
+      mode: 'normal' | 'ripple' | 'rolling'
+      itemIds: readonly string[]
+      neighborId?: string | null
+    },
+  ) => Promise<void>
+  cancelTrim?: (token: string) => void
   requestRippleDelete(itemIds: readonly string[]): Promise<void> | void
   requestSetItemAttachment?(itemIds: readonly string[], rippleLinked: boolean): Promise<void> | void
 }

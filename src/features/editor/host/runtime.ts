@@ -1,3 +1,4 @@
+import { trimIntentBatch, type HostTrimIntent } from './trim-intent'
 import {
   installRuntimeMediaResolver,
   useMediaLibraryStore,
@@ -55,6 +56,13 @@ export class EmbeddedEditorHostRuntime implements EmbeddedEditorHostRuntimeContr
   readonly host: EditorHost
   readonly projectId: string
 
+  private trimGesture: {
+    token: string
+    itemId: string
+    snapshot: EmbeddedEditorSnapshot
+    itemIds: string[]
+  } | null = null
+  private installedSnapshot = false
   private mounted = false
   private applyingAuthoritative = false
   private reconcileScheduled = false
@@ -72,6 +80,66 @@ export class EmbeddedEditorHostRuntime implements EmbeddedEditorHostRuntimeContr
     this.projectId = snapshot.project.id
     this.authoritativeSnapshot = snapshot
     this.controller = new HostEditorController(host, snapshot)
+  }
+
+  readonly beginTrim = (itemId: string): string | null => {
+    if (!this.mounted || this.trimGesture || this.controller.getTransactionState() !== 'saved') {
+      this.host.notify?.({
+        kind: 'info',
+        message: 'Finish saving or retry the pending edit before trimming.',
+      })
+      return null
+    }
+    const snapshot = this.controller.getSnapshot()
+    if (!snapshot.timeline.tracks.some((track) => track.items.some((item) => item.id === itemId)))
+      return null
+    const selected = useSelectionStore.getState().selectedItemIds
+    const itemIds = selected.includes(itemId) ? [...selected] : [itemId]
+    const token = crypto.randomUUID()
+    this.trimGesture = { token, itemId, snapshot, itemIds }
+    return token
+  }
+
+  readonly cancelTrim = (token: string): void => {
+    if (this.trimGesture?.token !== token) return
+    this.trimGesture = null
+    if (this.mounted) this.applySnapshotToStores(this.authoritativeSnapshot)
+  }
+
+  readonly commitTrim = async (token: string, intent: HostTrimIntent): Promise<void> => {
+    const gesture = this.trimGesture
+    if (!gesture || gesture.token !== token || !this.mounted) return
+    this.trimGesture = null // one-shot, including no-op and rejection
+    try {
+      if (intent.deltaFrames === 0) return
+      const current = this.controller.getSnapshot().timeline
+      if (
+        current.timelineId !== gesture.snapshot.timeline.timelineId ||
+        current.revision !== gesture.snapshot.timeline.revision ||
+        JSON.stringify(current) !== JSON.stringify(gesture.snapshot.timeline) ||
+        JSON.stringify(this.controller.getSnapshot().assets) !==
+          JSON.stringify(gesture.snapshot.assets)
+      ) {
+        throw new Error('This clip changed during the trim. Review the updated cut and try again.')
+      }
+      const batch = trimIntentBatch(gesture.snapshot.timeline, gesture.itemId, {
+        ...intent,
+        itemIds: gesture.itemIds,
+      })
+      const result = await this.controller.submitEdit(batch)
+      if (result.status === 'unsupported')
+        this.host.notify?.({ kind: 'warning', message: result.reason })
+    } catch (error) {
+      this.host.notify?.({
+        kind: 'error',
+        message:
+          error instanceof Error
+            ? error.message
+            : 'The trim could not be saved. Retry the pending edit.',
+      })
+    } finally {
+      if (this.mounted) this.applySnapshotToStores(this.authoritativeSnapshot)
+    }
   }
 
   /**
@@ -175,7 +243,7 @@ export class EmbeddedEditorHostRuntime implements EmbeddedEditorHostRuntimeContr
 
     this.unsubscribeController = this.controller.subscribe((snapshot) => {
       this.authoritativeSnapshot = snapshot
-      this.applySnapshotToStores(snapshot)
+      if (!this.trimGesture) this.applySnapshotToStores(snapshot)
     })
     this.unsubscribeTimeline = useTimelineStore.subscribe(() => this.scheduleReconcile())
     this.unsubscribePlayback = usePlaybackStore.subscribe((state, previous) => {
@@ -186,6 +254,8 @@ export class EmbeddedEditorHostRuntime implements EmbeddedEditorHostRuntimeContr
   unmountStores(): void {
     if (!this.mounted) return
     this.mounted = false
+    this.trimGesture = null
+    this.installedSnapshot = false
     if (this.gestureListenersAttached) {
       document.removeEventListener('pointerdown', this.resumePreviewAudioOnGesture)
       document.removeEventListener('keydown', this.resumePreviewAudioOnGesture)
@@ -217,6 +287,10 @@ export class EmbeddedEditorHostRuntime implements EmbeddedEditorHostRuntimeContr
 
   private applySnapshotToStores(snapshot: EmbeddedEditorSnapshot): void {
     const native = hostSnapshotToNativeTimeline(snapshot)
+    const firstInstall = !this.installedSnapshot
+    this.installedSnapshot = true
+    const selected = useSelectionStore.getState().selectedItemIds
+    const currentFrame = usePlaybackStore.getState().currentFrame
     this.applyingAuthoritative = true
     try {
       // Skim overlays are module-global UI state. Never let a media-card hover
@@ -271,22 +345,31 @@ export class EmbeddedEditorHostRuntime implements EmbeddedEditorHostRuntimeContr
       useCompositionsStore.getState().setCompositions([])
       useCompositionNavigationStore.getState().resetToRoot()
       useTimelineSettingsStore.getState().setFps(native.fps)
-      useTimelineSettingsStore.getState().setScrollPosition(0)
+      if (firstInstall) useTimelineSettingsStore.getState().setScrollPosition(0)
       useTimelineSettingsStore.getState().setTimelineLoading(false)
       useTimelineSettingsStore.getState().markClean()
       useTimelineStore.temporal.getState().clear()
-      usePlaybackStore.getState().setCurrentFrame(0)
+      const existingIds = new Set(native.items.map((item) => item.id))
+      useSelectionStore.getState().selectItems(selected.filter((id) => existingIds.has(id)))
+      usePlaybackStore
+        .getState()
+        .setCurrentFrame(
+          firstInstall
+            ? 0
+            : Math.min(currentFrame, Math.max(0, snapshot.timeline.durationInFrames - 1)),
+        )
     } finally {
       this.applyingAuthoritative = false
     }
   }
 
   private scheduleReconcile(): void {
-    if (!this.mounted || this.applyingAuthoritative || this.reconcileScheduled) return
+    if (!this.mounted || this.applyingAuthoritative || this.trimGesture || this.reconcileScheduled)
+      return
     this.reconcileScheduled = true
     scheduleMicrotask(() => {
       this.reconcileScheduled = false
-      if (!this.mounted || this.applyingAuthoritative) return
+      if (!this.mounted || this.applyingAuthoritative || this.trimGesture) return
       void this.reconcileTimeline()
     })
   }

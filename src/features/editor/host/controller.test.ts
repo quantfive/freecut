@@ -32,6 +32,9 @@ import { hostSnapshotToNativeTimeline, nativeTimelineToFrameDocument } from './d
 import { EmbeddedEditorHostRuntime } from './runtime'
 import { useMediaLibraryStore } from '@/features/editor/deps/media-library'
 import { useTimelineStore } from '@/features/editor/deps/timeline-store'
+import { useSelectionStore } from '@/shared/state/selection'
+import { useTimelineSettingsStore } from '@/features/editor/deps/timeline-store'
+import { trimIntentBatch } from './trim-intent'
 import { usePlaybackStore } from '@/shared/state/playback'
 
 const mediaReference: MediaReference = {
@@ -298,7 +301,7 @@ describe('embedded FreeCut host controller', () => {
     await expect(controller.requestRippleDelete(['clip-1'])).rejects.toThrow(
       'host transport unavailable',
     )
-    await expect(controller.requestRippleDelete(['clip-1'])).resolves.toMatchObject({
+    await expect(controller.retryPendingEdit()).resolves.toMatchObject({
       status: 'applied',
     })
     expect(submitEdit).toHaveBeenCalledTimes(2)
@@ -1742,4 +1745,282 @@ describe('embedded FreeCut host controller', () => {
       expect(derived.detail?.changedFields).toEqual(['transform.height', 'transform.width'])
     })
   })
+})
+
+describe('gesture authority and recovery regressions', () => {
+  it('keeps a newer push when an older edit receipt arrives', async () => {
+    const initial = snapshot()
+    const harness = createFakeHost(initial)
+    let release!: (result: HostEditResult) => void
+    const controller = new HostEditorController(
+      {
+        ...harness.host,
+        submitEdit: () =>
+          new Promise((resolve) => {
+            release = resolve
+          }),
+      },
+      initial,
+    )
+    const pending = controller.submitEdit(commandForMove(initial))
+    controller.replaceAuthoritativeSnapshot({
+      ...initial,
+      timeline: { ...initial.timeline, revision: 7 },
+    })
+    release({
+      status: 'applied',
+      snapshot: movedSnapshot(),
+      result: { status: 'applied' } as HostAppliedEditResult['result'],
+    })
+    await pending
+    expect(controller.getSnapshot().timeline.revision).toBe(7)
+  })
+
+  it('retries the identical request after a lost applied receipt and newer push', async () => {
+    const initial = snapshot()
+    const harness = createFakeHost(initial)
+    const batches: EditCommandBatch[] = []
+    const controller = new HostEditorController(
+      {
+        ...harness.host,
+        submitEdit: async (batch) => {
+          batches.push(structuredClone(batch))
+          const result = await harness.host.submitEdit(batch)
+          if (batches.length === 1) throw new Error('lost receipt')
+          return result
+        },
+      },
+      initial,
+    )
+    const batch = commandForMove(initial)
+    await expect(controller.submitEdit(batch)).rejects.toThrow('lost receipt')
+    controller.replaceAuthoritativeSnapshot(harness.getRemoteSnapshot())
+    expect(controller.getTransactionState()).toBe('retry')
+    await expect(controller.retryPendingEdit()).resolves.toMatchObject({ status: 'replayed' })
+    expect(batches[1]).toEqual(batches[0])
+    expect(controller.getSnapshot().timeline.revision).toBe(1)
+    expect(controller.getTransactionState()).toBe('saved')
+  })
+
+  it('preserves playhead/scroll and reconciles only removed selection IDs', () => {
+    const initial = snapshot()
+    const runtime = new EmbeddedEditorHostRuntime(createFakeHost(initial).host, initial)
+    runtime.mountStores()
+    try {
+      usePlaybackStore.getState().setCurrentFrame(42)
+      useTimelineSettingsStore.getState().setScrollPosition(100)
+      useSelectionStore.getState().selectItems(['clip-1', 'removed'])
+      runtime.controller.replaceAuthoritativeSnapshot({
+        ...initial,
+        timeline: { ...initial.timeline, revision: 1 },
+      })
+      expect(usePlaybackStore.getState().currentFrame).toBe(42)
+      expect(useTimelineSettingsStore.getState().scrollPosition).toBe(100)
+      expect(useSelectionStore.getState().selectedItemIds).toEqual(['clip-1'])
+      runtime.controller.replaceAuthoritativeSnapshot({
+        ...initial,
+        timeline: { ...initial.timeline, revision: 2, tracks: [], durationInFrames: 20 },
+      })
+      expect(usePlaybackStore.getState().currentFrame).toBe(19)
+      expect(useSelectionStore.getState().selectedItemIds).toEqual([])
+    } finally {
+      runtime.unmountStores()
+    }
+  })
+
+  it('consumes trim tokens once, cancels without mutation, and never rebases a changed gesture', async () => {
+    const initial = snapshot()
+    const harness = createFakeHost(initial)
+    const notices: HostNotice[] = []
+    const runtime = new EmbeddedEditorHostRuntime(
+      { ...harness.host, notify: (notice) => notices.push(notice) },
+      initial,
+    )
+    runtime.mountStores()
+    const intent = {
+      handle: 'end' as const,
+      deltaFrames: -5,
+      mode: 'normal' as const,
+      itemIds: ['clip-1'],
+    }
+    try {
+      const canceled = runtime.beginTrim('clip-1')!
+      runtime.cancelTrim(canceled)
+      await runtime.commitTrim(canceled, intent)
+      const noop = runtime.beginTrim('clip-1')!
+      await runtime.commitTrim(noop, { ...intent, deltaFrames: 0 })
+      await runtime.commitTrim(noop, intent)
+      expect(harness.submitEdit).not.toHaveBeenCalled()
+      const stale = runtime.beginTrim('clip-1')!
+      runtime.controller.replaceAuthoritativeSnapshot({
+        ...initial,
+        timeline: { ...initial.timeline, revision: 1 },
+      })
+      // The gesture retains its original view until it settles.
+      await runtime.commitTrim(stale, intent)
+      expect(harness.submitEdit).not.toHaveBeenCalled()
+      expect(notices.at(-1)?.message).toContain('changed during the trim')
+    } finally {
+      runtime.unmountStores()
+    }
+  })
+
+  it('submits a trim once and rejects rapid overlap before losing the first intent', async () => {
+    const initial = snapshot()
+    const harness = createFakeHost(initial)
+    let release!: () => void
+    const delayed = {
+      ...harness.host,
+      submitEdit: async (batch: EditCommandBatch) => {
+        await new Promise<void>((resolve) => {
+          release = resolve
+        })
+        return harness.host.submitEdit(batch)
+      },
+    }
+    const runtime = new EmbeddedEditorHostRuntime(delayed, initial)
+    runtime.mountStores()
+    try {
+      const token = runtime.beginTrim('clip-1')!
+      const intent = {
+        handle: 'end' as const,
+        deltaFrames: -5,
+        mode: 'normal' as const,
+        itemIds: ['clip-1'],
+      }
+      const pending = runtime.commitTrim(token, intent)
+      expect(runtime.beginTrim('clip-1')).toBeNull()
+      await runtime.commitTrim(token, intent)
+      release()
+      await pending
+      expect(harness.submitEdit).toHaveBeenCalledTimes(1)
+      expect(runtime.controller.getSnapshot().timeline.tracks[0]!.items[0]!.durationInFrames).toBe(
+        55,
+      )
+      expect(runtime.beginTrim('clip-1')).not.toBeNull()
+    } finally {
+      runtime.unmountStores()
+    }
+  })
+
+  it('translates explicit start/end ripple and roll intent without diff guessing, preserving speed and attachment breaks', () => {
+    const initial = snapshot()
+    const anchor = initial.timeline.tracks[0]!.items[0]!
+    Object.assign(anchor, { from: 10, sourceStart: 20, sourceEnd: 140, speed: 2 })
+    initial.timeline.tracks[0]!.items.push(
+      { ...anchor, id: 'next', from: 70, sourceStart: 0, sourceEnd: 120 },
+      { ...anchor, id: 'detached', from: 130, rippleLinked: false },
+    )
+    const batch = trimIntentBatch(initial.timeline, 'clip-1', {
+      handle: 'start',
+      deltaFrames: 5,
+      mode: 'ripple',
+      itemIds: ['clip-1'],
+    })
+    expect(batch.commands).toMatchObject([
+      { type: 'trim_item', edge: 'start', source_us: 1_000_000, timeline_us: 500_000 },
+      { type: 'move_item', item_id: 'clip-1' },
+      { type: 'move_item', item_id: 'next' },
+    ])
+    const roll = trimIntentBatch(initial.timeline, 'clip-1', {
+      handle: 'end',
+      deltaFrames: 5,
+      mode: 'rolling',
+      itemIds: ['clip-1'],
+      neighborId: 'next',
+    })
+    expect(roll.commands.map((command) => command.type)).toEqual(['trim_item', 'trim_item'])
+    Object.assign(anchor, { linkedGroupId: 'av' })
+    expect(() =>
+      trimIntentBatch(initial.timeline, 'clip-1', {
+        handle: 'end',
+        deltaFrames: 5,
+        mode: 'normal',
+        itemIds: ['clip-1'],
+      }),
+    ).toThrow('Linked clip trimming')
+  })
+})
+
+it('never interprets a new delete selection as a retry of an unknown earlier delete', async () => {
+  const initial = snapshot()
+  initial.timeline.tracks[0]!.items.push({
+    ...initial.timeline.tracks[0]!.items[0]!,
+    id: 'clip-2',
+    from: 60,
+  })
+  const submitEdit = vi.fn(async () => {
+    throw new Error('unknown outcome')
+  })
+  const controller = new HostEditorController(
+    { ...createFakeHost(initial).host, submitEdit },
+    initial,
+  )
+  await expect(controller.requestRippleDelete(['clip-1'])).rejects.toThrow('unknown outcome')
+  await expect(controller.requestRippleDelete(['clip-2'])).resolves.toMatchObject({
+    status: 'unsupported',
+  })
+  expect(submitEdit).toHaveBeenCalledTimes(1)
+})
+
+it('isolates transaction listeners from successful submissions and cleanup', async () => {
+  const initial = snapshot()
+  const controller = new HostEditorController(createFakeHost(initial).host, initial)
+  const warning = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+  const listener = vi.fn()
+  controller.subscribeTransaction(() => {
+    throw new Error('observer failed')
+  })
+  controller.subscribeTransaction(listener)
+  try {
+    await expect(controller.submitEdit(commandForMove(initial))).resolves.toMatchObject({
+      status: 'applied',
+    })
+    expect(controller.getTransactionState()).toBe('saved')
+    expect(listener).toHaveBeenCalledTimes(2)
+  } finally {
+    warning.mockRestore()
+  }
+})
+
+it('rejects exhausted source handles before any host mutation', async () => {
+  const initial = snapshot()
+  const harness = createFakeHost(initial)
+  const controller = new HostEditorController(harness.host, initial)
+  const batch = trimIntentBatch(initial.timeline, 'clip-1', {
+    handle: 'end',
+    deltaFrames: 300,
+    mode: 'normal',
+    itemIds: ['clip-1'],
+  })
+  await expect(controller.submitEdit(batch)).resolves.toMatchObject({ status: 'rejected' })
+  expect(harness.submitEdit).not.toHaveBeenCalled()
+  expect(controller.getSnapshot()).toEqual(initial)
+})
+
+it('does not restore a superseded timeline identity from a late receipt', async () => {
+  const initial = snapshot()
+  let release!: (result: HostEditResult) => void
+  const controller = new HostEditorController(
+    {
+      ...createFakeHost(initial).host,
+      submitEdit: () =>
+        new Promise((resolve) => {
+          release = resolve
+        }),
+    },
+    initial,
+  )
+  const pending = controller.submitEdit(commandForMove(initial))
+  controller.replaceAuthoritativeSnapshot({
+    ...initial,
+    timeline: { ...initial.timeline, timelineId: 'replacement', revision: 0 },
+  })
+  release({
+    status: 'applied',
+    snapshot: movedSnapshot(),
+    result: { status: 'applied' } as HostAppliedEditResult['result'],
+  })
+  await pending
+  expect(controller.getSnapshot().timeline.timelineId).toBe('replacement')
 })
