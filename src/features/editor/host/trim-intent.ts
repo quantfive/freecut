@@ -15,6 +15,82 @@ export interface HostTrimIntent {
   neighborId?: string | null
 }
 
+function assertTrimEditable(document: FreeCutFrameDocument, item: FreeCutFrameItem): void {
+  if (item.linkedGroupId)
+    throw new Error('Linked clip trimming is not supported by the host yet. No clips were changed.')
+  let track = document.tracks.find((candidate) => candidate.id === item.trackId)
+  const seen = new Set<string>()
+  while (track && !seen.has(track.id)) {
+    seen.add(track.id)
+    if (track.locked)
+      throw new Error('Unlock the affected track before trimming. No clips were changed.')
+    track = document.tracks.find((candidate) => candidate.id === track?.parentTrackId)
+  }
+}
+
+function trimmedSourceFrame(
+  item: FreeCutFrameItem,
+  edge: HostTrimIntent['handle'],
+  deltaFrames: number,
+): number {
+  if (item.type !== 'video' && item.type !== 'audio' && item.type !== 'image')
+    throw new Error('This item does not support source trimming.')
+  const sourceStart = item.sourceStart ?? 0
+  const sourceEnd = item.sourceEnd ?? sourceStart + item.durationInFrames
+  const speed = item.speed ?? 1
+  const source = (edge === 'start' ? sourceStart : sourceEnd) + Math.round(deltaFrames * speed)
+  if (source < 0) throw new Error('This trim exceeds the available source handles.')
+  return source
+}
+
+function rollingNeighbor(
+  all: readonly FreeCutFrameItem[],
+  anchor: FreeCutFrameItem,
+  intent: HostTrimIntent,
+): FreeCutFrameItem {
+  const neighbor = all.find((item) => item.id === intent.neighborId)
+  if (
+    !neighbor ||
+    neighbor.trackId !== anchor.trackId ||
+    (intent.handle === 'end'
+      ? anchor.from + anchor.durationInFrames !== neighbor.from
+      : neighbor.from + neighbor.durationInFrames !== anchor.from)
+  ) {
+    throw new Error('The adjacent cut changed. Review the cut and try again.')
+  }
+  return neighbor
+}
+
+function appendRippleMoves(
+  document: FreeCutFrameDocument,
+  anchor: FreeCutFrameItem,
+  intent: HostTrimIntent,
+  move: (item: FreeCutFrameItem, from: number) => void,
+): void {
+  if (document.tracks.some((track) => track.id !== anchor.trackId && track.syncLock)) {
+    throw new Error(
+      'This trim affects synchronized tracks. Use a supported sequence edit; no clips were changed.',
+    )
+  }
+  const shift = intent.handle === 'start' ? -intent.deltaFrames : intent.deltaFrames
+  if (intent.handle === 'start') move(anchor, anchor.from)
+  // Respect durable attachment breaks, including a detached anchor. Gaps
+  // before the break retain their width, matching the existing ripple tool.
+  if (anchor.rippleLinked !== false) {
+    const tail = document.tracks
+      .flatMap((track) => track.items)
+      .filter(
+        (item) =>
+          item.trackId === anchor.trackId && item.from >= anchor.from + anchor.durationInFrames,
+      )
+      .sort((a, b) => a.from - b.from)
+    for (const item of tail) {
+      if (item.rippleLinked === false) break
+      move(item, item.from + shift)
+    }
+  }
+}
+
 export function trimIntentBatch(
   document: FreeCutFrameDocument,
   anchorId: string,
@@ -31,30 +107,13 @@ export function trimIntentBatch(
   const commands: EditCommand[] = []
   const touched = new Map<string, FreeCutFrameItem>()
   const assertEditable = (item: FreeCutFrameItem) => {
-    if (item.linkedGroupId)
-      throw new Error(
-        'Linked clip trimming is not supported by the host yet. No clips were changed.',
-      )
-    let track = document.tracks.find((candidate) => candidate.id === item.trackId)
-    const seen = new Set<string>()
-    while (track && !seen.has(track.id)) {
-      seen.add(track.id)
-      if (track.locked)
-        throw new Error('Unlock the affected track before trimming. No clips were changed.')
-      track = document.tracks.find((candidate) => candidate.id === track?.parentTrackId)
-    }
+    assertTrimEditable(document, item)
     touched.set(item.id, item)
   }
   const trim = (item: FreeCutFrameItem, edge: 'start' | 'end') => {
     assertEditable(item)
-    if (item.type !== 'video' && item.type !== 'audio' && item.type !== 'image')
-      throw new Error('This item does not support source trimming.')
     const delta = intent.deltaFrames
-    const sourceStart = item.sourceStart ?? 0
-    const sourceEnd = item.sourceEnd ?? sourceStart + item.durationInFrames
-    const speed = item.speed ?? 1
-    const source = (edge === 'start' ? sourceStart : sourceEnd) + Math.round(delta * speed)
-    if (source < 0) throw new Error('This trim exceeds the available source handles.')
+    const source = trimmedSourceFrame(item, edge, delta)
     commands.push({
       command_id: `trim-${item.id}`,
       type: 'trim_item',
@@ -82,39 +141,10 @@ export function trimIntentBatch(
   }
   trim(anchor, intent.handle)
   if (intent.mode === 'rolling') {
-    const neighbor = all.find((item) => item.id === intent.neighborId)
-    if (
-      !neighbor ||
-      neighbor.trackId !== anchor.trackId ||
-      (intent.handle === 'end'
-        ? anchor.from + anchor.durationInFrames !== neighbor.from
-        : neighbor.from + neighbor.durationInFrames !== anchor.from)
-    ) {
-      throw new Error('The adjacent cut changed. Review the cut and try again.')
-    }
+    const neighbor = rollingNeighbor(all, anchor, intent)
     trim(neighbor, intent.handle === 'start' ? 'end' : 'start')
   } else if (intent.mode === 'ripple') {
-    if (document.tracks.some((track) => track.id !== anchor.trackId && track.syncLock)) {
-      throw new Error(
-        'This trim affects synchronized tracks. Use a supported sequence edit; no clips were changed.',
-      )
-    }
-    const shift = intent.handle === 'start' ? -intent.deltaFrames : intent.deltaFrames
-    if (intent.handle === 'start') move(anchor, anchor.from)
-    // Respect durable attachment breaks, including a detached anchor. Gaps
-    // before the break retain their width, matching the existing ripple tool.
-    if (anchor.rippleLinked !== false) {
-      const tail = all
-        .filter(
-          (item) =>
-            item.trackId === anchor.trackId && item.from >= anchor.from + anchor.durationInFrames,
-        )
-        .sort((a, b) => a.from - b.from)
-      for (const item of tail) {
-        if (item.rippleLinked === false) break
-        move(item, item.from + shift)
-      }
-    }
+    appendRippleMoves(document, anchor, intent, move)
   }
   if (commands.length > 64)
     throw new Error('This trim exceeds the host operation limit. No clips were changed.')
