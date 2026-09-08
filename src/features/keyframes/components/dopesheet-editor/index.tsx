@@ -1,3 +1,7 @@
+import {
+  useKeyframeGestureCancellation,
+  releaseKeyframePointerCapture,
+} from '../use-keyframe-gesture-cancellation'
 /**
  * Dopesheet Editor - timeline-style keyframe editor.
  * Shows keyframes across properties as draggable diamonds on a frame grid.
@@ -1127,6 +1131,7 @@ export const DopesheetEditor = memo(function DopesheetEditor({
   const valueScrubRef = useRef<{
     property: AnimatableProperty
     pointerId: number
+    target: HTMLInputElement
     startX: number
     startValue: number
     lastValue: number
@@ -2446,6 +2451,7 @@ export const DopesheetEditor = memo(function DopesheetEditor({
 
       valueScrubRef.current = {
         property,
+        target: event.currentTarget,
         pointerId: event.pointerId,
         startX: event.clientX,
         startValue,
@@ -2495,6 +2501,7 @@ export const DopesheetEditor = memo(function DopesheetEditor({
       const scrub = valueScrubRef.current
       if (!scrub || scrub.pointerId !== event.pointerId || scrub.property !== property) return
       valueScrubRef.current = null
+      releaseKeyframePointerCapture(scrub.target, scrub.pointerId)
       if (!scrub.didDrag) return
 
       event.preventDefault()
@@ -2510,20 +2517,31 @@ export const DopesheetEditor = memo(function DopesheetEditor({
     [onDragEnd, onPropertyValueCommit, onPropertyValuePreview],
   )
 
+  const cancelValueScrub = useCallback(
+    (updateReactState: boolean) => {
+      const scrub = valueScrubRef.current
+      if (!scrub) return
+      valueScrubRef.current = null
+      releaseKeyframePointerCapture(scrub.target, scrub.pointerId)
+      if (!scrub.didDrag) return
+      const restoredDisplay = formatPropertyValue(scrub.property, scrub.startValue)
+      valueDraftAtFocusRef.current[scrub.property] = restoredDisplay
+      // Blur caused by hiding must not commit the cancelled draft.
+      skipNextBlurCommitPropertyRef.current = scrub.property
+      if (updateReactState)
+        setValueDrafts((previous) => ({ ...previous, [scrub.property]: restoredDisplay }))
+      onDragCancel?.()
+    },
+    [formatPropertyValue, onDragCancel],
+  )
   const handleValueScrubCancel = useCallback(
     (event: React.PointerEvent<HTMLInputElement>, property: AnimatableProperty) => {
       const scrub = valueScrubRef.current
       if (!scrub || scrub.pointerId !== event.pointerId || scrub.property !== property) return
-      valueScrubRef.current = null
-      if (!scrub.didDrag) return
-
       event.preventDefault()
-      const restoredDisplay = formatPropertyValue(property, scrub.startValue)
-      valueDraftAtFocusRef.current[property] = restoredDisplay
-      setValueDrafts((previous) => ({ ...previous, [property]: restoredDisplay }))
-      onDragCancel?.()
+      cancelValueScrub(true)
     },
-    [formatPropertyValue, onDragCancel],
+    [cancelValueScrub],
   )
 
   const nudgeSelectedKeyframes = useCallback(
@@ -2673,6 +2691,7 @@ export const DopesheetEditor = memo(function DopesheetEditor({
   )
 
   const dragStateRef = useRef<DragState | null>(null)
+  const dragCaptureRef = useRef<Element | null>(null)
   const selectionAnchorByPropertyRef = useRef(new Map<AnimatableProperty, string>())
 
   const { marqueeOverlayRef, getMarqueeModeFromPointerEvent, beginMarqueeSelection } =
@@ -2765,6 +2784,7 @@ export const DopesheetEditor = memo(function DopesheetEditor({
         appliedDeltaFrames: 0,
       }
       scheduleDragPreviewFrames(null)
+      dragCaptureRef.current = event.currentTarget
 
       setPointerCaptureSafely(event.currentTarget, event.pointerId)
     },
@@ -2851,6 +2871,7 @@ export const DopesheetEditor = memo(function DopesheetEditor({
         appliedDeltaFrames: 0,
       }
       scheduleDragPreviewFrames(null)
+      dragCaptureRef.current = event.currentTarget
 
       setPointerCaptureSafely(event.currentTarget, event.pointerId)
     },
@@ -2913,6 +2934,23 @@ export const DopesheetEditor = memo(function DopesheetEditor({
     [beginMarqueeSelection, disabled, getMarqueeModeFromPointerEvent, selectedKeyframeIds],
   )
 
+  const cancelDiamondDrag = useCallback(
+    (updateReactState: boolean) => {
+      const drag = dragStateRef.current
+      if (!drag) return
+      dragStateRef.current = null
+      const target = dragCaptureRef.current
+      dragCaptureRef.current = null
+      releaseKeyframePointerCapture(target, drag.pointerId)
+      if (updateReactState) scheduleDragPreviewFrames(null)
+      if (drag.started && !drag.duplicateOnCommit) {
+        onSelectionFrameDelta?.(drag.appliedDeltaFrames, 'cancel')
+        onDragCancel?.()
+      }
+    },
+    [onDragCancel, onSelectionFrameDelta, scheduleDragPreviewFrames],
+  )
+
   useEffect(() => {
     if (!onKeyframeMove && !onDuplicateKeyframes) return
 
@@ -2941,6 +2979,9 @@ export const DopesheetEditor = memo(function DopesheetEditor({
     const handlePointerUp = (event: PointerEvent) => {
       const dragState = dragStateRef.current
       if (!dragState || dragState.pointerId !== event.pointerId) return
+      dragStateRef.current = null
+      releaseKeyframePointerCapture(dragCaptureRef.current, dragState.pointerId)
+      dragCaptureRef.current = null
 
       if (dragState.started) {
         const deltaFrames = getDopesheetDragDelta(
@@ -2962,24 +3003,19 @@ export const DopesheetEditor = memo(function DopesheetEditor({
           onDragEnd?.()
         }
       }
-      dragStateRef.current = null
       scheduleDragPreviewFrames(null)
     }
 
     const handlePointerCancel = (event: PointerEvent) => {
       const dragState = dragStateRef.current
       if (!dragState || dragState.pointerId !== event.pointerId) return
-      if (dragState.started && !dragState.duplicateOnCommit) {
-        onSelectionFrameDelta?.(dragState.appliedDeltaFrames, 'cancel')
-        onDragCancel?.()
-      }
-      dragStateRef.current = null
-      scheduleDragPreviewFrames(null)
+      cancelDiamondDrag(true)
     }
 
     return addWindowPointerListeners(handlePointerMove, handlePointerUp, handlePointerCancel)
   }, [
     disabled,
+    cancelDiamondDrag,
     buildSelectionFramePreview,
     commitSelectionFramePreview,
     duplicateSelectionFramePreview,
@@ -2997,6 +3033,7 @@ export const DopesheetEditor = memo(function DopesheetEditor({
   ])
 
   const scrubPointerIdRef = useRef<number | null>(null)
+  const rulerCaptureRef = useRef<Element | null>(null)
   const rulerScrubActiveRef = useRef(false)
   const rulerScrubHandoffFrameRef = useRef<number | null>(null)
   const [isRulerScrubbing, setIsRulerScrubbing] = useState(false)
@@ -3056,6 +3093,7 @@ export const DopesheetEditor = memo(function DopesheetEditor({
     startScrub: startRulerScrub,
     queueScrub: queueRulerScrub,
     flushPendingScrub: flushPendingRulerScrub,
+    cancelPendingScrub: cancelPendingRulerScrub,
   } = useCoalescedScrub(onScrub)
   const getRulerScrubFrameFromClientX = useCallback(
     (clientX: number) => {
@@ -3156,6 +3194,7 @@ export const DopesheetEditor = memo(function DopesheetEditor({
       beginTimelineSkimmerScrub(skimmerScrubOwnerRef.current)
       setIsRulerScrubbing(true)
       scrubPointerIdRef.current = event.pointerId
+      rulerCaptureRef.current = event.currentTarget
       rulerScrubClientXRef.current = event.clientX
       rulerScrubViewportRef.current = viewport
       rulerEdgeScrollTimestampRef.current = null
@@ -3263,6 +3302,30 @@ export const DopesheetEditor = memo(function DopesheetEditor({
       timelinePixelsPerSecond,
     ],
   )
+
+  const cancelRulerScrub = (updateReactState: boolean) => {
+    const pointerId = scrubPointerIdRef.current
+    scrubPointerIdRef.current = null
+    const target = rulerCaptureRef.current
+    rulerCaptureRef.current = null
+    cancelPendingRulerScrub()
+    if (rulerEdgeScrollRafRef.current !== null) cancelAnimationFrame(rulerEdgeScrollRafRef.current)
+    rulerEdgeScrollRafRef.current = null
+    rulerScrubClientXRef.current = null
+    rulerEdgeScrollTimestampRef.current = null
+    lastScrubbedFrameRef.current = null
+    rulerScrubActiveRef.current = false
+    if (pointerId === null) return
+    releaseKeyframePointerCapture(target, pointerId)
+    if (updateReactState) setIsRulerScrubbing(false)
+    onScrubEnd?.()
+    endTimelineSkimmerScrub(skimmerScrubOwnerRef.current)
+  }
+  useKeyframeGestureCancellation(pickWhipRootRef, (updateReactState) => {
+    cancelDiamondDrag(updateReactState)
+    cancelValueScrub(updateReactState)
+    cancelRulerScrub(updateReactState)
+  })
 
   // Match the main timeline navigation model for standalone keyframe editors:
   // - Ctrl/Cmd+wheel zooms the time axis about the cursor.
@@ -4758,6 +4821,7 @@ export const DopesheetEditor = memo(function DopesheetEditor({
                 onSegmentEasingChange={onSegmentEasingChange}
                 onSegmentDragStart={onDragStart}
                 onSegmentDragEnd={onDragEnd}
+                onSegmentDragCancel={onDragCancel}
                 setKeyframeButtonRef={setKeyframeButtonRef}
                 keyframeMetaByIdRef={keyframeMetaByIdRef}
                 sheetPreviewFrames={sheetPreviewFrames}
@@ -4799,6 +4863,7 @@ export const DopesheetEditor = memo(function DopesheetEditor({
       keyframeMetaByIdRef,
       itemId,
       onSegmentEasingChange,
+      onDragCancel,
       onDragStart,
       onDragEnd,
       presentation,
@@ -5015,6 +5080,7 @@ export const DopesheetEditor = memo(function DopesheetEditor({
       onScrubEnd={onScrubEnd}
       onDragStart={onDragStart}
       onDragEnd={onDragEnd}
+      onDragCancel={onDragCancel}
       onAddKeyframe={onAddKeyframe}
       onRemoveKeyframes={onRemoveKeyframes}
       onNavigateToKeyframe={onNavigateToKeyframe}

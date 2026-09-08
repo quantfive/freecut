@@ -1,6 +1,8 @@
 // fallow-ignore-file unused-file
 import { useState } from 'react'
 import { useSelectionStore } from '../../src/shared/state/selection'
+import { createPortal } from 'react-dom'
+import { EditorWorkspaceShell } from '../../src/features/editor/components/editor-workspace-shell'
 import { createRoot } from 'react-dom/client'
 import { FreeCutEditorSurface } from '../../src/features/editor/host/editor-surface'
 import {
@@ -190,13 +192,28 @@ window.__layoutHarness = {
   },
 }
 
-export function LayoutReview() {
+export const containment = new URLSearchParams(location.search).get('containment')
+
+function LayoutReview() {
+  const [containmentTarget, setContainmentTarget] = useState<HTMLDivElement | null>(null)
   const [chatOpen, setChatOpen] = useState(true)
   return (
     <div style={{ height: '100vh', display: 'flex', flexDirection: 'column' }}>
       <header style={{ height: 56, padding: 16, background: '#f5f6f8', color: '#14151a' }}>
         CodePress · Video editor · Layout fixture
       </header>
+      {containment && (
+        <div
+          ref={setContainmentTarget}
+          id="other-shell"
+          style={{
+            height: 120,
+            flexShrink: 0,
+            overflow: 'hidden',
+            order: containment === 'first' ? 2 : -1,
+          }}
+        />
+      )}
       <div style={{ display: 'flex', flex: 1, minHeight: 0, overflowX: 'auto' }}>
         <aside
           aria-label="Chat"
@@ -243,9 +260,18 @@ export function LayoutReview() {
             host={host}
             shell={{
               navigationActions: (
-                <button onClick={() => setChatOpen(!chatOpen)}>
-                  {chatOpen ? 'Hide Chat' : 'Show Chat'}
-                </button>
+                <>
+                  {containmentTarget &&
+                    createPortal(
+                      <EditorWorkspaceShell>
+                        <span>Containment-only second shell, no editor runtime</span>
+                      </EditorWorkspaceShell>,
+                      containmentTarget,
+                    )}
+                  <button onClick={() => setChatOpen(!chatOpen)}>
+                    {chatOpen ? 'Hide Chat' : 'Show Chat'}
+                  </button>
+                </>
               ),
               headerActions: (
                 <>

@@ -99,6 +99,42 @@ test('independent columns preserve draft/search and restore from every combinati
   await expect(page.getByRole('button', { name: 'Redo', exact: true })).toHaveCount(1)
 })
 
+test('hiding Editor pauses a playing source monitor without losing its frame', async ({ page }) => {
+  await page.goto('/tests/browser/layout-refresh.html')
+  await page.locator('[data-item-id]').first().waitFor()
+  await page.getByRole('button', { name: 'Media', exact: true }).click()
+  await page.getByText('generated-source-range.webm', { exact: true }).first().dblclick()
+  await page.getByRole('button', { name: 'Close source monitor', exact: true }).waitFor()
+  const sourceState = () =>
+    page.evaluate(async (modulePath) => {
+      const { useSourcePlayerStore } = await import(modulePath)
+      const state = useSourcePlayerStore.getState()
+      return { playing: state.playerMethods?.isPlaying(), frame: state.currentSourceFrame }
+    }, '/src/shared/state/source-player/store.ts')
+  const timelineState = () =>
+    page.evaluate(async (modulePath) => {
+      const { usePlaybackStore } = await import(modulePath)
+      return usePlaybackStore.getState().isPlaying
+    }, '/src/shared/state/playback/index.ts')
+  await page.getByRole('button', { name: 'Play (Space)', exact: true }).click()
+  await expect.poll(async () => (await sourceState()).playing).toBe(true)
+  await expect.poll(async () => (await sourceState()).frame).toBeGreaterThan(0)
+  expect(await timelineState()).toBe(false)
+  await page.getByRole('button', { name: 'Hide Editor', exact: true }).click()
+  await expect(page.locator('[data-editor-column="editor"]')).toBeHidden()
+  expect((await sourceState()).playing).toBe(false)
+  const pausedFrame = (await sourceState()).frame
+  // Observe beyond several real source clock ticks, not just the pause callback.
+  await page.waitForTimeout(250)
+  expect((await sourceState()).frame).toBe(pausedFrame)
+  await page.getByRole('button', { name: 'Show Editor', exact: true }).click()
+  expect((await sourceState()).frame).toBe(pausedFrame)
+  expect((await sourceState()).playing).toBe(false)
+  await expect(
+    page.getByRole('button', { name: 'Close source monitor', exact: true }),
+  ).toBeVisible()
+})
+
 test('host removal closes stale settings without stealing chat focus', async ({ page }) => {
   await page.goto('/tests/browser/layout-refresh.html')
   const clip = page.locator('[data-timeline-item][data-item-id="retained-video"]').first()
@@ -141,36 +177,55 @@ test('actual Hide Editor cancels a held body move before late mouseup', async ({
   expect(state.snapshot.timeline.tracks[0]!.items[0]!.from).toBe(0)
 })
 
-test('hiding Editor pauses a playing source monitor without losing its frame', async ({ page }) => {
-  await page.goto('/tests/browser/layout-refresh.html')
-  await page.locator('[data-item-id]').first().waitFor()
-  await page.getByRole('button', { name: 'Media', exact: true }).click()
-  await page.getByText('generated-source-range.webm', { exact: true }).first().dblclick()
-  await page.getByRole('button', { name: 'Close source monitor', exact: true }).waitFor()
-  const sourceState = () =>
-    page.evaluate(async (modulePath) => {
-      const { useSourcePlayerStore } = await import(modulePath)
-      const state = useSourcePlayerStore.getState()
-      return { playing: state.playerMethods?.isPlaying(), frame: state.currentSourceFrame }
-    }, '/src/shared/state/source-player/store.ts')
-  const timelineState = () =>
-    page.evaluate(async (modulePath) => {
-      const { usePlaybackStore } = await import(modulePath)
-      return usePlaybackStore.getState().isPlaying
-    }, '/src/shared/state/playback/index.ts')
-  await page.getByRole('button', { name: 'Play (Space)', exact: true }).click()
-  await expect.poll(async () => (await sourceState()).playing).toBe(true)
-  await expect.poll(async () => (await sourceState()).frame).toBeGreaterThan(0)
-  expect(await timelineState()).toBe(false)
-  await page.getByRole('button', { name: 'Hide Editor', exact: true }).click()
-  await expect(page.locator('[data-editor-column="editor"]')).toBeHidden()
-  expect((await sourceState()).playing).toBe(false)
-  const pausedFrame = (await sourceState()).frame
-  // Observe beyond several real source clock ticks, not just the pause callback.
-  await page.waitForTimeout(250)
-  expect((await sourceState()).frame).toBe(pausedFrame)
-  await page.getByRole('button', { name: 'Show Editor', exact: true }).click()
-  expect((await sourceState()).frame).toBe(pausedFrame)
-  expect((await sourceState()).playing).toBe(false)
-  await expect(page.getByRole('button', { name: 'Close source monitor', exact: true })).toBeVisible()
-})
+for (const ownership of ['first', 'second']) {
+  for (const gesture of ['body', 'trim']) {
+    test(`${gesture} cancellation stays within ${ownership} shell and tolerates duplicates`, async ({
+      page,
+    }) => {
+      await page.goto(`/tests/browser/layout-refresh.html?containment=${ownership}`)
+      const owner = page
+        .locator('[data-freecut-editor-surface="host"] [data-editor-workspace-shell]')
+        .first()
+      const other = page.locator('#other-shell [data-editor-workspace-shell]')
+      await expect(other).toBeVisible()
+      await owner.getByRole('button', { name: 'Hide Library', exact: true }).click()
+      const clip = owner.locator('[data-timeline-item][data-item-id="retained-video"]').first()
+      await clip.waitFor()
+      const target = gesture === 'trim' ? owner.locator('[data-trim-handle="end"]').first() : clip
+      await clip.click()
+      await clip.hover()
+      const box = (await target.boundingBox())!
+      const x = box.x + Math.min(box.width / 2, 80)
+      const y = box.y + box.height / 2
+      await page.mouse.move(x, y)
+      await page.mouse.down()
+      await page.mouse.move(x + (gesture === 'trim' ? -30 : 110), y, { steps: 8 })
+      const preview = () =>
+        gesture === 'body'
+          ? page.evaluate(() => window.__layoutHarness.state().dragging)
+          : owner
+              .locator('[data-trim-preview-ghost]')
+              .count()
+              .then((count) => count > 0)
+      await expect.poll(preview).toBe(true)
+      await other.evaluate((root) =>
+        root.dispatchEvent(new CustomEvent('freecut:cancel-timeline-gesture', { bubbles: true })),
+      )
+      await expect.poll(preview).toBe(true)
+      await owner.getByRole('button', { name: 'Hide Editor', exact: true }).focus()
+      await page.keyboard.press('Enter')
+      await owner.evaluate((root) => {
+        root.dispatchEvent(new CustomEvent('freecut:cancel-timeline-gesture', { bubbles: true }))
+        root.dispatchEvent(new CustomEvent('freecut:cancel-timeline-gesture', { bubbles: true }))
+      })
+      await expect.poll(preview).toBe(false)
+      await page.mouse.up()
+      await owner.getByRole('button', { name: 'Show Editor', exact: true }).click()
+      const state = await page.evaluate(() => window.__layoutHarness.state())
+      expect(state.submitCount).toBe(0)
+      expect(state.snapshot.timeline.revision).toBe(0)
+      expect(state.snapshot.timeline.tracks[0]!.items[0]!.from).toBe(0)
+      expect(state.snapshot.timeline.tracks[0]!.items[0]!.durationInFrames).toBe(60)
+    })
+  }
+}

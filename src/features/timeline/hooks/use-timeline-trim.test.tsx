@@ -75,7 +75,10 @@ function getItem(id: string): TimelineItem {
 }
 
 function renderTrimHook(item: TimelineItem, trackLocked = false) {
-  return renderHook(() => useTimelineTrim(item, TIMELINE_DURATION, trackLocked))
+  document.body.setAttribute('data-editor-workspace-shell', '')
+  return renderHook(() =>
+    useTimelineTrim(item, TIMELINE_DURATION, trackLocked, { current: document.body }),
+  )
 }
 
 interface StartOptions {
@@ -142,7 +145,10 @@ describe('useTimelineTrim', () => {
     setupStores()
   })
 
-  afterEach(() => vi.unstubAllGlobals())
+  afterEach(() => {
+    document.body.removeAttribute('data-editor-workspace-shell')
+    vi.unstubAllGlobals()
+  })
 
   describe('semantic host gesture', () => {
     function setupHost() {
@@ -186,7 +192,8 @@ describe('useTimelineTrim', () => {
           if (reason === 'unmount') unmount()
           else if (reason === 'Escape')
             window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
-          else if (reason !== 'zero delta') window.dispatchEvent(new Event(reason))
+          else if (reason !== 'zero delta')
+            document.body.dispatchEvent(new Event(reason, { bubbles: true }))
         })
         releaseMouse()
         expect(port.cancelTrim).toHaveBeenCalledExactlyOnceWith('gesture-1')
@@ -221,6 +228,7 @@ describe('useTimelineTrim', () => {
     it('only cancels when the collapsing surface owns this clip', () => {
       const { port, clip } = setupHost()
       const surface = document.createElement('div')
+      surface.setAttribute('data-editor-workspace-shell', '')
       const other = document.createElement('div')
       const owner = document.createElement('div')
       surface.append(owner)
@@ -856,7 +864,7 @@ describe('useTimelineTrim', () => {
           if (cancellation === 'Escape') {
             window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
           } else {
-            window.dispatchEvent(new Event(cancellation))
+            document.body.dispatchEvent(new Event(cancellation, { bubbles: true }))
           }
         })
 

@@ -81,6 +81,7 @@ interface SegmentEasingPopoverProps {
   onChange: SegmentEasingChange
   onDragStart?: () => void
   onDragEnd?: () => void
+  onDragCancel?: () => void
 }
 
 export function SegmentEasingPopover({
@@ -96,6 +97,7 @@ export function SegmentEasingPopover({
   onChange,
   onDragStart,
   onDragEnd,
+  onDragCancel,
 }: SegmentEasingPopoverProps) {
   const { t } = useTranslation()
   const [editing, setEditing] = useState(false)
@@ -397,12 +399,14 @@ export function SegmentEasingPopover({
             {editing ? (
               <div className="p-3">
                 <EasingCurveEditor
+                  ownerRef={triggerRef}
                   easing={easing}
                   config={easingConfig}
                   onChangeBezier={applyBezier}
                   onChangeSpring={applySpring}
                   onDragStart={onDragStart}
                   onDragEnd={onDragEnd}
+                  onDragCancel={onDragCancel}
                 />
                 <div className="mt-3 flex items-center justify-between gap-2">
                   <Button
