@@ -371,12 +371,37 @@ function assertTranscriptSplitOutsideTransition(item: TimelineItem, frame: numbe
   }
 }
 
+function transcriptOccurrenceTiming(item: TimelineItem, fps: number) {
+  const span = getItemSourceSpanSeconds(item, fps)
+  return [
+    item.mediaId,
+    item.from,
+    item.durationInFrames,
+    item.speed ?? 1,
+    !!item.isReversed,
+    span?.start,
+    span?.end,
+  ] as const
+}
+
+function assertTranscriptLinkedCohort(anchor: TimelineItem, linkedItems: TimelineItem[]): void {
+  const fps = useTimelineSettingsStore.getState().fps
+  const anchorTiming = transcriptOccurrenceTiming(anchor, fps)
+  const synchronized = linkedItems.every((item) =>
+    transcriptOccurrenceTiming(item, fps).every((value, index) => value === anchorTiming[index]),
+  )
+  if (!synchronized) {
+    throw new Error('Linked clips have different trims or timing. Align them before cutting words.')
+  }
+}
+
 function assertTranscriptRangesRepresentable(
   anchor: TimelineItem,
   ranges: RemoveSilenceRange[],
 ): void {
   const fps = useTimelineSettingsStore.getState().fps
   const linkedItems = getLinkedItemsForEdit(useItemsStore.getState().items, anchor.id, true)
+  assertTranscriptLinkedCohort(anchor, linkedItems)
   for (const range of ranges) {
     const start = Math.max(anchor.from, sourceSecondsToTimelineFrame(anchor, range.start, fps))
     const end = Math.min(
@@ -442,8 +467,11 @@ function removeTimelineRangesFromItems(
         id: item.id,
         mediaId: item.mediaId!,
         originId: item.originId ?? item.id,
-        from: item.from,
-        to: item.from + item.durationInFrames,
+        // Only these actual IDs and their split descendants belong to this selection.
+        // Shared originId/time bounds can also describe an independent stacked repeat.
+        descendantIds: new Set(
+          getLinkedItemsForEdit(initialItems, item.id, !!rangesByItemId).map((linked) => linked.id),
+        ),
       }))
 
       let splitCount = 0
@@ -503,6 +531,14 @@ function removeTimelineRangesFromItems(
 
           if (frameSplitResults.length !== itemsToSplit.length) continue
 
+          for (const descriptor of anchorDescriptors) {
+            for (const entry of frameSplitResults) {
+              if (descriptor.descendantIds.has(entry.originalId)) {
+                descriptor.descendantIds.add(entry.result.leftItem.id)
+                descriptor.descendantIds.add(entry.result.rightItem.id)
+              }
+            }
+          }
           applySplitBookkeeping(frameSplitResults)
           splitCount += 1
 
@@ -524,15 +560,12 @@ function removeTimelineRangesFromItems(
 
         for (const candidate of currentItems) {
           if (candidate.type !== 'video' && candidate.type !== 'audio') continue
-          if (candidate.mediaId !== descriptor.mediaId) continue
-          if ((candidate.originId ?? candidate.id) !== descriptor.originId) continue
-
-          if (
-            rangesByItemId &&
-            (candidate.from < descriptor.from ||
-              candidate.from + candidate.durationInFrames > descriptor.to)
-          )
-            continue
+          if (rangesByItemId) {
+            if (!descriptor.descendantIds.has(candidate.id)) continue
+          } else {
+            if (candidate.mediaId !== descriptor.mediaId) continue
+            if ((candidate.originId ?? candidate.id) !== descriptor.originId) continue
+          }
 
           const span = getItemSourceSpanSeconds(candidate, timelineFps)
           if (span !== null && isMostlyInsideRanges(span, ranges)) {
