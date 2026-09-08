@@ -3,7 +3,7 @@
 
 import '@testing-library/jest-dom'
 import '@quantfive/freecut-editor-surface/style.css'
-import { render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { beforeAll, describe, expect, it, vi } from 'vite-plus/test'
 import {
   FreeCutEditorSurface,
@@ -124,7 +124,9 @@ describe('published FreeCut browser entry', () => {
       { timeout: 10_000 },
     )
 
-    expect(screen.getByTestId('properties-clip-panel-host')).toBeInTheDocument()
+    expect(screen.queryByTestId('properties-clip-panel-host')).not.toBeInTheDocument()
+    fireEvent.click(within(view.container).getByRole('button', { name: 'Canvas settings' }))
+    expect(await screen.findByTestId('properties-clip-panel-host')).toBeInTheDocument()
     expect(await screen.findByTestId('caption-editor')).toBeInTheDocument()
     expect(HOTKEYS).toMatchObject({
       SHUTTLE_REVERSE: 'j',
