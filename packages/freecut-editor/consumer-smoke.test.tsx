@@ -3,7 +3,7 @@
 
 import '@testing-library/jest-dom'
 import '@quantfive/freecut-editor-surface/style.css'
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import { beforeAll, describe, expect, it, vi } from 'vite-plus/test'
 import {
   FreeCutEditorSurface,
@@ -113,13 +113,16 @@ function viewportHeightOffenders(root: ParentNode): string[] {
 describe('published FreeCut browser entry', () => {
   it('imports the package entry, mounts the real editor surfaces, and keeps host capability gates bounded', async () => {
     const host = fakeHost()
-    render(<FreeCutEditorSurface host={host} />)
+    const view = render(<FreeCutEditorSurface host={host} />)
 
     await waitFor(
       () => {
         expect(screen.getAllByRole('toolbar').length).toBeGreaterThanOrEqual(2)
         expect(screen.getByRole('region', { name: 'Preview area' })).toBeInTheDocument()
-        expect(screen.getByText('Timeline')).toBeInTheDocument()
+        const timelineToolbar = within(view.container).getByRole('toolbar', { name: 'Controls' })
+        expect(
+          within(timelineToolbar).getByRole('button', { name: 'Split', exact: true }),
+        ).toBeInTheDocument()
       },
       { timeout: 10_000 },
     )
