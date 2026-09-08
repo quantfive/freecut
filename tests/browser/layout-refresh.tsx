@@ -1,8 +1,18 @@
 // fallow-ignore-file unused-file
 import { useState } from 'react'
+import { useSelectionStore } from '../../src/shared/state/selection'
 import { createRoot } from 'react-dom/client'
 import { FreeCutEditorSurface } from '../../src/features/editor/host/editor-surface'
-import type { EditorHost, EmbeddedEditorSnapshot } from '../../src/features/editor/host/contract'
+import {
+  DEFAULT_HOST_CAPABILITIES,
+  type EditorHost,
+  type EmbeddedEditorSnapshot,
+} from '../../src/features/editor/host/contract'
+import {
+  createCodePressCommandAdapter,
+  freeCutDocumentToControlledDocument,
+  controlledDocumentToFreeCutDocument,
+} from '../../src/features/editor/codepress'
 
 const MEDIA_ID = 'generated-av'
 const ITEM_ID = 'retained-video'
@@ -79,10 +89,14 @@ function snapshot(
 
 let currentSnapshot = snapshot(0, 0, 60)
 let loadCount = 0
+let submitCount = 0
+let adapter = createCodePressCommandAdapter({
+  document: freeCutDocumentToControlledDocument(currentSnapshot.timeline),
+})
 const listeners = new Set<(value: EmbeddedEditorSnapshot) => void>()
 
 const host: EditorHost = {
-  capabilities: { 'media.resolve': true, 'media.transcription': true },
+  capabilities: { ...DEFAULT_HOST_CAPABILITIES, 'media.transcription': true },
   transcript: {
     getStatus: () => ({
       transcriptId: 'layout-transcript',
@@ -124,8 +138,16 @@ const host: EditorHost = {
     return currentSnapshot
   },
   resolveMedia: ({ mediaId }) => (mediaId === MEDIA_ID ? { source: MEDIA_SOURCE } : null),
-  submitEdit: () => {
-    throw new Error('The source-range fixture does not submit edits')
+  submitEdit: (batch) => {
+    submitCount += 1
+    const result = adapter.apply(batch)
+    if (result.status === 'rejected')
+      return { status: 'rejected', snapshot: currentSnapshot, result }
+    currentSnapshot = {
+      ...currentSnapshot,
+      timeline: controlledDocumentToFreeCutDocument(adapter.getDocument()),
+    }
+    return { status: result.status, snapshot: currentSnapshot, result }
   },
   subscribe: (listener) => {
     listeners.add(listener)
@@ -133,7 +155,42 @@ const host: EditorHost = {
   },
 }
 
-function LayoutReview() {
+declare global {
+  interface Window {
+    __layoutHarness: {
+      state(): { snapshot: EmbeddedEditorSnapshot; submitCount: number; dragging: boolean }
+      removeClip(): void
+    }
+  }
+}
+window.__layoutHarness = {
+  state: () => ({
+    snapshot: currentSnapshot,
+    submitCount,
+    dragging: useSelectionStore.getState().dragState?.isDragging === true,
+  }),
+  removeClip: () => {
+    currentSnapshot = {
+      ...currentSnapshot,
+      timeline: {
+        ...currentSnapshot.timeline,
+        revision: currentSnapshot.timeline.revision + 1,
+        tracks: currentSnapshot.timeline.tracks.map(
+          (track: EmbeddedEditorSnapshot['timeline']['tracks'][number]) => ({
+            ...track,
+            items: [],
+          }),
+        ),
+      },
+    }
+    adapter = createCodePressCommandAdapter({
+      document: freeCutDocumentToControlledDocument(currentSnapshot.timeline),
+    })
+    listeners.forEach((listener) => listener(currentSnapshot))
+  },
+}
+
+export function LayoutReview() {
   const [chatOpen, setChatOpen] = useState(true)
   return (
     <div style={{ height: '100vh', display: 'flex', flexDirection: 'column' }}>

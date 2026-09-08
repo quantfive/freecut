@@ -109,6 +109,34 @@ describe('editor workspace columns', () => {
       screen.getByRole('button', { name: 'editor.refresh.canvasSettings' }),
     )
   })
+  it('closes stale settings without stealing focus from the host chat', () => {
+    const workspace = (
+      <>
+        <textarea aria-label="Host chat" />
+        <EditorWorkspaceShell>
+          <div />
+        </EditorWorkspaceShell>
+      </>
+    )
+    const { rerender } = render(workspace)
+    fireEvent.click(screen.getByRole('button', { name: 'editor.refresh.clipSettings' }))
+    const chat = screen.getByRole('textbox', { name: 'Host chat' })
+    chat.focus()
+    selection.selectedItemIds = []
+    rerender(
+      <>
+        <textarea aria-label="Host chat" />
+        <EditorWorkspaceShell>
+          <div />
+        </EditorWorkspaceShell>
+      </>,
+    )
+    expect(screen.queryByRole('region', { name: 'editor.refresh.settings' })).toBeNull()
+    expect(document.activeElement).toBe(chat)
+    fireEvent.change(chat, { target: { value: 'continue the draft' } })
+    expect(chat).toHaveValue('continue the draft')
+  })
+
   it('resizes with keyboard without resetting the reading state', () => {
     render(
       <EditorWorkspaceShell>
