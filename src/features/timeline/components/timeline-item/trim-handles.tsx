@@ -1,4 +1,5 @@
 import { memo } from 'react'
+import { useTranslation } from 'react-i18next'
 import {
   ContextMenu,
   ContextMenuContent,
@@ -36,6 +37,8 @@ const ROLL_COLORS: EdgeColors = {
 }
 
 interface TrimHandlesProps {
+  isSelected?: boolean
+  clipWidth?: number
   trackLocked: boolean
   isAnyDragActive: boolean
   isTrimming: boolean
@@ -76,6 +79,8 @@ function resolveEdgeColors(
  * Roll mode additionally renders a double-edge across the edit point.
  */
 export const TrimHandles = memo(function TrimHandles({
+  isSelected = false,
+  clipWidth = 100,
   trackLocked,
   isAnyDragActive,
   isTrimming,
@@ -95,6 +100,7 @@ export const TrimHandles = memo(function TrimHandles({
   onJoinLeft,
   onJoinRight,
 }: TrimHandlesProps) {
+  const { t } = useTranslation()
   const hotkeys = useResolvedHotkeys()
   const joinShortcutLabel = formatHotkeyBinding(hotkeys.JOIN_ITEMS)
   const isRollingStart = smartTrimIntent === 'roll-start'
@@ -117,7 +123,8 @@ export const TrimHandles = memo(function TrimHandles({
     !trackLocked &&
     (!isAnyDragActive || isTrimming || leftActive) &&
     (activeTool === 'select' || activeTool === 'trim-edit') &&
-    (hoveredEdge === 'start' ||
+    (isSelected ||
+      hoveredEdge !== null ||
       (isTrimming && trimHandle === 'start') ||
       isNeighborRollStart ||
       leftActive)
@@ -126,7 +133,8 @@ export const TrimHandles = memo(function TrimHandles({
     !trackLocked &&
     (!isAnyDragActive || isTrimming || rightActive) &&
     (activeTool === 'select' || activeTool === 'trim-edit') &&
-    (hoveredEdge === 'end' ||
+    (isSelected ||
+      hoveredEdge !== null ||
       (isTrimming && trimHandle === 'end') ||
       isNeighborRollEnd ||
       rightActive)
@@ -144,6 +152,8 @@ export const TrimHandles = memo(function TrimHandles({
     rightConstrained,
   )
 
+  const narrow = clipWidth < 36
+
   return (
     <>
       {/* Left trim handle */}
@@ -151,13 +161,22 @@ export const TrimHandles = memo(function TrimHandles({
         <ContextMenuTrigger asChild disabled={trackLocked || !hasJoinableLeft}>
           <div
             data-trim-handle="start"
+            aria-label={t('timeline.trim.start', { defaultValue: 'Trim start' })}
+            data-tooltip={
+              isTrimming ? undefined : t('timeline.trim.start', { defaultValue: 'Trim start' })
+            }
+            style={narrow ? { bottom: '50%' } : undefined}
             className={cn(
-              'absolute left-0 top-0 bottom-0 w-3 transition-opacity duration-75',
+              'absolute left-0 top-0 bottom-0 w-3 z-40 transition-opacity duration-75',
               startCursorClass,
               showLeftHandle ? 'opacity-100' : 'opacity-0 pointer-events-none',
             )}
             onMouseDown={(e) => onTrimStart(e, 'start')}
           >
+            <span
+              aria-hidden="true"
+              className="absolute left-1 top-1/2 h-4 w-1 -translate-y-1/2 rounded-full bg-white/90"
+            />
             {/* Halo visuals — only during hover; active operations use external overlay */}
             {!activeEdges && (
               <>
@@ -211,13 +230,22 @@ export const TrimHandles = memo(function TrimHandles({
         <ContextMenuTrigger asChild disabled={trackLocked || !hasJoinableRight}>
           <div
             data-trim-handle="end"
+            aria-label={t('timeline.trim.end', { defaultValue: 'Trim end' })}
+            data-tooltip={
+              isTrimming ? undefined : t('timeline.trim.end', { defaultValue: 'Trim end' })
+            }
+            style={narrow ? { top: '50%' } : undefined}
             className={cn(
-              'absolute right-0 top-0 bottom-0 w-3 transition-opacity duration-75',
+              'absolute right-0 top-0 bottom-0 w-3 z-40 transition-opacity duration-75',
               endCursorClass,
               showRightHandle ? 'opacity-100' : 'opacity-0 pointer-events-none',
             )}
             onMouseDown={(e) => onTrimStart(e, 'end')}
           >
+            <span
+              aria-hidden="true"
+              className="absolute right-1 top-1/2 h-4 w-1 -translate-y-1/2 rounded-full bg-white/90"
+            />
             {!activeEdges && (
               <>
                 <div

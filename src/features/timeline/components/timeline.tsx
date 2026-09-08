@@ -158,6 +158,7 @@ export const Timeline = memo(function Timeline({ duration, compact = false }: Ti
     handleZoomIn: () => void
     handleZoomOut: () => void
     handleZoomToFit: () => void
+    handleZoomToSelection: () => void
   } | null>(null)
   const [trackRowsViewportHeight, setTrackRowsViewportHeight] = useState(0)
   // A/V divider position is a viewport layout preference, persisted globally in
@@ -857,7 +858,7 @@ export const Timeline = memo(function Timeline({ duration, compact = false }: Ti
                 resizeHandlePosition={getTrackKind(track) === 'video' ? 'top' : 'bottom'}
               >
                 <TrackHeader
-                  compact={compact}
+                  compact
                   track={track}
                   isActive={activeTrackId === track.id}
                   isSelected={selectedTrackIdsSet.has(track.id)}
@@ -927,7 +928,7 @@ export const Timeline = memo(function Timeline({ duration, compact = false }: Ti
       className="timeline-bg h-full border-t border-border flex flex-col overflow-hidden"
       data-compact-timeline={compact ? 'true' : 'false'}
       style={
-        compact ? ({ '--editor-timeline-sidebar-width': '80px' } as React.CSSProperties) : undefined
+        { '--editor-timeline-sidebar-width': compact ? '80px' : '144px' } as React.CSSProperties
       }
       role="region"
       aria-label={t('timeline.region')}
@@ -939,6 +940,7 @@ export const Timeline = memo(function Timeline({ duration, compact = false }: Ti
         onZoomIn={zoomHandlers?.handleZoomIn}
         onZoomOut={zoomHandlers?.handleZoomOut}
         onZoomToFit={zoomHandlers?.handleZoomToFit}
+        onZoomToSelection={zoomHandlers?.handleZoomToSelection}
       />
 
       {/* Standalone-timeline (sequence) tabs — Main + top-level sequences */}
@@ -1122,7 +1124,7 @@ export const Timeline = memo(function Timeline({ duration, compact = false }: Ti
         isOpen={!hostMode && keyframePanelOpen}
         placement="bottom"
         surface="edit"
-        propertyColumnWidth={(compact ? 80 : editorLayout.timelineSidebarWidth) - 1}
+        propertyColumnWidth={(compact ? 80 : 144) - 1}
         timelineScrollContainerRef={timelineContentRef}
         onClose={() => setKeyframePanelOpen(false)}
       />
