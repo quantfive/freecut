@@ -316,7 +316,7 @@ export const TimelineItem = memo(function TimelineItem({
 
   // Rate stretch functionality - disabled if track is locked
   const { isStretching, stretchHandle, stretchConstrained, handleStretchStart, getVisualFeedback } =
-    useRateStretch(item, timelineDuration, trackLocked)
+    useRateStretch(item, timelineDuration, trackLocked, transformRef)
 
   // Slip/Slide functionality - disabled if track is locked
   const {
@@ -325,7 +325,7 @@ export const TimelineItem = memo(function TimelineItem({
     slipSlideConstrained,
     slipSlideConstraintEdge,
     handleSlipSlideStart,
-  } = useTimelineSlipSlide(item, timelineDuration, trackLocked)
+  } = useTimelineSlipSlide(item, timelineDuration, trackLocked, transformRef)
 
   // Track push functionality - move clip + downstream items to close/open gaps
   const { isTrackPushActive, handleTrackPushStart } = useTrackPush(

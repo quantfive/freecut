@@ -1,3 +1,4 @@
+import { useTimelineGestureCancellation } from './use-timeline-gesture-cancellation'
 import { useState, useCallback, useRef, useEffect, useEffectEvent } from 'react'
 import type { TimelineItem } from '@/types/timeline'
 import { useEditorStore } from '@/shared/state/editor'
@@ -262,6 +263,7 @@ export function useRateStretch(
   item: TimelineItem,
   timelineDuration: number,
   trackLocked: boolean = false,
+  ownerRef?: React.RefObject<HTMLElement | null>,
 ) {
   const pixelsToTime = pixelsToTimeNow
   const fps = useTimelineStore((s) => s.fps)
@@ -281,7 +283,7 @@ export function useRateStretch(
     item.id,
   )
 
-  const [stretchState, setStretchState] = useState<StretchState>({
+  const [stretchState, setReactState] = useState<StretchState>({
     isStretching: false,
     handle: null,
     startX: 0,
@@ -298,6 +300,11 @@ export function useRateStretch(
 
   const stretchStateRef = useRef(stretchState)
   stretchStateRef.current = stretchState
+  const setStretchState = useCallback((next: React.SetStateAction<typeof stretchState>) => {
+    const value = typeof next === 'function' ? next(stretchStateRef.current) : next
+    stretchStateRef.current = value
+    setReactState(value)
+  }, [])
 
   // Track previous snap target to avoid unnecessary store updates
   const prevSnapTargetRef = useRef<{ frame: number; type: string } | null>(null)
@@ -515,6 +522,39 @@ export function useRateStretch(
     })
   })
 
+  const cancelGesture = useCallback(
+    (updateReactState = true) => {
+      if (!stretchStateRef.current.isStretching) return
+      stretchStateRef.current = { ...stretchStateRef.current, isStretching: false }
+      // Clear drag state (including snap indicator)
+      setActiveSnapTarget(null)
+      setDragState(null)
+      useLinkedEditPreviewStore.getState().clear()
+      prevSnapTargetRef.current = null
+      magneticSnapTargetsRef.current = []
+
+      const idle: StretchState = {
+        isStretching: false,
+        handle: null,
+        startX: 0,
+        initialFrom: 0,
+        initialDuration: 0,
+        sourceDuration: 0,
+        sourceFps: 30,
+        initialSpeed: 1,
+        currentDelta: 0,
+        isLoopingMedia: false,
+        isConstrained: false,
+        constraintLabel: null,
+      }
+      stretchStateRef.current = idle
+      if (updateReactState) setStretchState(idle)
+    },
+    [setActiveSnapTarget, setDragState, setStretchState],
+  )
+
+  useTimelineGestureCancellation(ownerRef, cancelGesture)
+
   // Mouse up handler - commits changes to store (single update)
   // Using useEffectEvent so changes to item.id, rateStretchItem don't re-register listeners
   const onMouseUp = useEffectEvent(() => {
@@ -529,6 +569,7 @@ export function useRateStretch(
         currentDelta,
         isLoopingMedia,
       } = stretchStateRef.current
+      cancelGesture()
 
       let newDuration: number
       let newFrom: number
@@ -580,28 +621,6 @@ export function useRateStretch(
           rateStretchItem(item.id, newFrom, newDuration, newSpeed)
         }
       }
-
-      // Clear drag state (including snap indicator)
-      setActiveSnapTarget(null)
-      setDragState(null)
-      useLinkedEditPreviewStore.getState().clear()
-      prevSnapTargetRef.current = null
-      magneticSnapTargetsRef.current = []
-
-      setStretchState({
-        isStretching: false,
-        handle: null,
-        startX: 0,
-        initialFrom: 0,
-        initialDuration: 0,
-        sourceDuration: 0,
-        sourceFps: 30,
-        initialSpeed: 1,
-        currentDelta: 0,
-        isLoopingMedia: false,
-        isConstrained: false,
-        constraintLabel: null,
-      })
     }
   })
 
@@ -697,6 +716,7 @@ export function useRateStretch(
       setActiveSnapTarget,
       setDragState,
       getMagneticSnapTargets,
+      setStretchState,
     ],
   )
 
