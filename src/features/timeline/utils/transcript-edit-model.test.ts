@@ -91,8 +91,8 @@ describe('buildTranscriptTokens', () => {
 
   it('does not duplicate words for a linked video + audio pair', () => {
     // Same media, same source span (a linked companion) — words appear once.
-    const video = makeItem({ id: 'v', type: 'video', mediaId: 'm1' })
-    const audio = makeItem({ id: 'a', type: 'audio', mediaId: 'm1' })
+    const video = makeItem({ id: 'v', type: 'video', mediaId: 'm1', linkedGroupId: 'linked' })
+    const audio = makeItem({ id: 'a', type: 'audio', mediaId: 'm1', linkedGroupId: 'linked' })
     const transcript = makeTranscript('m1', [
       { text: 'hello', start: 0, end: 0.5 },
       { text: 'world', start: 0.5, end: 1.0 },
@@ -134,9 +134,8 @@ describe('buildTranscriptTokens', () => {
     expect(tokens.every((t) => t.itemId === 'v')).toBe(true)
   })
 
-  it('collapses identical, identically-timed tokens from different media', () => {
-    // Same footage imported as two separate media (different mediaIds) stacked at
-    // the same spot escapes per-media dedup, so the token-level net must catch it.
+  it('retains independent identical words from different media', () => {
+    // Independently placed sources must remain independently selectable.
     const a = makeItem({ id: 'a', type: 'video', mediaId: 'm1', from: 0, durationInFrames: 300 })
     const b = makeItem({ id: 'b', type: 'audio', mediaId: 'm2', from: 0, durationInFrames: 300 })
     const words = [
@@ -149,7 +148,7 @@ describe('buildTranscriptTokens', () => {
       { m1: makeTranscript('m1', words), m2: makeTranscript('m2', words) },
       FPS,
     )
-    expect(tokens.map((t) => t.text)).toEqual(['hello', 'world'])
+    expect(tokens.map((t) => t.text)).toEqual(['hello', 'hello', 'world', 'world'])
   })
 
   it('keeps distinct trims of the same media', () => {

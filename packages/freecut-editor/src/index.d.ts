@@ -304,7 +304,16 @@ export interface HostTranscriptStatusReceipt {
   error?: HostTranscriptError | null
 }
 
+/** Only measured provider timings are eligible for word editing. */
+export interface HostTranscriptWord {
+  startUs: number
+  endUs: number
+  text: string
+}
+
 export interface HostTranscriptSection {
+  timingSource?: 'provider' | 'synthetic'
+  words?: readonly HostTranscriptWord[] | null
   id: string
   transcriptId: string
   ordinal: number
@@ -345,6 +354,8 @@ export interface HostTranscriptSearchPage {
 }
 
 export interface HostTranscriptRange {
+  /** Exact sequence occurrence; omitted retains legacy all-occurrences behavior. */
+  itemId?: string
   startUs: number
   endUs: number
   text?: string
@@ -391,6 +402,8 @@ export interface HostTranscriptCommandPreview {
 }
 
 export interface EditorTranscriptPort {
+  /** Explicit opt-in: this host validates range.itemId and never broadens its scope. */
+  occurrenceSelection?: boolean
   getStatus(): Promise<HostTranscriptStatusReceipt | null> | HostTranscriptStatusReceipt | null
   requestTranscription?(input: {
     assetId: string
