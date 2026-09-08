@@ -181,3 +181,38 @@ test('selected occurrence captions undo in one transaction', async ({ page }) =>
     ),
   ).toBe(3)
 })
+
+for (const returnToFirst of [false, true]) {
+  test(`pending selected caption preview rejects A→B${returnToFirst ? '→A' : ''}`, async ({
+    page,
+  }) => {
+    await page.goto('/tests/browser/caption-refresh.html?scenario=deferred')
+    const first = page.locator('[data-item-id="first"][role="button"]')
+    const second = page.locator('[data-item-id="after-cut"][role="button"]')
+    await first.click()
+    await page.getByRole('combobox', { name: 'More library tools' }).selectOption('captions')
+    await page.getByLabel('Caption scope').selectOption('selected')
+    await page.getByRole('button', { name: 'Preview captions', exact: true }).click()
+    await expect
+      .poll(() => page.evaluate(() => (window as any).captionFixture.requests.length))
+      .toBe(1)
+    await second.click()
+    if (returnToFirst) await first.click()
+    await page.evaluate(() => (window as any).captionFixture.resolvePreview())
+    await expect(page.getByRole('alert')).toContainText('selection changed')
+    await expect(page.getByRole('button', { name: 'Apply captions', exact: true })).toHaveCount(0)
+    expect(await page.evaluate(() => (window as any).captionFixture.applies)).toBe(0)
+    await page.getByRole('button', { name: 'Preview captions', exact: true }).click()
+    await expect
+      .poll(() => page.evaluate(() => (window as any).captionFixture.requests.length))
+      .toBe(2)
+    expect(
+      await page.evaluate(() =>
+        (window as any).captionFixture.requests[1].ranges.map((range: any) => range.itemId),
+      ),
+    ).toEqual([returnToFirst ? 'first' : 'after-cut'])
+    await page.evaluate(() => (window as any).captionFixture.resolvePreview())
+    await page.getByRole('button', { name: 'Apply captions', exact: true }).click()
+    expect(await page.evaluate(() => (window as any).captionFixture.applies)).toBe(1)
+  })
+}

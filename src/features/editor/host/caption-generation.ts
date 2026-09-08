@@ -47,26 +47,34 @@ export function captionRangesForEdit(
   const clips = new Map(
     document.tracks.flatMap((track) => track.items).map((item) => [item.id, item]),
   )
-  const words = mapHostTranscriptWords(document, assetId, sections)
-    .filter((word) => !selectedItemIds || selectedItemIds.has(word.itemId))
-    .map((word) => {
-      const clip = clips.get(word.itemId)!
-      if (clip.type !== 'video' && clip.type !== 'audio') return word
-      return {
-        ...word,
-        sourceStartUs: Math.max(
-          word.sourceStartUs,
-          framesToMicroseconds(clip.sourceStart ?? 0, document.fps),
-        ),
-        sourceEndUs: Math.min(
-          word.sourceEndUs,
-          framesToMicroseconds(
-            clip.sourceEnd ?? (clip.sourceStart ?? 0) + clip.durationInFrames * (clip.speed ?? 1),
-            document.fps,
-          ),
-        ),
+  // Scope before linked-cohort deduplication so individually selected audio retains its identity.
+  const scopedDocument = selectedItemIds
+    ? {
+        ...document,
+        tracks: document.tracks.map((track) => ({
+          ...track,
+          items: track.items.filter((item) => selectedItemIds.has(item.id)),
+        })),
       }
-    })
+    : document
+  const words = mapHostTranscriptWords(scopedDocument, assetId, sections).map((word) => {
+    const clip = clips.get(word.itemId)!
+    if (clip.type !== 'video' && clip.type !== 'audio') return word
+    return {
+      ...word,
+      sourceStartUs: Math.max(
+        word.sourceStartUs,
+        framesToMicroseconds(clip.sourceStart ?? 0, document.fps),
+      ),
+      sourceEndUs: Math.min(
+        word.sourceEndUs,
+        framesToMicroseconds(
+          clip.sourceEnd ?? (clip.sourceStart ?? 0) + clip.durationInFrames * (clip.speed ?? 1),
+          document.fps,
+        ),
+      ),
+    }
+  })
   const ranges = hostWordSelectionRanges(words)
   if (!ranges.length)
     throw new Error(
