@@ -118,6 +118,27 @@ describe('VideoSourcePool', () => {
     expect(videoMocks.createdVideos[1]!.play).toHaveBeenCalledTimes(1)
   })
 
+  it('sets anonymous CORS before starting a remote media request', () => {
+    const descriptor = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'src')!
+    const requestModes: Array<string | null> = []
+    const setter = vi.spyOn(HTMLMediaElement.prototype, 'src', 'set').mockImplementation(function (
+      this: HTMLMediaElement,
+      value: string,
+    ) {
+      requestModes.push(this.crossOrigin)
+      descriptor.set!.call(this, value)
+    })
+    const pool = new VideoSourcePool()
+    try {
+      expect(pool.acquireForClip('remote-clip', 'https://cdn.example.com/video.mp4')).not.toBeNull()
+      expect(requestModes.length).toBeGreaterThan(0)
+      expect(requestModes.every((mode) => mode === 'anonymous')).toBe(true)
+    } finally {
+      setter.mockRestore()
+      pool.dispose()
+    }
+  })
+
   it('reuses a clip assignment during sticky release windows', async () => {
     vi.useFakeTimers()
     const pool = new VideoSourcePool()

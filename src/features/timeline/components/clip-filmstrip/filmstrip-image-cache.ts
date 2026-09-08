@@ -32,6 +32,7 @@ function prune(): void {
 
 function createEntry(url: string): CachedFilmstripImage {
   const image = new Image()
+  image.crossOrigin = 'anonymous'
   image.decoding = 'async'
   const entry: CachedFilmstripImage = {
     image,

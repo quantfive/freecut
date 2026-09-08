@@ -1,8 +1,5 @@
 import React from 'react'
-import {
-  AbsoluteFill,
-  useClockPlaybackRate,
-} from '@/runtime/composition-runtime/deps/player'
+import { AbsoluteFill, useClockPlaybackRate } from '@/runtime/composition-runtime/deps/player'
 import { useDebugStore, useGizmoStore } from '@/runtime/composition-runtime/deps/stores'
 import type { AudioItem, CompositionItem, TimelineItem, ShapeItem } from '@/types/timeline'
 import type { ResolvedAudioEqSettings } from '@/types/audio'
@@ -541,6 +538,7 @@ export const ItemContent = React.memo<ItemProps>(
       // Regular static images - use native img element
       const imageContent = (
         <img
+          crossOrigin="anonymous"
           src={item.src}
           alt=""
           style={{
