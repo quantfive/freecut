@@ -48,6 +48,7 @@ export type {
   HostTranscriptSearchPage,
   HostTranscriptSearchRequest,
   HostTranscriptSection,
+  HostTranscriptWord,
   HostTranscriptSectionsPage,
   HostTranscriptSectionsRequest,
   HostTranscriptStatus,
