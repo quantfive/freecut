@@ -1,3 +1,7 @@
+import {
+  useKeyframeGestureCancellation,
+  releaseKeyframePointerCapture,
+} from '../use-keyframe-gesture-cancellation'
 /**
  * Graph interaction hook.
  * Handles pointer events, dragging, zoom, and pan for the value graph editor.
@@ -44,6 +48,7 @@ export function useGraphInteraction({
   onBezierHandleMove,
   onDragStart,
   onDragEnd,
+  onDragCancel,
   snapEnabled = false,
   snapFrameTargets = [],
   snapValueTargets = [],
@@ -93,6 +98,7 @@ export function useGraphInteraction({
     onBackgroundClick,
     onDragStart,
     onDragEnd,
+    onDragCancel,
   })
   useEffect(() => {
     callbacksRef.current = {
@@ -104,6 +110,7 @@ export function useGraphInteraction({
       onBackgroundClick,
       onDragStart,
       onDragEnd,
+      onDragCancel,
     }
   }, [
     onKeyframeMove,
@@ -114,6 +121,7 @@ export function useGraphInteraction({
     onBackgroundClick,
     onDragStart,
     onDragEnd,
+    onDragCancel,
   ])
 
   // Track whether we've called onDragStart for the current drag operation
@@ -733,6 +741,28 @@ export function useGraphInteraction({
     },
     [dragStateType, marqueeStateRef],
   )
+
+  useKeyframeGestureCancellation(svgRef, (updateReactState) => {
+    const pointerId = dragStartRef.current?.pointerId ?? bezierDragStartRef.current?.pointerId
+    const target = svgRef.current
+    const started = dragStartCalledRef.current
+    dragStartRef.current = null
+    bezierDragStartRef.current = null
+    previewValuesRef.current = null
+    previewBezierConfigsRef.current = null
+    dragStartCalledRef.current = false
+    svgRef.current = null
+    if (pointerId !== undefined) releaseKeyframePointerCapture(target, pointerId)
+    if (updateReactState) {
+      setDragState(null)
+      setIsDragging(false)
+      setPreviewValues(null)
+      setPreviewBezierConfigs(null)
+      setDraggingHandle(null)
+      setConstraintAxis(null)
+    }
+    if (started) callbacksRef.current.onDragCancel?.()
+  })
 
   const { handleWheel } = useGraphWheel({
     disabled,

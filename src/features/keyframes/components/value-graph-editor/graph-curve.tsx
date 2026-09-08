@@ -1,3 +1,7 @@
+import {
+  useKeyframeGestureCancellation,
+  releaseKeyframePointerCapture,
+} from '../use-keyframe-gesture-cancellation'
 /**
  * Graph curve component.
  * Renders interpolation curves between keyframes on the value graph.
@@ -261,10 +265,13 @@ export const GraphPlayhead = memo(function GraphPlayhead({
   // directly. On settled seek/zoom the editor re-renders and the layout effect
   // below repositions from the `frame` prop.
   const groupRef = useRef<SVGGElement>(null)
+  const cancelGestureRef = useRef<(() => void) | null>(null)
+  useKeyframeGestureCancellation(groupRef, () => cancelGestureRef.current?.())
   const {
     startScrub: startPlayheadScrub,
     queueScrub: queuePlayheadScrub,
     flushPendingScrub: flushPendingPlayheadScrub,
+    cancelPendingScrub: cancelPendingPlayheadScrub,
   } = useCoalescedScrub(onScrub)
 
   useLayoutEffect(() => {
@@ -306,14 +313,17 @@ export const GraphPlayhead = memo(function GraphPlayhead({
     const svg = (event.target as SVGElement).ownerSVGElement
     if (!svg) return
 
+    cancelGestureRef.current?.()
     // Notify scrub start
     onScrubStart?.()
 
     // Capture pointer for drag
     svg.setPointerCapture(event.pointerId)
     let lastScrubbedFrame: number | null = null
+    let active = true
 
     const handlePointerMove = (e: PointerEvent) => {
+      if (!active || e.pointerId !== event.pointerId) return
       e.preventDefault()
       e.stopPropagation()
       const rect = svg.getBoundingClientRect()
@@ -332,18 +342,25 @@ export const GraphPlayhead = memo(function GraphPlayhead({
 
     // Also handles pointercancel — a system-interrupted gesture (capture lost,
     // touch cancelled) must clean up exactly like a normal release.
-    const handlePointerUp = (e: PointerEvent) => {
-      e.preventDefault()
-      e.stopPropagation()
-      svg.releasePointerCapture(event.pointerId)
+    const finish = (commit: boolean) => {
+      if (!active) return
+      active = false
+      cancelGestureRef.current = null
+      releaseKeyframePointerCapture(svg, event.pointerId)
       svg.removeEventListener('pointermove', handlePointerMove)
       svg.removeEventListener('pointerup', handlePointerUp)
       svg.removeEventListener('pointercancel', handlePointerUp)
-      flushPendingPlayheadScrub(true)
-
-      // Notify scrub end
+      if (commit) flushPendingPlayheadScrub(true)
+      else cancelPendingPlayheadScrub()
       onScrubEnd?.()
     }
+    const handlePointerUp = (e: PointerEvent) => {
+      if (!active || e.pointerId !== event.pointerId) return
+      e.preventDefault()
+      e.stopPropagation()
+      finish(true)
+    }
+    cancelGestureRef.current = () => finish(false)
 
     svg.addEventListener('pointermove', handlePointerMove)
     svg.addEventListener('pointerup', handlePointerUp)

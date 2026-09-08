@@ -56,6 +56,7 @@ interface DopesheetGraphPaneProps {
   onScrubEnd?: () => void
   onDragStart?: () => void
   onDragEnd?: () => void
+  onDragCancel?: () => void
   onAddKeyframe?: (property: AnimatableProperty, frame: number) => void
   onRemoveKeyframes?: (refs: KeyframeRef[]) => void
   onNavigateToKeyframe?: (frame: number) => void
@@ -112,6 +113,7 @@ export function DopesheetGraphPane({
   onScrubEnd,
   onDragStart,
   onDragEnd,
+  onDragCancel,
   onAddKeyframe,
   onRemoveKeyframes,
   onNavigateToKeyframe,
@@ -179,6 +181,7 @@ export function DopesheetGraphPane({
               onScrubEnd={onScrubEnd}
               onDragStart={onDragStart}
               onDragEnd={onDragEnd}
+              onDragCancel={onDragCancel}
               onAddKeyframe={onAddKeyframe}
               onRemoveKeyframes={onRemoveKeyframes}
               onNavigateToKeyframe={onNavigateToKeyframe}
