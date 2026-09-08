@@ -332,6 +332,7 @@ export const TimelineItem = memo(function TimelineItem({
     item,
     timelineDuration,
     trackLocked,
+    transformRef,
   )
 
   useActiveGlobalCursor({

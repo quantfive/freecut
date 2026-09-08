@@ -1,3 +1,4 @@
+import { useTimelineGestureCancellation } from '../../hooks/use-timeline-gesture-cancellation'
 import {
   useCallback,
   useEffect,
@@ -140,6 +141,7 @@ export function useFadeEditors({
   const audioFadeCurveCleanupRef = useRef<(() => void) | null>(null)
 
   const [audioVolumeEdit, setAudioVolumeEdit] = useState<AudioVolumeEditState | null>(null)
+  const rollbackAudioVolumeRef = useRef<(() => void) | null>(null)
   const audioVolumeCleanupRef = useRef<(() => void) | null>(null)
   const audioVolumePreviewRef = useRef(item.type === 'audio' ? (item.volume ?? 0) : 0)
   const audioVolumeEditLabelRef = useRef<HTMLElement | null>(null)
@@ -147,16 +149,6 @@ export function useFadeEditors({
   const videoControlsRef = useRef<HTMLDivElement | null>(null)
   const audioControlsRef = useRef<HTMLDivElement | null>(null)
   const volumeLineRef = useRef<HTMLDivElement | null>(null)
-
-  useEffect(
-    () => () => {
-      videoFadeCleanupRef.current?.()
-      audioFadeCleanupRef.current?.()
-      audioFadeCurveCleanupRef.current?.()
-      audioVolumeCleanupRef.current?.()
-    },
-    [],
-  )
 
   const displayedVideoFadeIn = isVisualFadeItem
     ? (videoFadeEdit?.previewFadeIn ?? item.fadeIn ?? 0)
@@ -230,6 +222,40 @@ export function useFadeEditors({
     },
     [snapVolumeLineTop, transformRef],
   )
+
+  useTimelineGestureCancellation(transformRef, (updateReactState) => {
+    const videoCleanup = videoFadeCleanupRef.current
+    const audioCleanup = audioFadeCleanupRef.current
+    const curveCleanup = audioFadeCurveCleanupRef.current
+    const volumeCleanup = audioVolumeCleanupRef.current
+    // Consume owners before removing listeners or notifying preview subscribers.
+    videoFadeCleanupRef.current = null
+    audioFadeCleanupRef.current = null
+    audioFadeCurveCleanupRef.current = null
+    audioVolumeCleanupRef.current = null
+    videoCleanup?.()
+    audioCleanup?.()
+    curveCleanup?.()
+    volumeCleanup?.()
+    if (videoCleanup) {
+      videoFadeEditRef.current = null
+      if (updateReactState) setVideoFadeEdit(null)
+    }
+    if (audioCleanup) {
+      audioFadeEditRef.current = null
+      if (updateReactState) setAudioFadeEdit(null)
+    }
+    if (curveCleanup) {
+      audioFadeCurveEditRef.current = null
+      if (updateReactState) setAudioFadeCurveEdit(null)
+    }
+    if (volumeCleanup) {
+      const rollback = rollbackAudioVolumeRef.current
+      rollbackAudioVolumeRef.current = null
+      rollback?.()
+      if (updateReactState) setAudioVolumeEdit(null)
+    }
+  })
 
   const itemType = item.type
   const itemVolume = item.volume
@@ -370,6 +396,7 @@ export function useFadeEditors({
 
       e.preventDefault()
       e.stopPropagation()
+      let gestureLive = true
 
       const originalFadeIn = displayedVideoFadeIn
       const originalFadeOut = displayedVideoFadeOut
@@ -403,6 +430,7 @@ export function useFadeEditors({
       }
 
       const finishEdit = () => {
+        if (!gestureLive) return
         const latestState = videoFadeEditRef.current
         const committedFade =
           handle === 'in'
@@ -429,15 +457,18 @@ export function useFadeEditors({
       applyPreview(computeFadeSeconds(e.clientX))
 
       const handleWindowMouseMove = (event: MouseEvent) => {
+        if (!gestureLive) return
         applyPreview(computeFadeSeconds(event.clientX))
       }
       const handleWindowMouseUp = () => {
+        if (!gestureLive) return
         finishEdit()
       }
 
       window.addEventListener('mousemove', handleWindowMouseMove)
       window.addEventListener('mouseup', handleWindowMouseUp, { once: true })
       videoFadeCleanupRef.current = () => {
+        gestureLive = false
         window.removeEventListener('mousemove', handleWindowMouseMove)
         window.removeEventListener('mouseup', handleWindowMouseUp)
       }
@@ -469,6 +500,7 @@ export function useFadeEditors({
 
       e.preventDefault()
       e.stopPropagation()
+      let gestureLive = true
 
       const originalFadeIn = displayedAudioFadeIn
       const originalFadeOut = displayedAudioFadeOut
@@ -502,6 +534,7 @@ export function useFadeEditors({
       }
 
       const finishEdit = () => {
+        if (!gestureLive) return
         const latestState = audioFadeEditRef.current
         const committedFade =
           handle === 'in'
@@ -528,15 +561,18 @@ export function useFadeEditors({
       applyPreview(computeFadeSeconds(e.clientX))
 
       const handleWindowMouseMove = (event: MouseEvent) => {
+        if (!gestureLive) return
         applyPreview(computeFadeSeconds(event.clientX))
       }
       const handleWindowMouseUp = () => {
+        if (!gestureLive) return
         finishEdit()
       }
 
       window.addEventListener('mousemove', handleWindowMouseMove)
       window.addEventListener('mouseup', handleWindowMouseUp, { once: true })
       audioFadeCleanupRef.current = () => {
+        gestureLive = false
         window.removeEventListener('mousemove', handleWindowMouseMove)
         window.removeEventListener('mouseup', handleWindowMouseUp)
       }
@@ -579,6 +615,7 @@ export function useFadeEditors({
 
       e.preventDefault()
       e.stopPropagation()
+      let gestureLive = true
 
       const originalFadeInCurve = displayedAudioFadeInCurve
       const originalFadeOutCurve = displayedAudioFadeOutCurve
@@ -623,6 +660,7 @@ export function useFadeEditors({
       }
 
       const finishEdit = () => {
+        if (!gestureLive) return
         const latestState = audioFadeCurveEditRef.current
         const committedCurve =
           handle === 'in'
@@ -665,15 +703,18 @@ export function useFadeEditors({
       applyPreview(computeCurve(e.clientX, e.clientY))
 
       const handleWindowMouseMove = (event: MouseEvent) => {
+        if (!gestureLive) return
         applyPreview(computeCurve(event.clientX, event.clientY))
       }
       const handleWindowMouseUp = () => {
+        if (!gestureLive) return
         finishEdit()
       }
 
       window.addEventListener('mousemove', handleWindowMouseMove)
       window.addEventListener('mouseup', handleWindowMouseUp, { once: true })
       audioFadeCurveCleanupRef.current = () => {
+        gestureLive = false
         window.removeEventListener('mousemove', handleWindowMouseMove)
         window.removeEventListener('mouseup', handleWindowMouseUp)
       }
@@ -707,9 +748,22 @@ export function useFadeEditors({
 
       e.preventDefault()
       e.stopPropagation()
+      let gestureLive = true
 
       const originalVolume = item.volume ?? 0
       const dragStartLiveGain = getMixerLiveGain(item.id)
+      rollbackAudioVolumeRef.current = () => {
+        applyAudioVolumeVisualPreview(originalVolume)
+        // Restore the captured combined gain without deleting other mixer layers.
+        setMixerLiveGains([{ itemId: item.id, gain: 1 }])
+        const otherLayersGain = getMixerLiveGain(item.id)
+        setMixerLiveGains([
+          {
+            itemId: item.id,
+            gain: otherLayersGain === 0 ? 1 : dragStartLiveGain / otherLayersGain,
+          },
+        ])
+      }
       const startClientY = e.clientY
       let latestClientY = startClientY
       let latestPreviewVolume = originalVolume
@@ -745,7 +799,7 @@ export function useFadeEditors({
       }
 
       const activateDrag = () => {
-        if (isDragActive) {
+        if (!gestureLive || isDragActive) {
           return
         }
         isDragActive = true
@@ -757,6 +811,7 @@ export function useFadeEditors({
       }
 
       const finishEdit = () => {
+        if (!gestureLive) return
         const committedVolume = audioVolumePreviewRef.current ?? latestPreviewVolume
         audioVolumeCleanupRef.current?.()
         audioVolumeCleanupRef.current = null
@@ -767,6 +822,7 @@ export function useFadeEditors({
       }
 
       const handleWindowMouseMove = (event: MouseEvent) => {
+        if (!gestureLive) return
         latestClientY = event.clientY
         if (!isDragActive) {
           if (Math.abs(event.clientY - startClientY) < AUDIO_VOLUME_DRAG_ACTIVATION_DISTANCE_PX) {
@@ -779,6 +835,7 @@ export function useFadeEditors({
         applyPreview(computeVolumeDb(event.clientY))
       }
       const handleWindowMouseUp = () => {
+        if (!gestureLive) return
         if (!isDragActive) {
           audioVolumeCleanupRef.current?.()
           audioVolumeCleanupRef.current = null
@@ -795,6 +852,7 @@ export function useFadeEditors({
         activateDrag()
       }, AUDIO_VOLUME_DRAG_ACTIVATION_DELAY_MS)
       audioVolumeCleanupRef.current = () => {
+        gestureLive = false
         clearActivationTimeout()
         window.removeEventListener('mousemove', handleWindowMouseMove)
         window.removeEventListener('mouseup', handleWindowMouseUp)

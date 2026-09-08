@@ -1,3 +1,4 @@
+import { useTimelineGestureCancellation } from './use-timeline-gesture-cancellation'
 import { useState, useCallback, useRef, useEffect } from 'react'
 import type { TimelineItem } from '@/types/timeline'
 import { commitPreviewFrameToCurrentFrame } from '@/shared/state/playback'
@@ -30,6 +31,7 @@ export function useTrackPush(
   item: TimelineItem,
   timelineDuration: number,
   trackLocked: boolean = false,
+  ownerRef?: React.RefObject<HTMLElement | null>,
 ) {
   const pixelsToTime = pixelsToTimeNow
   const fps = useTimelineStore((s) => s.fps)
@@ -40,7 +42,7 @@ export function useTrackPush(
     item.id,
   )
 
-  const [state, setState] = useState<TrackPushState>({
+  const [state, setReactState] = useState<TrackPushState>({
     isActive: false,
     startX: 0,
     currentDelta: 0,
@@ -48,6 +50,11 @@ export function useTrackPush(
   })
   const stateRef = useRef(state)
   stateRef.current = state
+  const setState = useCallback((next: React.SetStateAction<TrackPushState>) => {
+    const value = typeof next === 'function' ? next(stateRef.current) : next
+    stateRef.current = value
+    setReactState(value)
+  }, [])
 
   const prevSnapTargetRef = useRef<{ frame: number; type: string } | null>(null)
   const magneticSnapTargetsRef = useRef<SnapTarget[]>([])
@@ -107,22 +114,32 @@ export function useTrackPush(
         setActiveSnapTarget,
       })
     },
-    [pixelsToTime, fps, trackLocked, findSnapForFrame, setActiveSnapTarget, item.from],
+    [pixelsToTime, fps, trackLocked, findSnapForFrame, setActiveSnapTarget, item.from, setState],
   )
+
+  const cancelGesture = useCallback(
+    (updateReactState = true) => {
+      if (!stateRef.current.isActive) return
+      const idle = { isActive: false, startX: 0, currentDelta: 0, maxLeftFrames: 0 }
+      stateRef.current = idle
+      useTrackPushPreviewStore.getState().clearPreview()
+      prevSnapTargetRef.current = null
+      magneticSnapTargetsRef.current = []
+      setActiveSnapTarget(null)
+      setDragState(null)
+      if (updateReactState) setState(idle)
+    },
+    [setActiveSnapTarget, setDragState, setState],
+  )
+
+  useTimelineGestureCancellation(ownerRef, cancelGesture)
 
   const handleMouseUp = useCallback(() => {
     if (!stateRef.current.isActive) return
     const delta = stateRef.current.currentDelta
-    if (delta !== 0) {
-      trackPushItems(item.id, delta)
-    }
-    useTrackPushPreviewStore.getState().clearPreview()
-    setActiveSnapTarget(null)
-    setDragState(null)
-    prevSnapTargetRef.current = null
-    magneticSnapTargetsRef.current = []
-    setState({ isActive: false, startX: 0, currentDelta: 0, maxLeftFrames: 0 })
-  }, [item.id, setActiveSnapTarget, setDragState])
+    cancelGesture()
+    if (delta !== 0) trackPushItems(item.id, delta)
+  }, [item.id, cancelGesture])
 
   useEffect(() => {
     if (state.isActive) {
@@ -131,10 +148,6 @@ export function useTrackPush(
       return () => {
         window.removeEventListener('mousemove', handleMouseMove)
         window.removeEventListener('mouseup', handleMouseUp)
-        useTrackPushPreviewStore.getState().clearPreview()
-        magneticSnapTargetsRef.current = []
-        setActiveSnapTarget(null)
-        setDragState(null)
       }
     }
   }, [state.isActive, handleMouseMove, handleMouseUp, setActiveSnapTarget, setDragState])
@@ -217,6 +230,7 @@ export function useTrackPush(
       setActiveSnapTarget,
       setDragState,
       getMagneticSnapTargets,
+      setState,
     ],
   )
 
