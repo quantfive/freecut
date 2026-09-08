@@ -2,6 +2,7 @@
 
 import { beforeEach, describe, expect, it } from 'vite-plus/test'
 import type { AudioItem, VideoItem } from '@/types/timeline'
+import { makeTimelineTrack } from '../../test-helpers'
 import { useEditorStore } from '@/shared/state/editor'
 import { useSelectionStore } from '@/shared/state/selection'
 import { useKeyframesStore } from '../keyframes-store'
@@ -9,7 +10,10 @@ import { useItemsStore } from '../items-store'
 import { useTimelineCommandStore } from '../timeline-command-store'
 import { useTimelineSettingsStore } from '../timeline-settings-store'
 import { useTransitionsStore } from '../transitions-store'
-import { removeSilenceFromItems } from './edit/range-removal-actions'
+import {
+  removeSilenceFromItems,
+  removeTranscriptRangesFromItems,
+} from './edit/range-removal-actions'
 
 function makeVideoItem(overrides: Partial<VideoItem> = {}): VideoItem {
   return {
@@ -127,5 +131,127 @@ describe('removeSilenceFromItems', () => {
     expect(result.removedItemCount).toBe(2)
     expect(sourceSpans('video')).toHaveLength(2)
     expect(sourceSpans('audio')).toHaveLength(2)
+  })
+  it('cuts only selected occurrence ranges with linked audio and restores once', () => {
+    useEditorStore.setState({ linkedSelectionEnabled: false })
+    const original = [
+      makeVideoItem({ linkedGroupId: 'av' }),
+      makeAudioItem({ linkedGroupId: 'av' }),
+      makeVideoItem({ id: 'repeat', from: 300 }),
+    ]
+    useItemsStore.getState().setItems(original)
+    const result = removeTranscriptRangesFromItems(
+      ['video-1'],
+      { 'media-1': [{ start: 2, end: 4 }] },
+      { 'video-1': [{ start: 2, end: 4 }] },
+    )
+    expect(result.removedItemCount).toBe(2)
+    expect(useItemsStore.getState().itemById.repeat).toMatchObject({
+      sourceStart: 0,
+      sourceEnd: 300,
+      durationInFrames: 300,
+      from: 240,
+    })
+    expect(sourceSpans('audio')).toEqual([
+      { from: 0, durationInFrames: 60, sourceStart: 0, sourceEnd: 60 },
+      { from: 60, durationInFrames: 180, sourceStart: 120, sourceEnd: 300 },
+    ])
+    useTimelineCommandStore.getState().undo()
+    expect(useItemsStore.getState().items).toEqual(original)
+    useTimelineCommandStore.getState().redo()
+    expect(useItemsStore.getState().itemById.repeat).toMatchObject({
+      sourceStart: 0,
+      sourceEnd: 300,
+      durationInFrames: 300,
+    })
+  })
+
+  it('does not cross-apply ranges when two selected occurrences share media and origin', () => {
+    useItemsStore.getState().setItems([makeVideoItem(), makeVideoItem({ id: 'repeat', from: 300 })])
+    removeTranscriptRangesFromItems(
+      ['video-1', 'repeat'],
+      {
+        'media-1': [
+          { start: 2, end: 4 },
+          { start: 6, end: 7 },
+        ],
+      },
+      { 'video-1': [{ start: 2, end: 4 }], repeat: [{ start: 6, end: 7 }] },
+    )
+    expect(sourceSpans('video')).toEqual([
+      { from: 0, durationInFrames: 60, sourceStart: 0, sourceEnd: 60 },
+      { from: 60, durationInFrames: 180, sourceStart: 120, sourceEnd: 300 },
+      { from: 240, durationInFrames: 180, sourceStart: 0, sourceEnd: 180 },
+      { from: 420, durationInFrames: 90, sourceStart: 210, sourceEnd: 300 },
+    ])
+  })
+  it('preserves an unselected stacked repeat with shared origin inside the selected range', () => {
+    useItemsStore
+      .getState()
+      .setTracks([
+        makeTimelineTrack({ id: 'video-track', name: 'A', order: 0, syncLock: false }),
+        makeTimelineTrack({ id: 'repeat-track', name: 'B', order: 1, syncLock: false }),
+      ])
+    const repeat = makeVideoItem({
+      id: 'repeat',
+      trackId: 'repeat-track',
+      from: 60,
+      durationInFrames: 60,
+      sourceStart: 60,
+      sourceEnd: 120,
+    })
+    const original = [makeVideoItem(), repeat]
+    useItemsStore.getState().setItems(original)
+    const result = removeTranscriptRangesFromItems(
+      ['video-1'],
+      { 'media-1': [{ start: 2, end: 4 }] },
+      { 'video-1': [{ start: 2, end: 4 }] },
+    )
+    expect(result.removedItemCount).toBe(1)
+    expect(useItemsStore.getState().itemById.repeat).toEqual(repeat)
+    expect(
+      useItemsStore
+        .getState()
+        .items.filter((item) => item.trackId === 'video-track')
+        .map(({ from, durationInFrames, sourceStart, sourceEnd }) => ({
+          from,
+          durationInFrames,
+          sourceStart,
+          sourceEnd,
+        })),
+    ).toEqual([
+      { from: 0, durationInFrames: 60, sourceStart: 0, sourceEnd: 60 },
+      { from: 60, durationInFrames: 180, sourceStart: 120, sourceEnd: 300 },
+    ])
+    expect(useTimelineCommandStore.getState().undoStack).toHaveLength(1)
+    useTimelineCommandStore.getState().undo()
+    expect(useItemsStore.getState().items).toEqual(original)
+    useTimelineCommandStore.getState().redo()
+    expect(useItemsStore.getState().itemById.repeat).toEqual(repeat)
+  })
+
+  it.each([
+    { label: 'asymmetric duration', audio: { durationInFrames: 300, sourceEnd: 300 } },
+    { label: 'different source offset', audio: { sourceStart: 60, sourceEnd: 90 } },
+    { label: 'reversed partner', audio: { isReversed: true } },
+  ])('rejects $label before a word cut mutates linked footage or history', ({ audio }) => {
+    useEditorStore.setState({ linkedSelectionEnabled: false })
+    const original = [
+      makeVideoItem({ linkedGroupId: 'av', durationInFrames: 30, sourceEnd: 30 }),
+      makeAudioItem({ linkedGroupId: 'av', durationInFrames: 30, sourceEnd: 30, ...audio }),
+    ]
+    useItemsStore.getState().setItems(original)
+    expect(() =>
+      removeTranscriptRangesFromItems(
+        ['video-1'],
+        { 'media-1': [{ start: 0, end: 1 }] },
+        { 'video-1': [{ start: 0, end: 1 }] },
+      ),
+    ).toThrow('Linked clips have different trims or timing')
+    expect(useItemsStore.getState().items).toEqual(original)
+    expect(useTimelineCommandStore.getState().undoStack).toHaveLength(0)
+    expect(useTimelineSettingsStore.getState().isDirty).toBe(false)
+    expect(useTransitionsStore.getState().transitions).toEqual([])
+    expect(useKeyframesStore.getState().keyframes).toEqual([])
   })
 })
