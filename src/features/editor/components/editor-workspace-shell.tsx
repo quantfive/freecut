@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { Settings2, X } from 'lucide-react'
 import { usePlaybackStore } from '@/shared/state/playback'
 import { useSelectionStore } from '@/shared/state/selection'
+import { useSourcePlayerStore } from '@/shared/state/source-player'
 import { MediaSidebar } from './media-sidebar'
 import { AudioMeterPanel } from './audio-meter-panel'
 import { PropertiesSidebar } from './properties-sidebar'
@@ -77,6 +78,9 @@ export function EditorWorkspaceShell({
         new CustomEvent('freecut:cancel-timeline-gesture', { bubbles: true }),
       )
       usePlaybackStore.getState().pause()
+      const sourcePlayer = useSourcePlayerStore.getState()
+      sourcePlayer.setPendingPlay(false)
+      sourcePlayer.playerMethods?.pause()
     }
     setEditorVisible(!editorVisible)
   }

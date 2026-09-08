@@ -96,3 +96,37 @@ test('independent columns preserve draft/search and restore from every combinati
   await expect(page.getByRole('button', { name: 'Undo', exact: true })).toHaveCount(1)
   await expect(page.getByRole('button', { name: 'Redo', exact: true })).toHaveCount(1)
 })
+
+test('hiding Editor pauses a playing source monitor without losing its frame', async ({ page }) => {
+  await page.goto('/tests/browser/layout-refresh.html')
+  await page.locator('[data-item-id]').first().waitFor()
+  await page.getByRole('button', { name: 'Media', exact: true }).click()
+  await page.getByText('generated-source-range.webm', { exact: true }).first().dblclick()
+  await page.getByRole('button', { name: 'Close source monitor', exact: true }).waitFor()
+  const sourceState = () =>
+    page.evaluate(async (modulePath) => {
+      const { useSourcePlayerStore } = await import(modulePath)
+      const state = useSourcePlayerStore.getState()
+      return { playing: state.playerMethods?.isPlaying(), frame: state.currentSourceFrame }
+    }, '/src/shared/state/source-player/store.ts')
+  const timelineState = () =>
+    page.evaluate(async (modulePath) => {
+      const { usePlaybackStore } = await import(modulePath)
+      return usePlaybackStore.getState().isPlaying
+    }, '/src/shared/state/playback/index.ts')
+  await page.getByRole('button', { name: 'Play (Space)', exact: true }).click()
+  await expect.poll(async () => (await sourceState()).playing).toBe(true)
+  await expect.poll(async () => (await sourceState()).frame).toBeGreaterThan(0)
+  expect(await timelineState()).toBe(false)
+  await page.getByRole('button', { name: 'Hide Editor', exact: true }).click()
+  await expect(page.locator('[data-editor-column="editor"]')).toBeHidden()
+  expect((await sourceState()).playing).toBe(false)
+  const pausedFrame = (await sourceState()).frame
+  // Observe beyond several real source clock ticks, not just the pause callback.
+  await page.waitForTimeout(250)
+  expect((await sourceState()).frame).toBe(pausedFrame)
+  await page.getByRole('button', { name: 'Show Editor', exact: true }).click()
+  expect((await sourceState()).frame).toBe(pausedFrame)
+  expect((await sourceState()).playing).toBe(false)
+  await expect(page.getByRole('button', { name: 'Close source monitor', exact: true })).toBeVisible()
+})
