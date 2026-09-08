@@ -438,7 +438,7 @@ describe('LoadedEditor migration metadata refresh', () => {
 
     expect(mocks.resizablePanelGroup).toHaveBeenCalledWith(
       expect.objectContaining({
-        autoSaveId: 'editor:timeline-layout',
+        autoSaveId: 'editor:timeline-layout-refresh',
         direction: 'vertical',
       }),
     )
@@ -497,6 +497,8 @@ describe('LoadedEditor migration metadata refresh', () => {
     expect(screen.getByTestId('motion-preview-area')).toBeInTheDocument()
     expect(screen.queryByTestId('timeline')).not.toBeInTheDocument()
     expect(screen.getByTestId('media-sidebar')).toBeInTheDocument()
+    expect(screen.queryByTestId('properties-sidebar')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Canvas settings' }))
     expect(screen.getByTestId('properties-sidebar')).toBeInTheDocument()
   })
 })
@@ -589,7 +591,7 @@ describe('editor responsive shell', () => {
 
   afterEach(() => cleanup())
 
-  it('starts 390px standalone with core surfaces visible and persisted desktop panels untouched', async () => {
+  it('keeps independent columns at 390px without changing persisted desktop panels', async () => {
     mocks.editorWidth = 390
 
     render(<LoadedEditor projectId="project-1" project={project} migration={migration} />)
@@ -597,8 +599,8 @@ describe('editor responsive shell', () => {
     const shell = screen.getByRole('application')
     await waitFor(() => expect(shell).toHaveAttribute('data-editor-layout', 'mobile'))
     expect(screen.getByTestId('toolbar')).toHaveAttribute('data-compact', 'true')
-    expect(await screen.findByTestId('timeline')).toHaveAttribute('data-compact', 'true')
-    expect(screen.queryByTestId('media-sidebar')).not.toBeInTheDocument()
+    expect(await screen.findByTestId('timeline')).toHaveAttribute('data-compact', 'false')
+    expect(screen.getByTestId('media-sidebar')).toBeVisible()
     expect(screen.queryByTestId('properties-sidebar')).not.toBeInTheDocument()
     expect(screen.queryByTestId('audio-meter-panel')).not.toBeInTheDocument()
     expect(mocks.setLeftSidebarOpen).not.toHaveBeenCalled()
@@ -606,33 +608,25 @@ describe('editor responsive shell', () => {
     expect(mocks.syncSidebarLayout).not.toHaveBeenCalled()
   })
 
-  it('opens each 390px panel as a focus-restoring drawer and closes it with Escape', async () => {
+  it('offers explicit column collapse and focus-restoring settings at 390px', async () => {
     mocks.editorWidth = 390
     render(<LoadedEditor projectId="project-1" project={project} migration={migration} />)
-    await waitFor(() =>
-      expect(screen.getByRole('application')).toHaveAttribute('data-editor-layout', 'mobile'),
-    )
-
-    for (const name of ['Media', 'Properties', 'Meters']) {
-      const trigger = screen.getByRole('button', { name })
-      trigger.focus()
-      fireEvent.click(trigger)
-
-      const drawer = await screen.findByRole('dialog', { name })
-      expect(drawer).toBeInTheDocument()
-      expect(drawer).toContainElement(document.activeElement as HTMLElement)
-      const expectedTestId =
-        name === 'Media'
-          ? 'media-sidebar'
-          : name === 'Properties'
-            ? 'properties-sidebar'
-            : 'audio-meter-panel'
-      expect(screen.getByTestId(expectedTestId)).toHaveAttribute('data-mobile-drawer', 'true')
-
-      fireEvent.keyDown(document, { key: 'Escape' })
-      await waitFor(() => expect(screen.queryByRole('dialog', { name })).not.toBeInTheDocument())
-      await waitFor(() => expect(trigger).toHaveFocus())
-    }
+    await screen.findByTestId('timeline')
+    fireEvent.click(screen.getByRole('button', { name: 'Hide Library' }))
+    expect(screen.getByTestId('media-sidebar')).not.toBeVisible()
+    fireEvent.click(screen.getByRole('button', { name: 'Show Library' }))
+    expect(screen.getByTestId('media-sidebar')).toBeVisible()
+    fireEvent.click(screen.getByRole('button', { name: 'Hide Editor' }))
+    expect(screen.getByTestId('timeline')).not.toBeVisible()
+    fireEvent.click(screen.getByRole('button', { name: 'Show Editor' }))
+    expect(screen.getByTestId('timeline')).toBeVisible()
+    const trigger = screen.getByRole('button', { name: 'Canvas settings' })
+    fireEvent.click(trigger)
+    const settings = screen.getByRole('region', { name: 'Settings' })
+    expect(screen.getByTestId('properties-sidebar')).toBeVisible()
+    fireEvent.keyDown(settings, { key: 'Escape' })
+    expect(screen.queryByRole('region', { name: 'Settings' })).not.toBeInTheDocument()
+    expect(trigger).toHaveFocus()
   })
 
   it('uses the same 390px layout inside a definite-height host surface', async () => {
@@ -654,11 +648,11 @@ describe('editor responsive shell', () => {
       expect(screen.getByRole('application')).toHaveAttribute('data-editor-layout', 'mobile'),
     )
     expect(screen.getByTestId('toolbar')).toHaveAttribute('data-compact', 'true')
-    expect(await screen.findByTestId('timeline')).toHaveAttribute('data-compact', 'true')
+    expect(await screen.findByTestId('timeline')).toHaveAttribute('data-compact', 'false')
     expect(hostRuntime.mountStores).toHaveBeenCalledTimes(1)
   })
 
-  it('preserves the existing 320/288/84 desktop layout branch at 1440px', async () => {
+  it('shows the desktop editor with library and on-demand settings and meters at 1440px', async () => {
     render(<LoadedEditor projectId="project-1" project={project} migration={migration} />)
 
     const shell = screen.getByRole('application')
@@ -666,7 +660,7 @@ describe('editor responsive shell', () => {
     expect(screen.getByTestId('toolbar')).toHaveAttribute('data-compact', 'false')
     expect(await screen.findByTestId('timeline')).toHaveAttribute('data-compact', 'false')
     expect(screen.getByTestId('media-sidebar')).toHaveAttribute('data-mobile-drawer', 'false')
-    expect(screen.getByTestId('properties-sidebar')).toHaveAttribute('data-mobile-drawer', 'false')
-    expect(screen.getByTestId('audio-meter-panel')).toHaveAttribute('data-mobile-drawer', 'false')
+    expect(screen.queryByTestId('properties-sidebar')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('audio-meter-panel')).not.toBeInTheDocument()
   })
 })

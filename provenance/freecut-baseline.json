@@ -1,7 +1,7 @@
 {
   "schema": "freecut-pr2-provenance-baseline/v1",
   "issue": "https://github.com/quantfive/codepress/issues/5319",
-  "scope": "PR 2 — FreeCut fork provenance and reproducible package baseline",
+  "scope": "PR 2 \u2014 FreeCut fork provenance and reproducible package baseline",
   "upstream": {
     "repository": "https://github.com/walterlow/freecut",
     "fork": "https://github.com/quantfive/freecut",
@@ -34,7 +34,7 @@
   ],
   "dependencies": {
     "packageJson": "package.json",
-    "packageJsonSha256": "7786ffe5cde5b09b6f88fc4fd13af399365ac0d6dc32f320d6f719c6f62edc89",
+    "packageJsonSha256": "6047ae253aacc102cf79a9b30f7f45250974e0c312f5106fe8056cb7a37a7538",
     "lockfile": "package-lock.json",
     "lockfileVersion": 3,
     "lockfileSha256": "b4a86741ce7891da1f63df01b6fdd4ed507e8887d5097c6a0f93fc2ea6f3420e",
@@ -79,7 +79,14 @@
     "packageCommand": "npm run package:reproducible",
     "artifactPattern": "artifacts/freecut-<source-revision>.tar.gz",
     "archiveFormat": "deterministic tar.gz with sorted paths, zeroed mtimes, and uid/gid 0",
-    "contents": ["dist/", "LICENSE", "notices/", "package.json", "package-lock.json", "provenance/"]
+    "contents": [
+      "dist/",
+      "LICENSE",
+      "notices/",
+      "package.json",
+      "package-lock.json",
+      "provenance/"
+    ]
   },
   "ciVerification": {
     "workflow": ".github/workflows/reproducible-package.yml",
