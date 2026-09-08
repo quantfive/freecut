@@ -1781,12 +1781,24 @@ export function useTimelineDrag(
         handleMouseUp()
       }
 
+      const handleEditorCollapse = (event: Event) => {
+        if (
+          elementRef?.current &&
+          (!(event.target instanceof Element) || !event.target.contains(elementRef.current))
+        )
+          return
+        coalescedMouseMove.cancel()
+        handleCancellation()
+      }
+
+      window.addEventListener('freecut:cancel-timeline-gesture', handleEditorCollapse)
       window.addEventListener('mousemove', coalescedMouseMove.queue)
       window.addEventListener('mouseup', handleCoalescedMouseUp)
       window.addEventListener('pointercancel', handleCancellation)
       window.addEventListener('keydown', handleKeyDown)
 
       return () => {
+        window.removeEventListener('freecut:cancel-timeline-gesture', handleEditorCollapse)
         window.removeEventListener('mousemove', coalescedMouseMove.queue)
         window.removeEventListener('mouseup', handleCoalescedMouseUp)
         window.removeEventListener('pointercancel', handleCancellation)

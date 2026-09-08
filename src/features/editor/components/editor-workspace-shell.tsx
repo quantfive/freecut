@@ -38,6 +38,7 @@ export function EditorWorkspaceShell({
   const [settingsOpen, setSettingsOpen] = useState(false)
   const libraryToggleRef = useRef<HTMLButtonElement>(null)
   const settingsTrigger = useRef<HTMLButtonElement>(null)
+  const settingsPanel = useRef<HTMLElement>(null)
   const selectedIds = useSelectionStore((s) => s.selectedItemIds)
   const rootRef = useRef<HTMLDivElement>(null)
   useEffect(() => {
@@ -53,7 +54,9 @@ export function EditorWorkspaceShell({
     if (settingsOpen && settingsSelection.current.some((id) => !selectedIds.includes(id))) {
       setSettingsOpen(false)
       setSettingsNotice(true)
-      settingsTrigger.current?.focus()
+      if (settingsPanel.current?.contains(document.activeElement)) {
+        settingsTrigger.current?.focus()
+      }
     }
   }, [selectedIds, settingsOpen])
   const onLayoutChange = options?.onLayoutChange
@@ -220,6 +223,7 @@ export function EditorWorkspaceShell({
           )}
           {settingsOpen && (
             <section
+              ref={settingsPanel}
               role="region"
               aria-label={t('editor.refresh.settings')}
               className="absolute right-3 top-3 z-40 flex max-h-[55%] w-[320px] max-w-[calc(100%-24px)] flex-col overflow-hidden rounded-xl border border-border bg-card shadow-xl"
