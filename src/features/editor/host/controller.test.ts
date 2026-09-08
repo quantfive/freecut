@@ -1907,10 +1907,13 @@ describe('gesture authority and recovery regressions', () => {
     const initial = snapshot()
     const anchor = initial.timeline.tracks[0]!.items[0]!
     Object.assign(anchor, { from: 10, sourceStart: 20, sourceEnd: 140, speed: 2 })
-    initial.timeline.tracks[0]!.items.push(
-      { ...anchor, id: 'next', from: 70, sourceStart: 0, sourceEnd: 120 },
-      { ...anchor, id: 'detached', from: 130, rippleLinked: false },
-    )
+    Object.assign(initial.timeline.tracks[0]!, {
+      items: [
+        ...initial.timeline.tracks[0]!.items,
+        { ...anchor, id: 'next', from: 70, sourceStart: 0, sourceEnd: 120 },
+        { ...anchor, id: 'detached', from: 130, rippleLinked: false },
+      ],
+    })
     const batch = trimIntentBatch(initial.timeline, 'clip-1', {
       handle: 'start',
       deltaFrames: 5,
@@ -1944,10 +1947,11 @@ describe('gesture authority and recovery regressions', () => {
 
 it('never interprets a new delete selection as a retry of an unknown earlier delete', async () => {
   const initial = snapshot()
-  initial.timeline.tracks[0]!.items.push({
-    ...initial.timeline.tracks[0]!.items[0]!,
-    id: 'clip-2',
-    from: 60,
+  Object.assign(initial.timeline.tracks[0]!, {
+    items: [
+      ...initial.timeline.tracks[0]!.items,
+      { ...initial.timeline.tracks[0]!.items[0]!, id: 'clip-2', from: 60 },
+    ],
   })
   const submitEdit = vi.fn(async () => {
     throw new Error('unknown outcome')
