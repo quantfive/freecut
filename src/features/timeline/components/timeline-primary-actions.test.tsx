@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vite-plus/test'
 import { toast } from 'sonner'
 import { useItemsStore } from '../stores/items-store'
+import { useTimelineCommandStore } from '../stores/timeline-command-store'
 import { useTimelineStore } from '../stores/timeline-store'
 import { useSelectionStore } from '@/shared/state/selection'
 import { usePlaybackStore } from '@/shared/state/playback'
@@ -55,6 +56,70 @@ describe('timeline primary actions', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Split' }))
     expect(split).toHaveBeenCalledExactlyOnceWith('clip', 30)
   })
+
+  it('splits a selected linked A/V cohort once and restores both with one undo', () => {
+    context.mode = 'standalone'
+    useEditorStore.setState({ hostMode: false })
+    useItemsStore
+      .getState()
+      .setItems([
+        makeTimelineVideoItem({
+          id: 'clip',
+          trackId: 'v',
+          linkedGroupId: 'pair',
+          from: 0,
+          durationInFrames: 60,
+        }),
+        makeTimelineAudioItem({
+          id: 'audio',
+          trackId: 'a',
+          linkedGroupId: 'pair',
+          from: 0,
+          durationInFrames: 60,
+        }),
+      ])
+    useSelectionStore.getState().selectItems(['clip', 'audio'])
+    useTimelineCommandStore.getState().clearHistory()
+    render(<TimelinePrimaryActions />)
+    expect(screen.getByRole('button', { name: 'Split' })).toBeEnabled()
+    fireEvent.click(screen.getByRole('button', { name: 'Split' }))
+    expect(useItemsStore.getState().items).toHaveLength(4)
+    for (const trackId of ['v', 'a']) {
+      expect(
+        useItemsStore
+          .getState()
+          .items.filter((item) => item.trackId === trackId)
+          .map((item) => [item.from, item.durationInFrames]),
+      ).toEqual([
+        [0, 30],
+        [30, 30],
+      ])
+    }
+    expect(useTimelineCommandStore.getState().undoStack).toHaveLength(1)
+    act(() => useTimelineStore.temporal.getState().undo())
+    expect(
+      useItemsStore.getState().items.map((item) => [item.id, item.from, item.durationInFrames]),
+    ).toEqual([
+      ['clip', 0, 60],
+      ['audio', 0, 60],
+    ])
+  })
+
+  it.each([false, true])(
+    'keeps unrelated multi-selection disabled with linked selection %s',
+    (linkedSelectionEnabled) => {
+      useEditorStore.setState({ linkedSelectionEnabled })
+      useItemsStore
+        .getState()
+        .setItems([
+          makeTimelineVideoItem({ id: 'clip', trackId: 'v', from: 0, durationInFrames: 60 }),
+          makeTimelineAudioItem({ id: 'audio', trackId: 'a', from: 0, durationInFrames: 60 }),
+        ])
+      useSelectionStore.getState().selectItems(['clip', 'audio'])
+      render(<TimelinePrimaryActions />)
+      expect(screen.getByRole('button', { name: 'Split' })).toBeDisabled()
+    },
+  )
 
   it('disables delete when the host denies timeline.remove', () => {
     context.denied = 'timeline.remove'
