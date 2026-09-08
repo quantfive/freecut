@@ -33,6 +33,19 @@ export interface ClipReadoutLabels {
   moveInfoLabel: string | null
 }
 
+function remainingSourceLabel(
+  item: TimelineItem | undefined,
+  handle: 'start' | 'end',
+  delta: number,
+  fps: number,
+): string | undefined {
+  if (!item) return undefined
+  const direction = handle === 'start' ? -1 : 1
+  const { maxExtend } = clampTrimAmount(item, handle, direction * Number.MAX_SAFE_INTEGER, fps)
+  if (maxExtend === null) return undefined
+  return formatTimecodeCompact(Math.max(0, Math.round(maxExtend - direction * delta)), fps)
+}
+
 /**
  * Floating readout labels for a clip during trim and move gestures.
  */
@@ -52,21 +65,7 @@ export function useClipReadoutLabels({
     if (!isTrimming || !trimHandle) return null
 
     const durationDelta = trimHandle === 'start' ? -trimDelta : trimDelta
-    const maxExtend = item
-      ? clampTrimAmount(
-          item,
-          trimHandle,
-          trimHandle === 'start' ? -Number.MAX_SAFE_INTEGER : Number.MAX_SAFE_INTEGER,
-          fps,
-        ).maxExtend
-      : null
-    const remaining =
-      maxExtend === null
-        ? undefined
-        : formatTimecodeCompact(
-            Math.max(0, Math.round(maxExtend + (trimHandle === 'start' ? trimDelta : -trimDelta))),
-            fps,
-          )
+    const remaining = remainingSourceLabel(item, trimHandle, trimDelta, fps)
     return {
       boundary:
         visualLeftFrame === undefined
