@@ -545,7 +545,11 @@ export const TimelineHeader = memo(function TimelineHeader({
       role="toolbar"
       aria-label={t('timeline.header.controls')}
     >
-      <TimelinePrimaryActions onZoomToSelection={onZoomToSelection} />
+      <div className="flex items-center gap-1">
+        <TimelinePrimaryActions onZoomToSelection={onZoomToSelection} />
+        {/* The recorder owns the live take: menu dismissal must not unmount it. */}
+        {!hostMode && <MicRecordControl />}
+      </div>
 
       <Popover>
         <PopoverTrigger asChild>
@@ -824,11 +828,6 @@ export const TimelineHeader = memo(function TimelineHeader({
                 </Button>
               </div>
             )}
-
-            <Separator orientation="vertical" className="h-5 mx-1.5" />
-
-            {/* Microphone voiceover */}
-            {!hostMode && <MicRecordControl />}
 
             <Separator orientation="vertical" className="h-5 mx-1.5" />
 
