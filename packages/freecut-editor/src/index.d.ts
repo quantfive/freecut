@@ -306,8 +306,8 @@ export interface HostTranscriptStatusReceipt {
 
 /** Only measured provider timings are eligible for word editing. */
 export interface HostTranscriptWord {
-  startUs: Microseconds
-  endUs: Microseconds
+  startUs: number
+  endUs: number
   text: string
 }
 

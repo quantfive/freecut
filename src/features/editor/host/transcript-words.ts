@@ -16,6 +16,28 @@ export interface HostWordOccurrence {
   endFrame: number
 }
 
+/** Fail closed on partial, synthetic or malformed word data, including direct mapper callers. */
+export function hasUsableHostWordTiming(section: HostTranscriptSection): boolean {
+  if (section.timingSource !== 'provider' || !section.words?.length || section.words.length > 2000)
+    return false
+  let previousEnd = section.startUs
+  for (const word of section.words) {
+    if (
+      !Number.isSafeInteger(word.startUs) ||
+      !Number.isSafeInteger(word.endUs) ||
+      word.startUs < previousEnd ||
+      word.endUs <= word.startUs ||
+      word.endUs > section.endUs ||
+      typeof word.text !== 'string' ||
+      !word.text.trim()
+    )
+      return false
+    previousEnd = word.endUs
+  }
+  const normalize = (text: string) => text.replace(/[\s\p{P}]/gu, '').toLocaleLowerCase()
+  return normalize(section.words.map((word) => word.text).join(' ')) === normalize(section.text)
+}
+
 /** Project source words into the current edit, retaining each distinct occurrence. */
 export function mapHostTranscriptWords(
   document: FreeCutFrameDocument,
@@ -42,7 +64,7 @@ export function mapHostTranscriptWords(
     )
     if (sourceEnd <= sourceStart) continue
     for (const section of sections) {
-      if (section.timingSource !== 'provider') continue
+      if (!hasUsableHostWordTiming(section)) continue
       section.words?.forEach((word, index) => {
         if (word.endUs <= sourceStart || word.startUs >= sourceEnd) return
         const start = Math.max(sourceStart, word.startUs)
