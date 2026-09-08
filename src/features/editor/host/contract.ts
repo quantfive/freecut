@@ -198,7 +198,16 @@ export interface HostTranscriptStatusReceipt {
 }
 
 /** One bounded, source-addressable transcript section. */
+/** Only measured provider timings are eligible for word editing. */
+export interface HostTranscriptWord {
+  startUs: Microseconds
+  endUs: Microseconds
+  text: string
+}
+
 export interface HostTranscriptSection {
+  timingSource?: 'provider' | 'synthetic'
+  words?: readonly HostTranscriptWord[] | null
   id: string
   transcriptId: string
   ordinal: number
@@ -240,6 +249,8 @@ export interface HostTranscriptSearchPage {
 
 /** A positive integer-microsecond source range selected for preview. */
 export interface HostTranscriptRange {
+  /** Exact sequence occurrence; omitted retains legacy all-occurrences behavior. */
+  itemId?: string
   startUs: Microseconds
   endUs: Microseconds
   text?: string
@@ -292,6 +303,8 @@ export interface HostTranscriptCommandPreview {
  * those details never enter the FreeCut surface.
  */
 export interface EditorTranscriptPort {
+  /** Explicit opt-in: this host validates range.itemId and never broadens its scope. */
+  occurrenceSelection?: boolean
   getStatus(): Promise<HostTranscriptStatusReceipt | null> | HostTranscriptStatusReceipt | null
   /**
    * Optional host-owned transcription start.  The host performs the work and
