@@ -585,6 +585,7 @@ interface TimelineContentProps {
     handleZoomIn: () => void
     handleZoomOut: () => void
     handleZoomToFit: () => void
+    handleZoomToSelection: () => void
   }) => void
 }
 
@@ -2075,6 +2076,30 @@ export const TimelineContent = memo(function TimelineContent({
     syncViewportFromContainer(0, true)
   }, [clearQueuedZoomApply, syncViewportFromContainer])
 
+  const handleZoomToSelection = useCallback(() => {
+    const container = containerRef.current
+    const selectedIds = useSelectionStore.getState().selectedItemIds
+    const { items, fps } = useTimelineStore.getState()
+    const selected = items.filter((item) => selectedIds.includes(item.id))
+    if (!container || selected.length === 0) return
+    clearQueuedZoomApply()
+    const start = Math.min(...selected.map((item) => item.from))
+    const end = Math.max(...selected.map((item) => item.from + item.durationInFrames))
+    const zoom = Math.max(
+      ZOOM_MIN,
+      Math.min(
+        ZOOM_MAX,
+        Math.max(1, container.clientWidth - 48) / ((Math.max(1, end - start) / fps) * 100),
+      ),
+    )
+    const scroll = Math.max(0, (start / fps) * zoom * 100 - 24)
+    pendingScrollRef.current = null
+    scrollLeftRef.current = scroll
+    useZoomStore.getState().setZoomLevelSynchronized(zoom)
+    container.scrollLeft = scroll
+    syncViewportFromContainer(scroll, true)
+  }, [clearQueuedZoomApply, syncViewportFromContainer])
+
   const handleZoomTo100 = useCallback(
     (centerFrame: number) => {
       const container = containerRef.current
@@ -2112,9 +2137,17 @@ export const TimelineContent = memo(function TimelineContent({
         handleZoomIn,
         handleZoomOut,
         handleZoomToFit,
+        handleZoomToSelection,
       })
     }
-  }, [handleZoomChange, handleZoomIn, handleZoomOut, handleZoomToFit, onZoomHandlersReady])
+  }, [
+    handleZoomChange,
+    handleZoomIn,
+    handleZoomOut,
+    handleZoomToFit,
+    handleZoomToSelection,
+    onZoomHandlersReady,
+  ])
 
   const getVerticalScrollTarget = useCallback(
     (target: EventTarget | null): HTMLDivElement | null => {

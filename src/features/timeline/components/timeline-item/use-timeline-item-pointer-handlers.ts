@@ -431,9 +431,7 @@ export function useTimelineItemPointerHandlers({
     (e: React.MouseEvent, handle: 'start' | 'end') => {
       const currentIntent = smartTrimIntentRef.current
       const derivedMode =
-        activeToolRef.current === 'trim-edit' || activeToolRef.current === 'select'
-          ? smartTrimIntentToMode(currentIntent)
-          : null
+        activeToolRef.current === 'trim-edit' ? smartTrimIntentToMode(currentIntent) : null
       const shouldDestroyTransitionAtHandle =
         activeToolRef.current === 'select' &&
         derivedMode === 'ripple' &&
