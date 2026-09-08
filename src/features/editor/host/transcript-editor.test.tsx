@@ -21,6 +21,7 @@ import {
   type EditCommandBatch,
 } from '@/features/editor/codepress'
 import { useEditorStore } from '@/shared/state/editor'
+import { usePlaybackStore } from '@/shared/state/playback'
 import { MediaSidebar } from '../components/media-sidebar'
 import { EditorHostProvider } from './context-provider'
 import {
@@ -68,6 +69,7 @@ const sections: HostTranscriptSection[] = [
     startUs: 1_000_000,
     endUs: 2_000_000,
     text: 'First bounded caption.',
+    timingSource: 'provider',
     speaker: 'Speaker 1',
   },
   {
@@ -77,6 +79,7 @@ const sections: HostTranscriptSection[] = [
     startUs: 4_000_000,
     endUs: 5_000_000,
     text: 'Second bounded caption.',
+    timingSource: 'provider',
     speaker: 'Speaker 1',
   },
 ]
@@ -326,6 +329,76 @@ afterEach(() => {
 })
 
 describe('host-backed transcript consumer', () => {
+  it('selects provider words, seeks, suspends follow and immediately submits one occurrence cut', async () => {
+    const initial = snapshot()
+    initial.timeline.media = [
+      {
+        media_id: 'asset-1',
+        media_kind: 'video',
+        content_hash: 'sha256:source-1',
+        duration_us: 10_000_000,
+        availability: { mode: 'cloud', cloud: { object_id: 'object-1' } },
+      },
+    ]
+    initial.timeline.tracks = [
+      {
+        id: 'video',
+        name: 'Video',
+        kind: 'video',
+        locked: false,
+        muted: false,
+        items: [
+          {
+            type: 'video',
+            id: 'occurrence-a',
+            trackId: 'video',
+            mediaId: 'asset-1',
+            from: 0,
+            durationInFrames: 300,
+            sourceStart: 0,
+            sourceEnd: 300,
+          },
+        ],
+      },
+    ]
+    const harness = createHarness(initial)
+    harness.host.transcript!.occurrenceSelection = true
+    harness.host.transcript!.getSections = () => ({
+      transcriptId: 'transcript-1',
+      hasMore: false,
+      sections: [
+        {
+          ...sections[0]!,
+          timingSource: 'provider',
+          words: [
+            { text: 'First', startUs: 1_000_000, endUs: 1_300_000 },
+            { text: 'bounded', startUs: 1_400_000, endUs: 1_700_000 },
+            { text: 'caption.', startUs: 1_800_000, endUs: 2_000_000 },
+          ],
+        },
+      ],
+    })
+    renderHostEditor(harness)
+    const first = await screen.findByRole('button', { name: 'First' })
+    fireEvent.pointerDown(first)
+    expect(usePlaybackStore.getState().currentFrame).toBe(30)
+    expect(screen.getByRole('button', { name: 'Resume following' })).toBeInTheDocument()
+    const region = screen.getByRole('region', { name: 'Timed transcript words' })
+    fireEvent.keyDown(region, { key: 'ArrowRight', shiftKey: true })
+    expect(screen.getByRole('button', { name: 'bounded' })).toHaveAttribute('aria-pressed', 'true')
+    fireEvent.keyDown(region, { key: 'Backspace' })
+    await waitFor(() => expect(harness.submitEdit).toHaveBeenCalledTimes(1))
+    expect(harness.previewCommands).toHaveBeenCalledWith(
+      expect.objectContaining({
+        baseRevision: 0,
+        ranges: [
+          { itemId: 'occurrence-a', startUs: 1_000_000, endUs: 1_700_000, text: 'First bounded' },
+        ],
+      }),
+    )
+    expect(screen.queryByTestId('host-transcript-apply')).not.toBeInTheDocument()
+  })
+
   it('displays bounded sections, previews without mutation, then applies through submitEdit', async () => {
     const harness = createHarness(snapshot())
     renderHostEditor(harness)
@@ -547,7 +620,7 @@ describe('host-backed transcript consumer', () => {
     ).toBeInTheDocument()
     expect(requestTranscription).toHaveBeenCalledWith({ assetId: 'asset-1', language: 'en' })
     expect(polls).toBeGreaterThanOrEqual(2)
-    expect(screen.getByTestId('host-transcript-status')).toHaveTextContent('succeeded')
+    expect(screen.getByTestId('host-transcript-status')).toBeEmptyDOMElement()
   })
 
   it('hides Transcribe when the transcription capability is off', async () => {

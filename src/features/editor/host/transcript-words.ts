@@ -1,4 +1,4 @@
-import type { FreeCutFrameDocument } from '../codepress/document'
+import type { FreeCutFrameDocument, FreeCutFrameClip } from '../codepress/document'
 import { framesToMicroseconds } from '../codepress/timing'
 import type { HostTranscriptRange, HostTranscriptSection } from './contract'
 
@@ -57,37 +57,47 @@ export function mapHostTranscriptWords(
       : null
     if (cohort && linked.has(cohort)) continue
     if (cohort) linked.add(cohort)
-    const sourceStart = framesToMicroseconds(clip.sourceStart ?? 0, document.fps)
-    const sourceEnd = framesToMicroseconds(
-      clip.sourceEnd ?? (clip.sourceStart ?? 0) + clip.durationInFrames * (clip.speed ?? 1),
-      document.fps,
-    )
-    if (sourceEnd <= sourceStart) continue
-    for (const section of sections) {
-      if (!hasUsableHostWordTiming(section)) continue
-      section.words?.forEach((word, index) => {
-        if (word.endUs <= sourceStart || word.startUs >= sourceEnd) return
-        const start = Math.max(sourceStart, word.startUs)
-        const end = Math.min(sourceEnd, word.endUs)
-        words.push({
-          key: `${clip.id}:${section.id}:${index}`,
-          itemId: clip.id,
-          wordIndex: index,
-          sectionId: section.id,
-          revision: document.revision,
-          text: word.text,
-          // Preserve the measured word boundaries. The backend intersects the trim.
-          sourceStartUs: word.startUs,
-          sourceEndUs: word.endUs,
-          startFrame:
-            clip.from + ((start - sourceStart) / (sourceEnd - sourceStart)) * clip.durationInFrames,
-          endFrame:
-            clip.from + ((end - sourceStart) / (sourceEnd - sourceStart)) * clip.durationInFrames,
-        })
-      })
-    }
+    words.push(...wordsForClip(clip, document, sections))
   }
   return words.sort((a, b) => a.startFrame - b.startFrame)
+}
+
+function wordsForClip(
+  clip: FreeCutFrameClip,
+  document: FreeCutFrameDocument,
+  sections: readonly HostTranscriptSection[],
+): HostWordOccurrence[] {
+  const words: HostWordOccurrence[] = []
+  const sourceStart = framesToMicroseconds(clip.sourceStart ?? 0, document.fps)
+  const sourceEnd = framesToMicroseconds(
+    clip.sourceEnd ?? (clip.sourceStart ?? 0) + clip.durationInFrames * (clip.speed ?? 1),
+    document.fps,
+  )
+  if (sourceEnd <= sourceStart) return []
+  for (const section of sections) {
+    if (!hasUsableHostWordTiming(section)) continue
+    section.words?.forEach((word, index) => {
+      if (word.endUs <= sourceStart || word.startUs >= sourceEnd) return
+      const start = Math.max(sourceStart, word.startUs)
+      const end = Math.min(sourceEnd, word.endUs)
+      words.push({
+        key: `${clip.id}:${section.id}:${index}`,
+        itemId: clip.id,
+        wordIndex: index,
+        sectionId: section.id,
+        revision: document.revision,
+        text: word.text,
+        // Preserve the measured word boundaries. The backend intersects the trim.
+        sourceStartUs: word.startUs,
+        sourceEndUs: word.endUs,
+        startFrame:
+          clip.from + ((start - sourceStart) / (sourceEnd - sourceStart)) * clip.durationInFrames,
+        endFrame:
+          clip.from + ((end - sourceStart) / (sourceEnd - sourceStart)) * clip.durationInFrames,
+      })
+    })
+  }
+  return words
 }
 
 /** Adjacent selected words merge only within the same occurrence. */

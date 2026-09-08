@@ -61,9 +61,12 @@ function isMostlyInsideRanges(
   return covered / duration >= SILENCE_COVERAGE_REMOVAL_THRESHOLD
 }
 
-function applyRippleRemoval(ids: string[]): { removedIds: string[]; affectedIds: string[] } {
+function applyRippleRemoval(
+  ids: string[],
+  forceLinked = false,
+): { removedIds: string[]; affectedIds: string[] } {
   const items = useItemsStore.getState().items
-  const linkedSelectionEnabled = isLinkedSelectionEnabled()
+  const linkedSelectionEnabled = forceLinked || isLinkedSelectionEnabled()
   const expandedIds = expandIdsWithLinkedItems(items, ids, linkedSelectionEnabled)
   if (expandedIds.length === 0) return { removedIds: [], affectedIds: [] }
 
@@ -206,13 +209,20 @@ export function removeFillerWordsFromItems(
 export function removeTranscriptRangesFromItems(
   itemIds: string[],
   rangesByMediaId: Record<string, RemoveSilenceRange[]>,
+  rangesByItemId?: Record<string, RemoveSilenceRange[]>,
 ): RemoveSilenceResult {
-  return removeTimelineRangesFromItems('REMOVE_TRANSCRIPT_SELECTION', itemIds, rangesByMediaId)
+  return removeTimelineRangesFromItems(
+    'REMOVE_TRANSCRIPT_SELECTION',
+    itemIds,
+    rangesByMediaId,
+    rangesByItemId,
+  )
 }
 
 function getRangeRemovalAnchors(
   itemIds: string[],
   rangesByMediaId: Record<string, RemoveSilenceRange[]>,
+  rangesByItemId?: Record<string, RemoveSilenceRange[]>,
 ): TimelineItem[] {
   const store = useItemsStore.getState()
   const anchorIds = getUniqueLinkedItemAnchorIds(store.items, itemIds)
@@ -223,7 +233,8 @@ function getRangeRemovalAnchors(
         item !== undefined &&
         (item.type === 'video' || item.type === 'audio') &&
         !!item.mediaId &&
-        (rangesByMediaId[item.mediaId]?.length ?? 0) > 0,
+        ((rangesByItemId ? rangesByItemId[item.id] : rangesByMediaId[item.mediaId])?.length ?? 0) >
+          0,
     )
 }
 
@@ -314,13 +325,14 @@ function addRangeDownstreamPreflight(params: {
 function buildRangeRemovalPreflight(
   itemIds: string[],
   rangesByMediaId: Record<string, RemoveSilenceRange[]>,
+  rangesByItemId?: Record<string, RemoveSilenceRange[]>,
 ): { analyzedItemCount: number; mutationIds: string[] } {
   const store = useItemsStore.getState()
   const timelineFps = useTimelineSettingsStore.getState().fps
-  const anchors = getRangeRemovalAnchors(itemIds, rangesByMediaId)
+  const anchors = getRangeRemovalAnchors(itemIds, rangesByMediaId, rangesByItemId)
   if (anchors.length === 0) return { analyzedItemCount: 0, mutationIds: [] }
 
-  const linkedSelectionEnabled = isLinkedSelectionEnabled()
+  const linkedSelectionEnabled = !!rangesByItemId || isLinkedSelectionEnabled()
   const accumulator: RangeRemovalPreflightAccumulator = {
     mutationIds: new Set<string>(),
     editedTrackIds: new Set<string>(),
@@ -331,7 +343,7 @@ function buildRangeRemovalPreflight(
   for (const anchor of anchors) {
     addRangeAnchorPreflight({
       anchor,
-      ranges: rangesByMediaId[anchor.mediaId!] ?? [],
+      ranges: (rangesByItemId ? rangesByItemId[anchor.id] : rangesByMediaId[anchor.mediaId!]) ?? [],
       timelineFps,
       linkedSelectionEnabled,
       accumulator,
@@ -352,22 +364,56 @@ function buildRangeRemovalPreflight(
   return { analyzedItemCount: anchors.length, mutationIds: Array.from(accumulator.mutationIds) }
 }
 
+function assertTranscriptSplitOutsideTransition(item: TimelineItem, frame: number): void {
+  if (frame <= item.from || frame >= item.from + item.durationInFrames) return
+  if (isInTransitionOverlap(item.id, frame - item.from, item.durationInFrames)) {
+    throw new Error('The selected word crosses a transition. Adjust the transition before cutting.')
+  }
+}
+
+function assertTranscriptRangesRepresentable(
+  anchor: TimelineItem,
+  ranges: RemoveSilenceRange[],
+): void {
+  const fps = useTimelineSettingsStore.getState().fps
+  const linkedItems = getLinkedItemsForEdit(useItemsStore.getState().items, anchor.id, true)
+  for (const range of ranges) {
+    const start = Math.max(anchor.from, sourceSecondsToTimelineFrame(anchor, range.start, fps))
+    const end = Math.min(
+      anchor.from + anchor.durationInFrames,
+      sourceSecondsToTimelineFrame(anchor, range.end, fps),
+    )
+    if (end <= start) throw new Error('The selected word is smaller than one timeline frame.')
+    for (const linked of linkedItems) {
+      assertTranscriptSplitOutsideTransition(linked, start)
+      assertTranscriptSplitOutsideTransition(linked, end)
+    }
+  }
+}
+
 function removeTimelineRangesFromItems(
   commandType: 'REMOVE_SILENCE' | 'REMOVE_FILLER_WORDS' | 'REMOVE_TRANSCRIPT_SELECTION',
   itemIds: string[],
   rangesByMediaId: Record<string, RemoveSilenceRange[]>,
+  rangesByItemId?: Record<string, RemoveSilenceRange[]>,
 ): RemoveSilenceResult {
   if (itemIds.length === 0) {
     return { analyzedItemCount: 0, removedRangeCount: 0, removedItemCount: 0, splitCount: 0 }
   }
 
-  const preflight = buildRangeRemovalPreflight(itemIds, rangesByMediaId)
+  const preflight = buildRangeRemovalPreflight(itemIds, rangesByMediaId, rangesByItemId)
   if (preflight.mutationIds.length === 0 || !canMutateTimelineItems(preflight.mutationIds)) {
     return {
       analyzedItemCount: preflight.analyzedItemCount,
       removedRangeCount: 0,
       removedItemCount: 0,
       splitCount: 0,
+    }
+  }
+
+  if (rangesByItemId) {
+    for (const anchor of getRangeRemovalAnchors(itemIds, rangesByMediaId, rangesByItemId)) {
+      assertTranscriptRangesRepresentable(anchor, rangesByItemId[anchor.id] ?? [])
     }
   }
 
@@ -384,7 +430,8 @@ function removeTimelineRangesFromItems(
             item !== undefined &&
             (item.type === 'video' || item.type === 'audio') &&
             !!item.mediaId &&
-            (rangesByMediaId[item.mediaId]?.length ?? 0) > 0,
+            ((rangesByItemId ? rangesByItemId[item.id] : rangesByMediaId[item.mediaId])?.length ??
+              0) > 0,
         )
 
       if (anchors.length === 0) {
@@ -395,11 +442,13 @@ function removeTimelineRangesFromItems(
         id: item.id,
         mediaId: item.mediaId!,
         originId: item.originId ?? item.id,
+        from: item.from,
+        to: item.from + item.durationInFrames,
       }))
 
       let splitCount = 0
       for (const anchor of anchors) {
-        const ranges = rangesByMediaId[anchor.mediaId!]
+        const ranges = rangesByItemId ? rangesByItemId[anchor.id] : rangesByMediaId[anchor.mediaId!]
         if (!ranges || ranges.length === 0) continue
 
         const splitFrames = Array.from(
@@ -418,7 +467,7 @@ function removeTimelineRangesFromItems(
         const itemsToSplit = getLinkedItemsForEdit(
           useItemsStore.getState().items,
           anchor.id,
-          isLinkedSelectionEnabled(),
+          !!rangesByItemId || isLinkedSelectionEnabled(),
         )
         if (itemsToSplit.length === 0) continue
 
@@ -468,13 +517,22 @@ function removeTimelineRangesFromItems(
       const removedRangeKeys = new Set<string>()
 
       for (const descriptor of anchorDescriptors) {
-        const ranges = rangesByMediaId[descriptor.mediaId]
+        const ranges = rangesByItemId
+          ? rangesByItemId[descriptor.id]
+          : rangesByMediaId[descriptor.mediaId]
         if (!ranges || ranges.length === 0) continue
 
         for (const candidate of currentItems) {
           if (candidate.type !== 'video' && candidate.type !== 'audio') continue
           if (candidate.mediaId !== descriptor.mediaId) continue
           if ((candidate.originId ?? candidate.id) !== descriptor.originId) continue
+
+          if (
+            rangesByItemId &&
+            (candidate.from < descriptor.from ||
+              candidate.from + candidate.durationInFrames > descriptor.to)
+          )
+            continue
 
           const span = getItemSourceSpanSeconds(candidate, timelineFps)
           if (span !== null && isMostlyInsideRanges(span, ranges)) {
@@ -497,7 +555,7 @@ function removeTimelineRangesFromItems(
         }
       }
 
-      const removalResult = applyRippleRemoval(Array.from(idsToRemove))
+      const removalResult = applyRippleRemoval(Array.from(idsToRemove), !!rangesByItemId)
       const affectedIds = Array.from(new Set([...idsToRemove, ...removalResult.affectedIds]))
       requestPostEditWarmForItems(affectedIds)
       useTimelineSettingsStore.getState().markDirty()

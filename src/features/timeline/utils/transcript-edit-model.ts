@@ -62,12 +62,7 @@ export function buildTranscriptTokens(
   timelineFps: number,
 ): TranscriptToken[] {
   const tokens: TranscriptToken[] = []
-  // Timeline ranges already emitted per media. A linked audio companion shares
-  // the exact `from`/duration of its video, so deduping on the timeline range
-  // (rather than the source span, which can differ between a video and its
-  // separately-based audio frames) reliably drops the companion. Distinct trims
-  // of the same media sit at different timeline positions and are both kept.
-  const acceptedRangesByMedia = new Map<string, Array<{ from: number; to: number }>>()
+  const acceptedCohorts = new Set<string>()
 
   // Prefer the video item when a video/audio pair covers the same range.
   const ordered = [...items].sort((a, b) => Number(a.type !== 'video') - Number(b.type !== 'video'))
@@ -79,12 +74,11 @@ export function buildTranscriptTokens(
     const span = getItemSourceSpanSeconds(item, timelineFps)
     if (!span) continue
 
-    const from = item.from
-    const to = item.from + item.durationInFrames
-    const accepted = acceptedRangesByMedia.get(item.mediaId) ?? []
-    if (accepted.some((other) => other.from < to && from < other.to)) continue
-    accepted.push({ from, to })
-    acceptedRangesByMedia.set(item.mediaId, accepted)
+    const cohort = item.linkedGroupId
+      ? `${item.linkedGroupId}:${item.mediaId}:${item.from}:${item.durationInFrames}:${span.start}:${span.end}`
+      : null
+    if (cohort && acceptedCohorts.has(cohort)) continue
+    if (cohort) acceptedCohorts.add(cohort)
 
     const words = collectWords(transcript)
     words.forEach((word, index) => {
@@ -106,20 +100,7 @@ export function buildTranscriptTokens(
     })
   }
 
-  const sorted = tokens.toSorted((left, right) => left.startFrame - right.startFrame)
-
-  // Final safety net: collapse tokens identical in text AND exact timeline timing.
-  // Two sources of the same spoken content (a linked companion, or the same
-  // footage imported as separate media so it escapes per-media dedup above) emit
-  // word-for-word identical, identically-timed tokens. Genuinely distinct clips
-  // map to different frames, so real repeated words are preserved.
-  const seen = new Set<string>()
-  return sorted.filter((token) => {
-    const signature = `${token.startFrame}:${token.endFrame}:${token.text}`
-    if (seen.has(signature)) return false
-    seen.add(signature)
-    return true
-  })
+  return tokens.toSorted((left, right) => left.startFrame - right.startFrame)
 }
 
 /**
@@ -172,6 +153,20 @@ export function buildRemovalRangesByMediaId(
   flush()
 
   return rangesByMediaId
+}
+
+/** Keep source ranges isolated per selected occurrence, including repeated source runs. */
+export function buildRemovalRangesByItemId(
+  tokens: readonly TranscriptToken[],
+): Record<string, RemoveSilenceRange[]> {
+  const ranges: Record<string, RemoveSilenceRange[]> = {}
+  for (const token of tokens) {
+    const list = ranges[token.itemId] ?? (ranges[token.itemId] = [])
+    const previous = list.at(-1)
+    if (previous) previous.end = Math.max(previous.end, token.sourceEnd)
+    else list.push({ start: token.sourceStart, end: token.sourceEnd })
+  }
+  return ranges
 }
 
 /** Resolve a contiguous index range [anchor, focus] into the tokens it covers. */

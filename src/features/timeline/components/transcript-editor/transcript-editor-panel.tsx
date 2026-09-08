@@ -1,3 +1,4 @@
+import { transcriptSelectionIndex } from '@/shared/utils/transcript-selection'
 import {
   Fragment,
   memo,
@@ -59,6 +60,7 @@ import {
 } from '../../deps/media-transcription-service'
 import {
   buildRemovalRangesByMediaId,
+  buildRemovalRangesByItemId,
   buildTranscriptTokens,
   findActiveTokenIndex,
   getSelectedTokenSlice,
@@ -275,7 +277,8 @@ export function TranscriptEditorPanel({ active }: TranscriptEditorPanelProps) {
   const ignoreRanges = useTranscriptIgnoreStore((s) => s.ranges)
   const setTranscriptShortcutScope = useEditorStore((s) => s.setTranscriptEditorShortcutScopeActive)
 
-  const [scope, setScope] = useState<TranscriptScope>('selection')
+  const [following, setFollowing] = useState(true)
+  const [scope, setScope] = useState<TranscriptScope>('project')
   const [mediaState, setMediaState] = useState<Record<string, MediaEntry>>({})
   const [anchorIndex, setAnchorIndex] = useState(-1)
   const [focusIndex, setFocusIndex] = useState(-1)
@@ -404,7 +407,7 @@ export function TranscriptEditorPanel({ active }: TranscriptEditorPanelProps) {
     setAnchorIndex(-1)
     setFocusIndex(-1)
     setMatchCursor(0)
-  }, [uniqueMediaIds, scope])
+  }, [uniqueMediaIds, scope, allItems, tokens])
 
   useEffect(() => {
     mountedRef.current = true
@@ -478,14 +481,14 @@ export function TranscriptEditorPanel({ active }: TranscriptEditorPanelProps) {
   // Keep the active word in view during playback. Skip entirely when hidden — a
   // querySelector + scrollIntoView every frame on an off-screen panel is pure waste.
   useEffect(() => {
-    if (!active || !isPlaying || activeIndex < 0) return
+    if (!active || !following || !isPlaying || activeIndex < 0) return
     const key = tokens[activeIndex]?.key
     if (!key) return
     const el = scrollRef.current?.querySelector<HTMLElement>(
       `[data-token-key="${CSS.escape(key)}"]`,
     )
     el?.scrollIntoView({ block: 'nearest' })
-  }, [active, isPlaying, activeIndex, tokens])
+  }, [active, following, isPlaying, activeIndex, tokens])
 
   useEffect(() => {
     const stop = () => {
@@ -503,6 +506,7 @@ export function TranscriptEditorPanel({ active }: TranscriptEditorPanelProps) {
     (index: number, event: ReactPointerEvent) => {
       const token = tokens[index]
       if (!token) return
+      setFollowing(false)
       if (event.shiftKey && anchorIndexRef.current >= 0) {
         setFocusIndex(index)
       } else {
@@ -536,18 +540,27 @@ export function TranscriptEditorPanel({ active }: TranscriptEditorPanelProps) {
     if (Number.isInteger(index)) setFocusIndex(index)
   }, [])
 
-  // Non-destructive: striking words stages them as "ignored" (restorable) rather
-  // than cutting the timeline. Re-striking an already-ignored selection restores it.
   const handleIgnoreToggle = useCallback(() => {
     if (selectedSlice.length === 0) return
-    const ranges = buildRemovalRangesByMediaId(selectedSlice)
-    const allIgnored = selectedSlice.every((token) => ignoredKeys.has(token.key))
-    if (allIgnored) {
-      useTranscriptIgnoreStore.getState().restore(ranges)
-    } else {
-      useTranscriptIgnoreStore.getState().ignore(ranges)
+    try {
+      const result = useTimelineStore
+        .getState()
+        .removeTranscriptRangesFromItems(
+          [...new Set(selectedSlice.map((token) => token.itemId))],
+          buildRemovalRangesByMediaId(selectedSlice),
+          buildRemovalRangesByItemId(selectedSlice),
+        )
+      if (result.removedItemCount === 0) {
+        toast.error('The selection cannot be cut. Check locked tracks and transition boundaries.')
+        return
+      }
+      setAnchorIndex(-1)
+      setFocusIndex(-1)
+      toast.success('Selected footage deleted. Undo restores this cut.')
+    } catch {
+      toast.error(t('transcript.toastRemoveFailed'))
     }
-  }, [selectedSlice, ignoredKeys])
+  }, [selectedSlice, t])
 
   // Word-level copy/cut that carries the media: each run of selected words
   // becomes a trimmed clone of its clip, placed on the shared clipboard so the
@@ -576,7 +589,13 @@ export function TranscriptEditorPanel({ active }: TranscriptEditorPanelProps) {
       const rangesByMediaId = buildRemovalRangesByMediaId(selectedSlice)
       const itemIds = Array.from(new Set(selectedSlice.map((token) => token.itemId)))
       try {
-        useTimelineStore.getState().removeTranscriptRangesFromItems(itemIds, rangesByMediaId)
+        useTimelineStore
+          .getState()
+          .removeTranscriptRangesFromItems(
+            itemIds,
+            rangesByMediaId,
+            buildRemovalRangesByItemId(selectedSlice),
+          )
       } catch (error) {
         logger.warn('Transcript cut failed', error)
         toast.error(t('transcript.toastRemoveFailed'))
@@ -685,23 +704,35 @@ export function TranscriptEditorPanel({ active }: TranscriptEditorPanelProps) {
         return
       }
 
+      const next = transcriptSelectionIndex(event.key, focusIndex, tokens.length)
+      if (next !== null) {
+        event.preventDefault()
+        event.stopPropagation()
+        setFollowing(false)
+        if (!event.shiftKey || anchorIndex < 0) setAnchorIndex(next)
+        setFocusIndex(next)
+        seekToToken(tokens[next]!.startFrame)
+        return
+      }
       if (event.key === 'Delete' || event.key === 'Backspace') {
         // Always own these so they never fall through to the timeline's clip
         // delete — even with no selection (then it's simply a no-op).
         event.preventDefault()
         event.stopPropagation()
         if (selectedKeys.size > 0) handleIgnoreToggle()
-      } else if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
-        if (ignoredSpanCount === 0) return
-        event.preventDefault()
-        event.stopPropagation()
-        handleApply()
       } else if (event.key === 'Escape') {
         setAnchorIndex(-1)
         setFocusIndex(-1)
       }
     },
-    [selectedKeys.size, handleIgnoreToggle, ignoredSpanCount, handleApply],
+    [
+      selectedKeys.size,
+      handleIgnoreToggle,
+      tokens,
+      focusIndex,
+      anchorIndex,
+      seekToToken,
+    ],
   )
 
   const needsTranscription = uniqueMediaIds.filter(
@@ -712,61 +743,64 @@ export function TranscriptEditorPanel({ active }: TranscriptEditorPanelProps) {
     return status === 'loading' || status === 'transcribing'
   })
 
-  const handleTranscribe = useCallback((values: TranscribeDialogValues) => {
-    const targets = uniqueMediaIds.filter((id) => {
-      const status = mediaState[id]?.status
-      return status === 'needs' || status === 'error'
-    })
-    if (targets.length === 0) return
+  const handleTranscribe = useCallback(
+    (values: TranscribeDialogValues) => {
+      const targets = uniqueMediaIds.filter((id) => {
+        const status = mediaState[id]?.status
+        return status === 'needs' || status === 'error'
+      })
+      if (targets.length === 0) return
 
-    setTranscribeDialogOpen(false)
+      setTranscribeDialogOpen(false)
 
-    for (const id of targets) requestedRef.current.add(id)
-    setMediaState((prev) => {
-      const next = { ...prev }
-      for (const id of targets) next[id] = { status: 'transcribing' }
-      return next
-    })
+      for (const id of targets) requestedRef.current.add(id)
+      setMediaState((prev) => {
+        const next = { ...prev }
+        for (const id of targets) next[id] = { status: 'transcribing' }
+        return next
+      })
 
-    void Promise.all(
-      targets.map(async (mediaId) => {
-        try {
-          const result = await runMediaTranscriptionJob(mediaId, {
-            ...values,
-            onModelFallback: () => {
-              toast.info(t('transcript.largeTurboFallback'))
-            },
-          })
-          if (!mountedRef.current) return
-          if (result.status === 'cancelled') {
-            setMediaState((prev) => ({ ...prev, [mediaId]: { status: 'needs' } }))
-            return
-          }
-          const { transcript } = result
-          setMediaState((prev) => ({
-            ...prev,
-            [mediaId]: hasWordTimings(transcript)
-              ? { status: 'ready', transcript }
-              : { status: 'needs' },
-          }))
-        } catch (error) {
-          logger.warn('Transcription failed', { mediaId, error })
-          const errorMessage = isTranscriptionOutOfMemoryError(error)
-            ? TRANSCRIPTION_OOM_HINT
-            : error instanceof Error && error.message.trim().length > 0
-              ? error.message
-              : t('transcript.toastTranscribeFailed')
-          if (mountedRef.current) {
+      void Promise.all(
+        targets.map(async (mediaId) => {
+          try {
+            const result = await runMediaTranscriptionJob(mediaId, {
+              ...values,
+              onModelFallback: () => {
+                toast.info(t('transcript.largeTurboFallback'))
+              },
+            })
+            if (!mountedRef.current) return
+            if (result.status === 'cancelled') {
+              setMediaState((prev) => ({ ...prev, [mediaId]: { status: 'needs' } }))
+              return
+            }
+            const { transcript } = result
             setMediaState((prev) => ({
               ...prev,
-              [mediaId]: { status: 'error', errorMessage },
+              [mediaId]: hasWordTimings(transcript)
+                ? { status: 'ready', transcript }
+                : { status: 'needs' },
             }))
+          } catch (error) {
+            logger.warn('Transcription failed', { mediaId, error })
+            const errorMessage = isTranscriptionOutOfMemoryError(error)
+              ? TRANSCRIPTION_OOM_HINT
+              : error instanceof Error && error.message.trim().length > 0
+                ? error.message
+                : t('transcript.toastTranscribeFailed')
+            if (mountedRef.current) {
+              setMediaState((prev) => ({
+                ...prev,
+                [mediaId]: { status: 'error', errorMessage },
+              }))
+            }
+            toast.error(errorMessage)
           }
-          toast.error(errorMessage)
-        }
-      }),
-    )
-  }, [uniqueMediaIds, mediaState, t])
+        }),
+      )
+    },
+    [uniqueMediaIds, mediaState, t],
+  )
 
   const transcriptionError = useMemo(
     () =>
@@ -812,6 +846,11 @@ export function TranscriptEditorPanel({ active }: TranscriptEditorPanelProps) {
       {/* Scope toggle */}
       <div className="flex items-center gap-1 border-b border-border p-2">
         <ScopeToggle scope={scope} onChange={setScope} t={t} />
+        {!following && (
+          <Button size="sm" variant="ghost" onClick={() => setFollowing(true)}>
+            Resume following
+          </Button>
+        )}
       </div>
 
       {/* Search */}
@@ -889,6 +928,8 @@ export function TranscriptEditorPanel({ active }: TranscriptEditorPanelProps) {
       {/* Transcript body */}
       <div
         ref={scrollRef}
+        onWheel={() => setFollowing(false)}
+        onTouchMove={() => setFollowing(false)}
         onPointerMove={handlePointerMove}
         className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto px-3 py-2"
       >
@@ -1021,9 +1062,7 @@ export function TranscriptEditorPanel({ active }: TranscriptEditorPanelProps) {
         <span className="min-w-0 text-xs text-muted-foreground">
           {selectionCount > 0
             ? t('transcript.wordsSelected', { count: selectionCount })
-            : t('transcript.ignoreHint', {
-                defaultValue: 'Select words, then Backspace to mark them for deletion',
-              })}
+            : 'Select words, then Backspace or Delete to cut footage'}
         </span>
         <div className="flex shrink-0 flex-wrap items-center justify-end gap-1.5">
           <Button
@@ -1065,12 +1104,12 @@ export function TranscriptEditorPanel({ active }: TranscriptEditorPanelProps) {
             aria-label={
               selectionAllIgnored
                 ? t('transcript.restoreSelection', { defaultValue: 'Restore' })
-                : t('transcript.ignoreSelection', { defaultValue: 'Mark for delete' })
+                : 'Delete selection'
             }
             data-tooltip={
               selectionAllIgnored
                 ? t('transcript.restoreSelection', { defaultValue: 'Restore' })
-                : t('transcript.ignoreSelection', { defaultValue: 'Mark for delete' })
+                : 'Delete selection'
             }
           >
             {selectionAllIgnored ? (
@@ -1081,7 +1120,7 @@ export function TranscriptEditorPanel({ active }: TranscriptEditorPanelProps) {
             <span className="hidden @[340px]:inline">
               {selectionAllIgnored
                 ? t('transcript.restoreSelection', { defaultValue: 'Restore' })
-                : t('transcript.ignoreSelection', { defaultValue: 'Mark for delete' })}
+                : 'Delete selection'}
             </span>
           </Button>
         </div>

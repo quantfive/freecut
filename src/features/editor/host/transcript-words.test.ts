@@ -99,6 +99,24 @@ describe('host word occurrence mapping', () => {
       'different-time',
     ])
   })
+  it('rejects incomplete or malformed provider word coverage', () => {
+    expect(
+      mapHostTranscriptWords(document([clip]), 'media', [
+        { ...section, words: section.words!.slice(1) },
+      ]),
+    ).toEqual([])
+    expect(
+      mapHostTranscriptWords(document([clip]), 'media', [
+        { ...section, words: [{ text: section.text, startUs: NaN, endUs: 3_000_000 }] },
+      ]),
+    ).toEqual([])
+    expect(
+      mapHostTranscriptWords(document([clip]), 'media', [
+        { ...section, words: [{ text: section.text, startUs: 0, endUs: 3_000_001 }] },
+      ]),
+    ).toEqual([])
+  })
+
   it('never invents word timing from legacy or synthetic sections and leaves gaps inactive', () => {
     expect(
       mapHostTranscriptWords(document([clip]), 'media', [
