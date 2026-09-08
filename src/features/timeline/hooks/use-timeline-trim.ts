@@ -1,3 +1,4 @@
+import { useTimelineGestureCancellation } from './use-timeline-gesture-cancellation'
 import { useState, useCallback, useRef, useEffect } from 'react'
 import type { TimelineItem } from '@/types/timeline'
 import { commitPreviewFrameToCurrentFrame } from '@/shared/state/playback'
@@ -197,7 +198,6 @@ export function useTimelineTrim(
     hostGestureRef.current = null
     if (gesture) gesture.port.cancelTrim(gesture.token)
   }, [])
-  useEffect(() => cancelHostGesture, [cancelHostGesture])
   const pixelsToTime = pixelsToTimeNow
   const fps = useTimelineStore((s) => s.fps)
   const setDragState = useSelectionStore((s) => s.setDragState)
@@ -217,6 +217,7 @@ export function useTimelineTrim(
 
   const [trimState, setTrimState] = useState<TrimState>(createIdleTrimState)
 
+  const cancelQueuedMoveRef = useRef<(() => void) | null>(null)
   const trimStateRef = useRef(trimState)
   trimStateRef.current = trimState
 
@@ -820,12 +821,22 @@ export function useTimelineTrim(
     setTrimState(idleState)
   }, [])
 
-  const handleTrimCancel = useCallback(() => {
-    if (!trimStateRef.current.isTrimming) return
-    cancelHostGesture()
-    clearTrimPresentation()
-    resetTrimState()
-  }, [cancelHostGesture, clearTrimPresentation, resetTrimState])
+  const handleTrimCancel = useCallback(
+    (updateReactState = true) => {
+      if (!trimStateRef.current.isTrimming) return
+      trimStateRef.current = createIdleTrimState()
+      cancelQueuedMoveRef.current?.()
+      try {
+        cancelHostGesture()
+      } finally {
+        clearTrimPresentation()
+        if (updateReactState) resetTrimState()
+      }
+    },
+    [cancelHostGesture, clearTrimPresentation, resetTrimState],
+  )
+
+  useTimelineGestureCancellation(ownerRef, handleTrimCancel)
 
   // Mouse up handler - commits changes to store (single update)
   const handleMouseUp = useCallback(() => {
@@ -928,19 +939,11 @@ export function useTimelineTrim(
         handleTrimCancel()
       }
 
-      const handleEditorCollapse = (event: Event) => {
-        if (
-          ownerRef?.current &&
-          (!(event.target instanceof Element) || !event.target.contains(ownerRef.current))
-        )
-          return
-        handlePointerCancel()
-      }
+      cancelQueuedMoveRef.current = coalescedMouseMove.cancel
 
       window.addEventListener('mousemove', coalescedMouseMove.queue)
       window.addEventListener('mouseup', handleCoalescedMouseUp)
       window.addEventListener('pointercancel', handlePointerCancel)
-      window.addEventListener('freecut:cancel-timeline-gesture', handleEditorCollapse)
       window.addEventListener('blur', handlePointerCancel)
       window.addEventListener('keydown', handleKeyDown)
       window.addEventListener('keyup', handleKeyUp)
@@ -949,9 +952,9 @@ export function useTimelineTrim(
         window.removeEventListener('mousemove', coalescedMouseMove.queue)
         window.removeEventListener('mouseup', handleCoalescedMouseUp)
         window.removeEventListener('pointercancel', handlePointerCancel)
-        window.removeEventListener('freecut:cancel-timeline-gesture', handleEditorCollapse)
         window.removeEventListener('blur', handlePointerCancel)
         coalescedMouseMove.cancel()
+        cancelQueuedMoveRef.current = null
         window.removeEventListener('keydown', handleKeyDown)
         window.removeEventListener('keyup', handleKeyUp)
         clearTrimPresentation()
@@ -960,7 +963,6 @@ export function useTimelineTrim(
     }
   }, [
     trimState.isTrimming,
-    ownerRef,
     clearTrimPresentation,
     handleMouseMove,
     handleMouseUp,

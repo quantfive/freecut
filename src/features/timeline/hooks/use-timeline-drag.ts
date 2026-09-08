@@ -1,3 +1,4 @@
+import { useTimelineGestureCancellation } from './use-timeline-gesture-cancellation'
 import type React from 'react'
 import { useState, useEffect, useRef, useCallback } from 'react'
 import type { TimelineItem, TimelineTrack } from '@/types/timeline'
@@ -602,6 +603,7 @@ export function useTimelineDrag(
   const linkedMovePreviewSignatureRef = useRef('')
   const selectionRollbackRef = useRef<DragSelectionSnapshot | null>(null)
   const gestureMovementRef = useRef(0)
+  const cancelQueuedMoveRef = useRef<(() => void) | null>(null)
   const removeDragThresholdListenersRef = useRef<(() => void) | null>(null)
 
   // Track Alt key state for duplication mode (dynamic toggle during drag)
@@ -671,6 +673,8 @@ export function useTimelineDrag(
       suppressPostGestureClick?: boolean
       updateReactState?: boolean
     }) => {
+      dragStateRef.current = null
+      cancelQueuedMoveRef.current?.()
       const removeDragThresholdListeners = removeDragThresholdListenersRef.current
       removeDragThresholdListenersRef.current = null
       removeDragThresholdListeners?.()
@@ -685,7 +689,6 @@ export function useTimelineDrag(
       clearLinkedMovePreview()
       prevSnapTargetRef.current = null
       magneticSnapTargetsRef.current = []
-      dragStateRef.current = null
       isLinkedCohortDragRef.current = false
       isAltDragRef.current = false
       gestureMovementRef.current = 0
@@ -1781,6 +1784,7 @@ export function useTimelineDrag(
         handleMouseUp()
       }
 
+      cancelQueuedMoveRef.current = coalescedMouseMove.cancel
       window.addEventListener('mousemove', coalescedMouseMove.queue)
       window.addEventListener('mouseup', handleCoalescedMouseUp)
       window.addEventListener('pointercancel', handleCancellation)
@@ -1792,6 +1796,7 @@ export function useTimelineDrag(
         window.removeEventListener('pointercancel', handleCancellation)
         window.removeEventListener('keydown', handleKeyDown)
         coalescedMouseMove.cancel()
+        cancelQueuedMoveRef.current = null
       }
     }
   }, [
@@ -1813,18 +1818,19 @@ export function useTimelineDrag(
     setLinkedMovePreview,
   ])
 
-  useEffect(
-    () => () => {
-      if (dragStateRef.current || selectionRollbackRef.current) {
-        finishDragInteraction({
-          rollbackSelection: true,
-          suppressPostGestureClick: true,
-          updateReactState: false,
-        })
-      }
-    },
-    [finishDragInteraction],
-  )
+  useTimelineGestureCancellation(elementRef, (updateReactState) => {
+    if (
+      dragStateRef.current ||
+      selectionRollbackRef.current ||
+      removeDragThresholdListenersRef.current
+    ) {
+      finishDragInteraction({
+        rollbackSelection: true,
+        suppressPostGestureClick: true,
+        updateReactState,
+      })
+    }
+  })
 
   return {
     isDragging,

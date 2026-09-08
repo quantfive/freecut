@@ -141,6 +141,11 @@ export function clearMixerLiveGain(itemId: string): void {
   }
 }
 
+/** Read the layer owned by setMixerLiveGains, independently of mute/other layers. */
+export function getDefaultMixerLiveGain(itemId: string): number {
+  return overridesByLayerId.get(DEFAULT_LAYER_ID)?.get(itemId) ?? 1
+}
+
 export function getMixerLiveGain(itemId: string): number {
   return getMixerLiveGainForItemAcrossLayers(itemId)
 }

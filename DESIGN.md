@@ -332,3 +332,17 @@ density and more color than the rest of the app because the color is data.
   readable text to ~2.5–3.5:1. De-emphasize with size/weight, not sub-AA alpha. (Opacity
   is fine on genuinely decorative markers or disabled controls, which AA exempts.)
 - **Don't** add a light theme; contrast work happens within the dark ramp.
+
+## Editing workspace refresh
+
+CodePress keeps its independent AI conversation far left. FreeCut owns a separate
+Library (Transcript, Media, More) and Editor (preview above timeline). Columns
+resize and collapse independently, keep their mounted state, and expose restore
+controls outside hidden regions. Narrow workspaces retain readable minima and
+explicit visibility controls rather than combining Chat and Transcript into tabs.
+
+Settings and audio meters are on demand, with no permanent properties column.
+Common actions use a single header group. Transcript reading uses 14px text;
+quiet graphite surfaces, generous preview spacing, and restrained orange focus
+keep the footage central. Timeline interaction and host edit reliability have
+separate acceptance gates under quantfive/codepress#7144.

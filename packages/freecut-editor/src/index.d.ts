@@ -526,7 +526,19 @@ export interface EditorHostProviderProps {
   children: ReactNode
 }
 
+export interface EditorShellOptions {
+  onLayoutChange?: (layout: {
+    minimumWidth: number
+    libraryVisible: boolean
+    editorVisible: boolean
+  }) => void
+  headerActions?: import('react').ReactNode
+  navigationActions?: import('react').ReactNode
+  transcriptActions?: import('react').ReactNode
+}
+
 export interface FreeCutEditorSurfaceProps {
+  shell?: EditorShellOptions
   host: EditorHost
 }
 
@@ -557,3 +569,5 @@ export declare function isHostCapabilityEnabled(
   capability: EditorCapability,
 ): boolean
 export declare function createLocalEditorHost(options: LocalEditorHostOptions): EditorHost
+
+export declare const FREECUT_EDITOR_SHELL_VERSION = 1

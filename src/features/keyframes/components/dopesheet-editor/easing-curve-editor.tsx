@@ -1,4 +1,8 @@
 import {
+  useKeyframeGestureCancellation,
+  releaseKeyframePointerCapture,
+} from '../use-keyframe-gesture-cancellation'
+import {
   useCallback,
   useEffect,
   useRef,
@@ -144,6 +148,8 @@ interface EasingCurveEditorProps {
   onChangeSpring: (spring: SpringParameters, commit: boolean) => void
   onDragStart?: () => void
   onDragEnd?: () => void
+  onDragCancel?: () => void
+  ownerRef: React.RefObject<Element | null>
 }
 
 export function EasingCurveEditor({
@@ -153,7 +159,37 @@ export function EasingCurveEditor({
   onChangeSpring,
   onDragStart,
   onDragEnd,
+  onDragCancel,
+  ownerRef,
 }: EasingCurveEditorProps) {
+  const activeGesture = useRef(false)
+  const captureRef = useRef<{ target: Element; pointerId: number } | null>(null)
+  const generation = useRef(0)
+  const [childGeneration, setChildGeneration] = useState(0)
+  const renderGeneration = generation.current
+  const isCurrent = useCallback(() => generation.current === renderGeneration, [renderGeneration])
+  const beginGesture = () => {
+    if (!isCurrent()) return
+    activeGesture.current = true
+    onDragStart?.()
+  }
+  const endGesture = () => {
+    if (!isCurrent() || !activeGesture.current) return
+    activeGesture.current = false
+    onDragEnd?.()
+  }
+  useKeyframeGestureCancellation(ownerRef, (updateReactState) => {
+    if (!activeGesture.current) return
+    activeGesture.current = false
+    generation.current += 1
+    const capture = captureRef.current
+    captureRef.current = null
+    if (capture) releaseKeyframePointerCapture(capture.target, capture.pointerId)
+    // Retire captured child callbacks immediately, then discard their pointer
+    // and draft state (including the slider library's internal capture).
+    if (updateReactState) setChildGeneration(generation.current)
+    onDragCancel?.()
+  })
   const { t } = useTranslation()
   const [duration, setDuration] = useState(BEZIER_PREVIEW_DURATION)
 
@@ -169,16 +205,16 @@ export function EasingCurveEditor({
 
   const setBezierField = useCallback(
     (key: BezierKey, raw: number, commit: boolean) => {
-      onChangeBezier({ ...bezier, [key]: clampField(key, raw) }, commit)
+      if (isCurrent()) onChangeBezier({ ...bezier, [key]: clampField(key, raw) }, commit)
     },
-    [onChangeBezier, bezier],
+    [onChangeBezier, bezier, isCurrent],
   )
 
   const setSpringField = useCallback(
     (key: SpringKey, raw: number, commit: boolean) => {
-      onChangeSpring({ ...spring, [key]: clampSpringField(key, raw) }, commit)
+      if (isCurrent()) onChangeSpring({ ...spring, [key]: clampSpringField(key, raw) }, commit)
     },
-    [onChangeSpring, spring],
+    [onChangeSpring, spring, isCurrent],
   )
 
   // Drag a bezier control point (P1 from the start, P2 from the end) on the
@@ -189,13 +225,19 @@ export function EasingCurveEditor({
         point === 'p1'
           ? { ...bezier, x1: clampField('x1', x), y1: clampField('y1', y) }
           : { ...bezier, x2: clampField('x2', x), y2: clampField('y2', y) }
-      onChangeBezier(next, commit)
+      if (isCurrent()) onChangeBezier(next, commit)
     },
-    [onChangeBezier, bezier],
+    [onChangeBezier, bezier, isCurrent],
   )
 
   return (
-    <div className="flex items-stretch gap-3">
+    <div
+      key={childGeneration}
+      className="flex items-stretch gap-3"
+      onPointerDownCapture={(event) => {
+        captureRef.current = { target: event.target as Element, pointerId: event.pointerId }
+      }}
+    >
       {/* Square canvas, capped so the sliders keep a usable width; centered
           vertically against the taller controls column. */}
       <div className="aspect-square w-[190px] shrink-0 self-center">
@@ -203,8 +245,8 @@ export function EasingCurveEditor({
           config={previewConfig}
           editableBezier={isSpring ? undefined : bezier}
           onBezierPointChange={isSpring ? undefined : setBezierPoint}
-          onDragStart={onDragStart}
-          onDragEnd={onDragEnd}
+          onDragStart={beginGesture}
+          onDragEnd={endGesture}
         />
       </div>
 
@@ -221,8 +263,8 @@ export function EasingCurveEditor({
                 decimals={SPRING_FIELD_RANGE[key].decimals}
                 onLive={(v) => setSpringField(key, v, false)}
                 onCommit={(v) => setSpringField(key, v, true)}
-                onDragStart={onDragStart}
-                onDragEnd={onDragEnd}
+                onDragStart={beginGesture}
+                onDragEnd={endGesture}
               />
             ))
           : BEZIER_INPUT_KEYS.map((key) => (
@@ -235,8 +277,8 @@ export function EasingCurveEditor({
                 step={0.01}
                 onLive={(v) => setBezierField(key, v, false)}
                 onCommit={(v) => setBezierField(key, v, true)}
-                onDragStart={onDragStart}
-                onDragEnd={onDragEnd}
+                onDragStart={beginGesture}
+                onDragEnd={endGesture}
               />
             ))}
         {!isSpring && (
@@ -273,6 +315,7 @@ function CurveCanvas({
 }) {
   const svgRef = useRef<SVGSVGElement>(null)
   const [drag, setDrag] = useState<'p1' | 'p2' | null>(null)
+  const dragRef = useRef<'p1' | 'p2' | null>(null)
 
   // While a handle is held, track the pointer on the window (not just the SVG)
   // so the drag survives leaving the canvas; convert client px → bezier coords.
@@ -286,10 +329,13 @@ function CurveCanvas({
       return { x: (vx - PAD) / PLOT, y: Y_MAX - ((vy - PAD) / PLOT) * (Y_MAX - Y_MIN) }
     }
     const move = (e: PointerEvent) => {
+      if (dragRef.current !== drag) return
       const b = toBezier(e.clientX, e.clientY)
       if (b) onBezierPointChange(drag, b.x, b.y, false)
     }
     const up = (e: PointerEvent) => {
+      if (dragRef.current !== drag) return
+      dragRef.current = null
       const b = toBezier(e.clientX, e.clientY)
       if (b) onBezierPointChange(drag, b.x, b.y, true)
       setDrag(null)
@@ -310,6 +356,7 @@ function CurveCanvas({
   const startDrag = (point: 'p1' | 'p2') => (e: ReactPointerEvent<SVGElement>) => {
     e.preventDefault()
     onDragStart?.()
+    dragRef.current = point
     setDrag(point)
   }
 

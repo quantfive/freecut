@@ -1,3 +1,4 @@
+import { useTimelineGestureCancellation } from './use-timeline-gesture-cancellation'
 import { useState, useCallback, useRef, useEffect } from 'react'
 import type { TimelineItem } from '@/types/timeline'
 import type { Transition } from '@/types/transition'
@@ -220,6 +221,7 @@ export function useTimelineSlipSlide(
   item: TimelineItem,
   timelineDuration: number,
   trackLocked: boolean = false,
+  ownerRef?: React.RefObject<HTMLElement | null>,
 ) {
   const pixelsToTime = pixelsToTimeNow
   const fps = useTimelineStore((s) => s.fps)
@@ -230,7 +232,7 @@ export function useTimelineSlipSlide(
     item.id,
   )
 
-  const [state, setState] = useState<SlipSlideState>({
+  const [state, setReactState] = useState<SlipSlideState>({
     isActive: false,
     mode: null,
     startX: 0,
@@ -244,6 +246,11 @@ export function useTimelineSlipSlide(
 
   const stateRef = useRef(state)
   stateRef.current = state
+  const setState = useCallback((next: React.SetStateAction<typeof state>) => {
+    const value = typeof next === 'function' ? next(stateRef.current) : next
+    stateRef.current = value
+    setReactState(value)
+  }, [])
   const latestDeltaRef = useRef(0)
   const pendingStartCleanupRef = useRef<(() => void) | null>(null)
   const slideGestureContextRef = useRef<SlideGestureContext | null>(null)
@@ -481,7 +488,15 @@ export function useTimelineSlipSlide(
       // Note: clampSlideDelta intentionally omitted — it reads fps from store at
       // call time, and including it would cause a TDZ error (defined after this hook).
     },
-    [buildSlideGestureContext, findNeighbors, fps, getItemFromStore, item.id, setDragState],
+    [
+      buildSlideGestureContext,
+      findNeighbors,
+      fps,
+      getItemFromStore,
+      item.id,
+      setDragState,
+      setState,
+    ],
   )
 
   /**
@@ -1150,28 +1165,20 @@ export function useTimelineSlipSlide(
       clampSlideDelta,
       clampSlideDeltaToPreserveTransitionsWithContext,
       clampSlideDeltaWithContext,
+      setState,
       getMagneticSnapTargets,
       getSnapThresholdFrames,
       isSnapEnabled,
     ],
   )
 
-  // Mouse up handler — commits changes
-  const handleMouseUp = useCallback(() => {
-    if (!stateRef.current.isActive) return
-
-    const { mode, leftNeighborId, rightNeighborId } = stateRef.current
-    const currentDelta = latestDeltaRef.current
-
-    try {
-      if (currentDelta !== 0) {
-        if (mode === 'slip') {
-          slipItem(item.id, currentDelta)
-        } else if (mode === 'slide') {
-          slideItem(item.id, currentDelta, leftNeighborId, rightNeighborId)
-        }
-      }
-    } finally {
+  const cancelGesture = useCallback(
+    (updateReactState = true) => {
+      const pending = pendingStartCleanupRef.current
+      pendingStartCleanupRef.current = null
+      pending?.()
+      if (!stateRef.current.isActive) return
+      stateRef.current = { ...stateRef.current, isActive: false }
       // Clear preview stores
       useSlipEditPreviewStore.getState().clearPreview()
       useSlideEditPreviewStore.getState().clearPreview()
@@ -1180,7 +1187,7 @@ export function useTimelineSlipSlide(
       // Clear drag state
       setDragState(null)
 
-      setState({
+      const idle: SlipSlideState = {
         isActive: false,
         mode: null,
         startX: 0,
@@ -1190,11 +1197,28 @@ export function useTimelineSlipSlide(
         isConstrained: false,
         constraintEdge: null,
         constraintLabel: null,
-      })
+      }
+      stateRef.current = idle
+      if (updateReactState) setState(idle)
       latestDeltaRef.current = 0
       slideGestureContextRef.current = null
+    },
+    [setDragState, setState],
+  )
+
+  useTimelineGestureCancellation(ownerRef, cancelGesture)
+
+  // Consume the gesture before invoking the existing command.
+  const handleMouseUp = useCallback(() => {
+    if (!stateRef.current.isActive) return
+    const { mode, leftNeighborId, rightNeighborId } = stateRef.current
+    const currentDelta = latestDeltaRef.current
+    cancelGesture()
+    if (currentDelta !== 0) {
+      if (mode === 'slip') slipItem(item.id, currentDelta)
+      else if (mode === 'slide') slideItem(item.id, currentDelta, leftNeighborId, rightNeighborId)
     }
-  }, [item.id, setDragState])
+  }, [item.id, cancelGesture])
 
   // Setup/cleanup mouse event listeners
   useEffect(() => {
@@ -1208,23 +1232,6 @@ export function useTimelineSlipSlide(
       }
     }
   }, [state.isActive, handleMouseMove, handleMouseUp])
-
-  useEffect(
-    () => () => {
-      pendingStartCleanupRef.current?.()
-      // Effect dependency changes may replace the window listeners during an
-      // active gesture. Only a true unmount should abandon its preview state.
-      if (stateRef.current.isActive) {
-        useSlipEditPreviewStore.getState().clearPreview()
-        useSlideEditPreviewStore.getState().clearPreview()
-        useLinkedEditPreviewStore.getState().clear()
-        useSelectionStore.getState().setDragState(null)
-        latestDeltaRef.current = 0
-      }
-      slideGestureContextRef.current = null
-    },
-    [],
-  )
 
   // Start slip/slide drag
   const handleSlipSlideStart = useCallback(
