@@ -60,6 +60,7 @@ export function HostTranscriptWordView({
     anchor: number
     focus: number
     revision: number
+    projection: string
   } | null>(null)
   const [following, setFollowing] = useState(true)
   const scroll = useRef<HTMLDivElement>(null)
@@ -79,13 +80,18 @@ export function HostTranscriptWordView({
       ),
     [document, assetId, sections, scope, selectedClips],
   )
+  // Pagination can reorder repeated occurrences without changing the timeline revision.
+  // Bind indices to the complete measured projection, including retranscribed timings/text.
+  const projection = useMemo(() => JSON.stringify(words), [words])
   const otherSources = document.tracks.some((track) =>
     track.items.some((item) => 'mediaId' in item && item.mediaId !== assetId),
   )
   const active = words.findIndex(
     (word) => currentFrame >= word.startFrame && currentFrame < word.endFrame,
   )
-  const stale = selection !== null && selection.revision !== document.revision
+  const stale =
+    selection !== null &&
+    (selection.revision !== document.revision || selection.projection !== projection)
   const selected =
     selection && !stale
       ? words.slice(
@@ -111,9 +117,13 @@ export function HostTranscriptWordView({
   const choose = (index: number, extend: boolean) => {
     setFollowing(false)
     setSelection((previous) => ({
-      anchor: extend && previous?.revision === document.revision ? previous.anchor : index,
+      anchor:
+        extend && previous?.revision === document.revision && previous.projection === projection
+          ? previous.anchor
+          : index,
       focus: index,
       revision: document.revision,
+      projection,
     }))
     usePlaybackStore.getState().setCurrentFrame(Math.floor(words[index]!.startFrame))
   }
@@ -189,7 +199,11 @@ export function HostTranscriptWordView({
             event.stopPropagation()
             setSelection(null)
           } else {
-            const next = transcriptSelectionIndex(event.key, selection?.focus ?? 0, words.length)
+            const next = transcriptSelectionIndex(
+              event.key,
+              stale ? 0 : (selection?.focus ?? 0),
+              words.length,
+            )
             if (next === null) return
             event.preventDefault()
             event.stopPropagation()
@@ -251,7 +265,7 @@ export function HostTranscriptWordView({
       </div>
       {stale && (
         <p role="status" className="px-3 py-2 text-xs">
-          This edit changed. Select the words again.
+          The edit or transcript changed. Select the words again.
         </p>
       )}
       {!canCut && (

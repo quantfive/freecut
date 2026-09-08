@@ -205,6 +205,34 @@ function createHarness(
   const previewCommands = vi.fn(
     async (request: HostTranscriptCommandPreviewRequest): Promise<HostTranscriptCommandPreview> => {
       const isCut = request.action === 'cut' || request.action === 'ripple_cut'
+      // Model the backend's occurrence projection, then execute through the real adapter.
+      const targetedCutBatch = request.ranges?.every((range) => range.itemId)
+        ? {
+            ...cutBatch,
+            base_revision: request.baseRevision,
+            commands: request.ranges
+              .map((range, index) => {
+                const clip = remoteSnapshot.timeline.tracks
+                  .flatMap((track) => track.items)
+                  .find((item) => item.id === range.itemId)
+                if (!clip || (clip.type !== 'video' && clip.type !== 'audio'))
+                  throw new Error('Unknown fixture occurrence')
+                const frameUs = 1_000_000 / remoteSnapshot.project.fps
+                const sourceStartUs = (clip.sourceStart ?? 0) * frameUs
+                const speed = clip.speed ?? 1
+                return {
+                  command_id: `targeted-cut-${index}`,
+                  type: 'ripple_delete' as const,
+                  start_us: Math.round(
+                    clip.from * frameUs + (range.startUs - sourceStartUs) / speed,
+                  ),
+                  end_us: Math.round(clip.from * frameUs + (range.endUs - sourceStartUs) / speed),
+                  track_ids: null,
+                }
+              })
+              .sort((a, b) => b.start_us - a.start_us),
+          }
+        : cutBatch
       return {
         status: previewStatus,
         receiptId: 'transcript-receipt-1',
@@ -217,7 +245,7 @@ function createHarness(
         operationId: previewBatch.operation_id,
         idempotencyKey: previewBatch.idempotency_key,
         baseRevision: 0,
-        commandBatch: isCut ? cutBatch : previewBatch,
+        commandBatch: isCut ? targetedCutBatch : previewBatch,
         preview: isCut
           ? { action: 'cut', selectionCount: 1, willMutateTimeline: false }
           : { action: 'captions', captionCount: 1, willMutateTimeline: false },
@@ -397,6 +425,96 @@ describe('host-backed transcript consumer', () => {
       }),
     )
     expect(screen.queryByTestId('host-transcript-apply')).not.toBeInTheDocument()
+  })
+
+  it('invalidates a repeated-occurrence word selection when Load more reorders the projection', async () => {
+    const initial = snapshot()
+    initial.timeline.durationInFrames = 600
+    initial.timeline.media = [
+      {
+        media_id: 'asset-1',
+        media_kind: 'video',
+        content_hash: 'sha256:source-1',
+        duration_us: 10_000_000,
+        availability: { mode: 'cloud', cloud: { object_id: 'object-1' } },
+      },
+    ]
+    const occurrenceA = {
+      type: 'video' as const,
+      id: 'occurrence-a',
+      trackId: 'video',
+      mediaId: 'asset-1',
+      from: 0,
+      durationInFrames: 300,
+      sourceStart: 0,
+      sourceEnd: 300,
+    }
+    initial.timeline.tracks = [
+      {
+        id: 'video',
+        name: 'Video',
+        kind: 'video',
+        locked: false,
+        muted: false,
+        items: [occurrenceA, { ...occurrenceA, id: 'occurrence-b', from: 300 }],
+      },
+    ]
+    const harness = createHarness(initial)
+    harness.host.transcript!.occurrenceSelection = true
+    const pages = sections.map((section, index) => ({
+      ...section,
+      text: index === 0 ? 'X' : 'Y',
+      words: [{ text: index === 0 ? 'X' : 'Y', startUs: section.startUs, endUs: section.endUs }],
+    }))
+    harness.host.transcript!.getSections = vi.fn(({ cursor }) => ({
+      transcriptId: 'transcript-1',
+      sections: [pages[cursor ? 1 : 0]!],
+      hasMore: !cursor,
+      nextCursor: cursor ? null : 'page-2',
+    }))
+    renderHostEditor(harness)
+    const originalA = structuredClone(
+      harness.runtime.controller.getSnapshot().timeline.tracks[0]!.items[0],
+    )
+    const words = await screen.findAllByRole('button', { name: 'X' })
+    fireEvent.pointerDown(words[1]!) // index1 is B:X before pagination.
+    fireEvent.pointerUp(window)
+    fireEvent.click(screen.getByRole('button', { name: 'Load more transcript' }))
+    await screen.findAllByRole('button', { name: 'Y' }) // index1 is now A:Y.
+    expect(harness.runtime.controller.getSnapshot().timeline.revision).toBe(0)
+    const region = screen.getByRole('region', { name: 'Timed transcript words' })
+    fireEvent.keyDown(region, { key: 'Delete' })
+    expect(harness.previewCommands).not.toHaveBeenCalled()
+    expect(harness.submitEdit).not.toHaveBeenCalled()
+    expect(
+      screen.getByText('The edit or transcript changed. Select the words again.'),
+    ).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Delete selection' })).toBeDisabled()
+
+    // A fresh B:X selection derives an actual ripple command from B + X's source range.
+    fireEvent.pointerDown(screen.getAllByRole('button', { name: 'X' })[1]!)
+    fireEvent.pointerUp(window)
+    fireEvent.keyDown(region, { key: 'Delete' })
+    await waitFor(() => expect(harness.submitEdit).toHaveBeenCalledTimes(1))
+    expect(harness.previewCommands).toHaveBeenCalledWith(
+      expect.objectContaining({
+        baseRevision: 0,
+        ranges: [{ itemId: 'occurrence-b', startUs: 1_000_000, endUs: 2_000_000, text: 'X' }],
+      }),
+    )
+    expect(harness.submitEdit.mock.calls[0]![0].commands).toEqual([
+      expect.objectContaining({
+        type: 'ripple_delete',
+        start_us: 11_000_000,
+        end_us: 12_000_000,
+      }),
+    ])
+    await waitFor(() => expect(harness.runtime.controller.getSnapshot().timeline.revision).toBe(1))
+    const edited = harness.runtime.controller.getSnapshot().timeline
+    expect(edited.tracks[0]!.items.find((item) => item.id === 'occurrence-a')).toEqual(originalA)
+    expect(edited.durationInFrames).toBe(570)
+    expect(screen.getAllByRole('button', { name: 'X' })).toHaveLength(1)
+    expect(screen.getAllByRole('button', { name: 'Y' })).toHaveLength(2)
   })
 
   it('displays bounded sections, previews without mutation, then applies through submitEdit', async () => {
