@@ -1,15 +1,23 @@
 import { useMemo } from 'react'
 import { formatSignedFrameDelta, formatTimecodeCompact } from '@/shared/utils/time-utils'
+import type { TimelineItem } from '@/types/timeline'
+import { clampTrimAmount } from '../../utils/trim-utils'
 import { pixelsToFrameNow } from '../../utils/zoom-conversions'
 
 export interface ClipTrimInfoLabel {
   delta: string
+  boundary?: string
+  remaining?: string
+  constraintLabel?: string | null
   duration: string
   side: 'start' | 'end'
 }
 
 export interface ClipReadoutLabelsInput {
   fps: number
+  item?: TimelineItem
+  visualLeftFrame?: number
+  constraintLabel?: string | null
   isTrimming: boolean
   trimHandle: 'start' | 'end' | null
   trimDelta: number
@@ -30,6 +38,9 @@ export interface ClipReadoutLabels {
  */
 export function useClipReadoutLabels({
   fps,
+  item,
+  visualLeftFrame,
+  constraintLabel,
   isTrimming,
   trimHandle,
   trimDelta,
@@ -41,12 +52,45 @@ export function useClipReadoutLabels({
     if (!isTrimming || !trimHandle) return null
 
     const durationDelta = trimHandle === 'start' ? -trimDelta : trimDelta
+    const maxExtend = item
+      ? clampTrimAmount(
+          item,
+          trimHandle,
+          trimHandle === 'start' ? -Number.MAX_SAFE_INTEGER : Number.MAX_SAFE_INTEGER,
+          fps,
+        ).maxExtend
+      : null
+    const remaining =
+      maxExtend === null
+        ? undefined
+        : formatTimecodeCompact(
+            Math.max(0, Math.round(maxExtend + (trimHandle === 'start' ? trimDelta : -trimDelta))),
+            fps,
+          )
     return {
+      boundary:
+        visualLeftFrame === undefined
+          ? undefined
+          : formatTimecodeCompact(
+              Math.round(visualLeftFrame + (trimHandle === 'end' ? visualWidthFrames : 0)),
+              fps,
+            ),
+      remaining,
+      constraintLabel,
       delta: formatSignedFrameDelta(durationDelta, fps),
       duration: formatTimecodeCompact(Math.round(visualWidthFrames), fps),
       side: trimHandle,
     }
-  }, [fps, isTrimming, trimDelta, trimHandle, visualWidthFrames])
+  }, [
+    fps,
+    item,
+    visualLeftFrame,
+    constraintLabel,
+    isTrimming,
+    trimDelta,
+    trimHandle,
+    visualWidthFrames,
+  ])
 
   const moveInfoLabel = useMemo(() => {
     if (!isDragging) return null

@@ -68,6 +68,18 @@ describe('TrimHandles', () => {
     expect(onTrimStart).toHaveBeenCalledWith(expect.any(Object), 'end')
   })
 
+  it('shows both selected grips and separates their hit areas on a short clip', () => {
+    const { container } = render(<TrimHandles {...defaultProps} isSelected clipWidth={20} />)
+    const start = container.querySelector<HTMLElement>('[data-trim-handle="start"]')!
+    const end = container.querySelector<HTMLElement>('[data-trim-handle="end"]')!
+    expect(start).toHaveClass('opacity-100', 'w-3')
+    expect(end).toHaveClass('opacity-100', 'w-3')
+    expect(start.style.bottom).toBe('50%')
+    expect(end.style.top).toBe('50%')
+    expect(start).toHaveAttribute('aria-label', 'Trim start')
+    expect(end).toHaveAttribute('aria-label', 'Trim end')
+  })
+
   it('updates the trim join menu from the live Windows shortcut binding', async () => {
     Object.defineProperty(window.navigator, 'platform', { configurable: true, value: 'Win32' })
     const { container } = render(
