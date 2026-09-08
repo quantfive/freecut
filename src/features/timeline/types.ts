@@ -118,6 +118,7 @@ export interface TimelineActions {
   removeTranscriptRangesFromItems: (
     itemIds: string[],
     rangesByMediaId: Record<string, Array<{ start: number; end: number }>>,
+    rangesByItemId?: Record<string, Array<{ start: number; end: number }>>,
   ) => {
     analyzedItemCount: number
     removedRangeCount: number

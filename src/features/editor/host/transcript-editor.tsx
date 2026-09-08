@@ -36,6 +36,8 @@ import {
 } from './contract'
 import { useEditorHostContext } from './context'
 import { useHostTranscriptEditorRuntime } from './transcript-editor-context'
+import { HostTranscriptWordView } from './transcript-word-view'
+import { hasUsableHostWordTiming } from './transcript-words'
 
 const OPAQUE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u
 const SAFE_HASH_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u
@@ -249,7 +251,33 @@ function normalizeSection(value: unknown, expectedTranscriptId: string): HostTra
     endUs: endUs as number,
     text,
     speaker: speaker ?? null,
+    timingSource: value.timingSource === 'provider' ? 'provider' : 'synthetic',
+    words: normalizeWords(value.words, startUs as number, endUs as number),
   }
+}
+
+function normalizeWords(
+  value: unknown,
+  sectionStart: number,
+  sectionEnd: number,
+): HostTranscriptSection['words'] {
+  if (value === undefined || value === null) return null
+  if (!Array.isArray(value) || value.length > 2000) throw new Error('Invalid transcript words.')
+  let previousEnd = sectionStart
+  return value.map((raw) => {
+    if (!isRecord(raw) || !boundedText(raw.text, MAX_TRANSCRIPT_SECTION_TEXT_BYTES))
+      throw new Error('Invalid transcript word text.')
+    const startUs = raw.startUs
+    const endUs = raw.endUs
+    if (typeof startUs !== 'number' || typeof endUs !== 'number')
+      throw new Error('Invalid transcript word timing.')
+    if (![startUs, endUs].every(Number.isSafeInteger))
+      throw new Error('Invalid transcript word timing.')
+    if (startUs < previousEnd || endUs <= startUs || endUs > sectionEnd)
+      throw new Error('Invalid transcript word bounds.')
+    previousEnd = endUs
+    return { startUs, endUs, text: raw.text }
+  })
 }
 
 // fallow-ignore-next-line complexity
@@ -702,7 +730,10 @@ export function HostTranscriptEditor({ active = true }: { active?: boolean }) {
 
   const previewSelection = useCallback(
     // fallow-ignore-next-line complexity
-    async (action: HostTranscriptCommandAction) => {
+    async (
+      action: HostTranscriptCommandAction,
+      wordSelection?: { ranges: HostTranscriptRange[]; revision: number },
+    ) => {
       if (!port || !runtime || !status || status.status !== 'succeeded' || previewing) return
       if (!isOpaqueId(status.assetId)) {
         setError({
@@ -718,8 +749,25 @@ export function HostTranscriptEditor({ active = true }: { active?: boolean }) {
       setError(null)
       setAnnouncement('Preparing a non-mutating transcript preview…')
       try {
-        const ranges = rangesForSelection(selectedSections)
+        if (
+          !wordSelection &&
+          selectedSections.some((section) => section.timingSource !== 'provider')
+        ) {
+          throw new Error(
+            'Measured section timing is needed before footage can be cut or captioned.',
+          )
+        }
+        const ranges = wordSelection?.ranges ?? rangesForSelection(selectedSections)
         const currentSnapshot = runtime.controller.getSnapshot()
+        if (
+          wordSelection &&
+          (wordSelection.revision !== currentSnapshot.timeline.revision ||
+            !port.occurrenceSelection)
+        ) {
+          throw new Error(
+            'This edit changed or the host cannot target occurrences. Select the words again.',
+          )
+        }
         const request = {
           transcriptId: status.transcriptId,
           assetId: status.assetId,
@@ -747,6 +795,19 @@ export function HostTranscriptEditor({ active = true }: { active?: boolean }) {
           result.commandBatch.commands.some((command) => !commandIsSupported(command, capabilities))
         ) {
           throw new Error('The transcript preview contains an unsupported timeline command.')
+        }
+        if (wordSelection) {
+          const applied = await runtime.controller.submitEdit(result.commandBatch)
+          if (applied.status !== 'applied' && applied.status !== 'replayed') {
+            throw new Error(
+              applied.status === 'unsupported'
+                ? applied.reason
+                : 'This edit could not be saved. Refresh and select the words again.',
+            )
+          }
+          setPreview(null)
+          setAnnouncement('Selected footage deleted and gap closed. Undo restores this cut.')
+          return
         }
         setPreview(result)
         setAnnouncement(
@@ -903,6 +964,8 @@ export function HostTranscriptEditor({ active = true }: { active?: boolean }) {
     }
   }, [port, refresh, status, transcribeAssetId, transcribing])
 
+  const hasWordTiming = sections.some(hasUsableHostWordTiming)
+
   if (!port || !runtime || !canTranscribe) {
     return (
       <UnavailableTranscript
@@ -974,14 +1037,16 @@ export function HostTranscriptEditor({ active = true }: { active?: boolean }) {
         </Button>
       </div>
 
-      <div className="flex items-center justify-between border-b border-border px-3 py-2 text-[11px] text-muted-foreground">
-        <span data-testid="host-transcript-status">
-          {status?.status === 'succeeded' ? '' : status?.status}
-        </span>
-        <span>
-          {selectedIds.size}/{MAX_TRANSCRIPT_SELECTIONS} selected
-        </span>
-      </div>
+      {!hasWordTiming && (
+        <div className="flex items-center justify-between border-b border-border px-3 py-2 text-[11px] text-muted-foreground">
+          <span data-testid="host-transcript-status">
+            {status?.status === 'succeeded' ? '' : status?.status}
+          </span>
+          <span>
+            {selectedIds.size}/{MAX_TRANSCRIPT_SELECTIONS} selected
+          </span>
+        </div>
+      )}
 
       {error ? (
         <div
@@ -1005,132 +1070,171 @@ export function HostTranscriptEditor({ active = true }: { active?: boolean }) {
         </div>
       ) : null}
 
-      <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto px-3 py-2">
-        {visibleSections.length === 0 ? (
-          <div className="flex h-full items-center justify-center p-4 text-center text-sm text-muted-foreground">
-            {normalizedQuery
-              ? 'No transcript sections match this search.'
-              : 'No transcript sections are available.'}
+      {hasWordTiming && hasMore && (
+        <Button variant="ghost" size="sm" disabled={loadingMore} onClick={() => void loadMore()}>
+          Load more transcript
+        </Button>
+      )}
+      {hasWordTiming && sections.some((section) => !hasUsableHostWordTiming(section)) && (
+        <p role="status" className="px-3 py-2 text-xs">
+          Some sections need word timing and cannot be edited as words.
+        </p>
+      )}
+      {hasWordTiming && status?.assetId ? (
+        <HostTranscriptWordView
+          key={`${status.transcriptId}:${status.sourceAssetHash}`}
+          runtime={runtime}
+          assetId={status.assetId}
+          sections={sections}
+          query={query}
+          canCut={
+            port.occurrenceSelection === true &&
+            isHostCapabilityEnabled(capabilities, 'timeline.remove')
+          }
+          busy={previewing || applying}
+          onDelete={(ranges, revision) => previewSelection('cut', { ranges, revision })}
+        />
+      ) : (
+        <>
+          <div
+            className="border-b border-border px-3 py-2 text-xs text-muted-foreground"
+            role="status"
+          >
+            <p className="font-medium text-foreground">Word timing needed</p>
+            <p>
+              Word editing is unavailable for this transcript. These controls select whole sections.
+              Check Generate transcript for supported transcription options; regeneration may reuse
+              cached timing.
+            </p>
           </div>
-        ) : (
-          <div className="mx-auto max-w-[62ch] space-y-2">
-            {visibleSections.map((section, index) => {
-              const selected = selectedIds.has(section.id)
-              return (
-                <button
-                  key={section.id}
+          <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto px-3 py-2">
+            {visibleSections.length === 0 ? (
+              <div className="flex h-full items-center justify-center p-4 text-center text-sm text-muted-foreground">
+                {normalizedQuery
+                  ? 'No transcript sections match this search.'
+                  : 'No transcript sections are available.'}
+              </div>
+            ) : (
+              <div className="mx-auto max-w-[62ch] space-y-2">
+                {visibleSections.map((section, index) => {
+                  const selected = selectedIds.has(section.id)
+                  return (
+                    <button
+                      key={section.id}
+                      type="button"
+                      data-testid={`host-transcript-section-${section.id}`}
+                      aria-pressed={selected}
+                      onClick={(event) => selectSection(index, event.shiftKey)}
+                      className={`grid w-full grid-cols-[3rem_minmax(0,1fr)] gap-x-3 rounded-md px-1 py-1.5 text-left transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary ${
+                        selected
+                          ? 'bg-primary text-primary-foreground'
+                          : 'text-foreground/85 hover:bg-secondary/60'
+                      }`}
+                    >
+                      <span className="mt-px select-none text-right font-mono text-[11px] tabular-nums leading-7 opacity-70">
+                        {formatTimecode(section.startUs)}
+                      </span>
+                      <span className="min-w-0 break-words text-sm leading-7">
+                        {section.text}
+                        {section.speaker ? (
+                          <span className="ml-1 text-[11px] opacity-70">({section.speaker})</span>
+                        ) : null}
+                      </span>
+                    </button>
+                  )
+                })}
+              </div>
+            )}
+            {hasMore ? (
+              <div className="flex justify-center py-3">
+                <Button
                   type="button"
-                  data-testid={`host-transcript-section-${section.id}`}
-                  aria-pressed={selected}
-                  onClick={(event) => selectSection(index, event.shiftKey)}
-                  className={`grid w-full grid-cols-[3rem_minmax(0,1fr)] gap-x-3 rounded-md px-1 py-1.5 text-left transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary ${
-                    selected
-                      ? 'bg-primary text-primary-foreground'
-                      : 'text-foreground/85 hover:bg-secondary/60'
-                  }`}
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => void loadMore()}
+                  disabled={loadingMore}
+                  data-testid="host-transcript-load-more"
                 >
-                  <span className="mt-px select-none text-right font-mono text-[11px] tabular-nums leading-7 opacity-70">
-                    {formatTimecode(section.startUs)}
-                  </span>
-                  <span className="min-w-0 break-words text-sm leading-7">
-                    {section.text}
-                    {section.speaker ? (
-                      <span className="ml-1 text-[11px] opacity-70">({section.speaker})</span>
-                    ) : null}
-                  </span>
-                </button>
-              )
-            })}
+                  {loadingMore && <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />}
+                  Load more
+                  <ChevronDown className="ml-1.5 h-3.5 w-3.5" />
+                </Button>
+              </div>
+            ) : null}
           </div>
-        )}
-        {hasMore ? (
-          <div className="flex justify-center py-3">
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              onClick={() => void loadMore()}
-              disabled={loadingMore}
-              data-testid="host-transcript-load-more"
-            >
-              {loadingMore && <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />}
-              Load more
-              <ChevronDown className="ml-1.5 h-3.5 w-3.5" />
-            </Button>
-          </div>
-        ) : null}
-      </div>
 
-      {preview ? (
-        <div
-          className="border-t border-border bg-secondary/30 px-3 py-2"
-          data-testid="host-transcript-preview"
-        >
-          <div className="flex items-start gap-2">
-            <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-500" />
-            <div className="min-w-0 flex-1 text-xs">
-              <p className="font-medium text-foreground">
-                {preview.status === 'replayed' ? 'Preview replayed safely.' : 'Preview ready.'}
-              </p>
-              <p className="text-[11px] leading-4 text-muted-foreground">
+          {preview ? (
+            <div
+              className="border-t border-border bg-secondary/30 px-3 py-2"
+              data-testid="host-transcript-preview"
+            >
+              <div className="flex items-start gap-2">
+                <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-500" />
+                <div className="min-w-0 flex-1 text-xs">
+                  <p className="font-medium text-foreground">
+                    {preview.status === 'replayed' ? 'Preview replayed safely.' : 'Preview ready.'}
+                  </p>
+                  <p className="text-[11px] leading-4 text-muted-foreground">
+                    {previewAction === 'captions' || previewAction === 'caption'
+                      ? `${preview.preview.captionCount ?? selectedIds.size} caption(s) · timeline unchanged`
+                      : `${selectedIds.size} range(s) · timeline unchanged`}
+                  </p>
+                </div>
+              </div>
+              <Button
+                type="button"
+                size="sm"
+                className="mt-2 w-full"
+                onClick={() => void applyPreview()}
+                disabled={applying}
+                data-testid="host-transcript-apply"
+              >
+                {applying && <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />}
                 {previewAction === 'captions' || previewAction === 'caption'
-                  ? `${preview.preview.captionCount ?? selectedIds.size} caption(s) · timeline unchanged`
-                  : `${selectedIds.size} range(s) · timeline unchanged`}
-              </p>
+                  ? 'Apply captions'
+                  : 'Apply cut'}
+              </Button>
+            </div>
+          ) : null}
+
+          <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border p-2">
+            <span className="min-w-0 text-xs text-muted-foreground">
+              {selectedIds.size > 0
+                ? `${selectedIds.size} section${selectedIds.size === 1 ? '' : 's'} selected`
+                : 'Select sections to cut or caption'}
+            </span>
+            <div className="flex items-center gap-2">
+              <Button
+                type="button"
+                size="sm"
+                variant="secondary"
+                onClick={() => void previewSelection('cut')}
+                disabled={selectedIds.size === 0 || previewing || applying}
+                data-testid="host-transcript-cut-button"
+              >
+                {previewing && previewAction === 'cut' ? (
+                  <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Scissors className="mr-1.5 h-3.5 w-3.5" />
+                )}
+                Cut whole sections
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                onClick={() => void previewSelection('captions')}
+                disabled={selectedIds.size === 0 || previewing || applying}
+                data-testid="host-transcript-preview-button"
+              >
+                {previewing && previewAction !== 'cut' && (
+                  <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                )}
+                Preview captions
+              </Button>
             </div>
           </div>
-          <Button
-            type="button"
-            size="sm"
-            className="mt-2 w-full"
-            onClick={() => void applyPreview()}
-            disabled={applying}
-            data-testid="host-transcript-apply"
-          >
-            {applying && <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />}
-            {previewAction === 'captions' || previewAction === 'caption'
-              ? 'Apply captions'
-              : 'Apply cut'}
-          </Button>
-        </div>
-      ) : null}
-
-      <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border p-2">
-        <span className="min-w-0 text-xs text-muted-foreground">
-          {selectedIds.size > 0
-            ? `${selectedIds.size} section${selectedIds.size === 1 ? '' : 's'} selected`
-            : 'Select sections to cut or caption'}
-        </span>
-        <div className="flex items-center gap-2">
-          <Button
-            type="button"
-            size="sm"
-            variant="secondary"
-            onClick={() => void previewSelection('cut')}
-            disabled={selectedIds.size === 0 || previewing || applying}
-            data-testid="host-transcript-cut-button"
-          >
-            {previewing && previewAction === 'cut' ? (
-              <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
-            ) : (
-              <Scissors className="mr-1.5 h-3.5 w-3.5" />
-            )}
-            Cut selection
-          </Button>
-          <Button
-            type="button"
-            size="sm"
-            onClick={() => void previewSelection('captions')}
-            disabled={selectedIds.size === 0 || previewing || applying}
-            data-testid="host-transcript-preview-button"
-          >
-            {previewing && previewAction !== 'cut' && (
-              <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
-            )}
-            Preview captions
-          </Button>
-        </div>
-      </div>
+        </>
+      )}
 
       <span className="sr-only" aria-live="polite">
         {announcement}
