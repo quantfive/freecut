@@ -108,7 +108,7 @@ describe('TimelineHeader zoom slider', () => {
     const targetZoom = ZOOM_MIN * Math.pow(ZOOM_MAX / ZOOM_MIN, 0.75)
 
     render(<TimelineHeader onZoomChange={onZoomChange} />)
-    expect(micRenderSpy).toHaveBeenCalledTimes(1)
+    expect(micRenderSpy).not.toHaveBeenCalled()
 
     fireEvent.mouseDown(screen.getByRole('slider'))
 
@@ -116,7 +116,7 @@ describe('TimelineHeader zoom slider', () => {
     expect(screen.getByTestId('zoom-slider-range').style.right).toBe('25%')
     expect(onZoomChange).toHaveBeenLastCalledWith(targetZoom)
     expect(animationFrameSpy).not.toHaveBeenCalled()
-    expect(micRenderSpy).toHaveBeenCalledTimes(1)
+    expect(micRenderSpy).not.toHaveBeenCalled()
     expect(useZoomStore.getState().level).toBe(1)
 
     fireEvent.mouseUp(screen.getByRole('slider'))
@@ -127,7 +127,7 @@ describe('TimelineHeader zoom slider', () => {
 
     act(() => useZoomStore.getState().setZoomLevelImmediate(targetZoom))
     expect(screen.getByRole('slider')).toHaveAttribute('aria-valuenow', '0.75')
-    expect(micRenderSpy).toHaveBeenCalledTimes(1)
+    expect(micRenderSpy).not.toHaveBeenCalled()
 
     animationFrameSpy.mockRestore()
   })
@@ -135,6 +135,7 @@ describe('TimelineHeader zoom slider', () => {
   it('exposes the razor split tool shortcut in its accessible label and tooltip', () => {
     render(<TimelineHeader />)
 
+    fireEvent.click(screen.getByRole('button', { name: 'More timeline tools' }))
     const razor = screen.getByRole('button', { name: /Razor tool \(Shift \+ C\)/i })
     expect(razor).toHaveAttribute('aria-keyshortcuts', 'Shift + C')
     expect(razor).toHaveAttribute(
@@ -317,6 +318,7 @@ describe('TimelineHeader zoom slider', () => {
   it('toggles the keyframe panel without a selected clip', () => {
     render(<TimelineHeader />)
 
+    fireEvent.click(screen.getByRole('button', { name: 'More timeline tools' }))
     const toggle = screen.getByRole('button', { name: 'Show keyframe panel' })
     expect(toggle).toBeEnabled()
 
@@ -341,6 +343,7 @@ describe('TimelineHeader zoom slider', () => {
 
     render(<TimelineHeader />)
 
+    fireEvent.click(screen.getByRole('button', { name: 'More timeline tools' }))
     expect(screen.getByRole('button', { name: 'Select Tool (Q)' })).toHaveAttribute(
       'data-tooltip',
       'Select Tool (Q)',

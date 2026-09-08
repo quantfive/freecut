@@ -297,7 +297,7 @@ describe('useTimelineItemPointerHandlers', () => {
     })
   })
 
-  it('preserves smart edge trim routing', () => {
+  it('does not infer a trim mode from pointer position in Select', () => {
     const input = makeInput({
       smartTrimIntentRef: { current: 'ripple-start' },
     })
@@ -306,10 +306,7 @@ describe('useTimelineItemPointerHandlers', () => {
 
     handlers.handleSmartTrimStart(event, 'start')
 
-    expect(input.handleTrimStart).toHaveBeenCalledWith(event, 'start', {
-      forcedMode: 'ripple',
-      destroyTransitionAtHandle: false,
-    })
+    expect(input.handleTrimStart).toHaveBeenCalledWith(event, 'start', undefined)
     expect(input.handleDragStart).not.toHaveBeenCalled()
   })
 })

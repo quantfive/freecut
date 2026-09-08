@@ -27,7 +27,7 @@ export const SharedRollingTrimHandle = memo(function SharedRollingTrimHandle({
   onMouseDown,
   onKeyboardStep,
 }: SharedRollingTrimHandleProps) {
-  const label = `Rolling trim between ${leftLabel} and ${rightLabel}`
+  const label = `Adjust cut: rolling trim between ${leftLabel} and ${rightLabel}`
 
   return (
     <div

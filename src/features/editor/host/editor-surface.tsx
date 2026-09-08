@@ -5,6 +5,7 @@ import { TooltipProvider } from '@/components/ui/tooltip'
 import { GlobalTooltip } from '@/components/ui/global-tooltip'
 import { ErrorBoundary } from '@/app/error-boundary'
 import { i18n, i18nReady } from '@/i18n'
+import type { EditorShellOptions } from '../components/editor-workspace-shell'
 import { LoadedEditor } from '@/features/editor/components/editor'
 import {
   DEFAULT_HOST_CAPABILITIES,
@@ -35,7 +36,13 @@ interface HostSurfaceState {
  * know that chrome exists, and never subtracts anything from `100vh`/`100dvh`.
  * The container must therefore have a definite height.
  */
-export function FreeCutEditorSurface({ host }: { host: EditorHost }) {
+export function FreeCutEditorSurface({
+  host,
+  shell,
+}: {
+  host: EditorHost
+  shell?: EditorShellOptions
+}) {
   const [state, setState] = useState<HostSurfaceState | null>(null)
   const [error, setError] = useState<Error | null>(null)
 
@@ -151,6 +158,7 @@ export function FreeCutEditorSurface({ host }: { host: EditorHost }) {
                         currentSchemaVersion: 1,
                         requiresUpgrade: false,
                       }}
+                      shell={shell}
                       hostRuntime={state.runtime}
                       onNavigateBack={onNavigateBack}
                     />

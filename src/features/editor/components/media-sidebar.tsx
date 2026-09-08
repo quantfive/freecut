@@ -290,6 +290,8 @@ const DEFAULT_TEXT_TEMPLATE_LABEL = 'Text'
 const ADD_TEXT_TEMPLATE_LABEL = 'Add Text'
 
 interface MediaSidebarProps {
+  shellWidth?: number
+  transcriptActions?: React.ReactNode
   mobileDrawer?: boolean
   onRequestClose?: () => void
 }
@@ -299,6 +301,7 @@ function resolveMediaSidebarPresentation({
   leftSidebarOpen,
   sidebarWidth,
   drawerWidth,
+  shellWidth,
   onRequestClose,
   toggleLeftSidebar,
 }: {
@@ -306,13 +309,14 @@ function resolveMediaSidebarPresentation({
   leftSidebarOpen: boolean
   sidebarWidth: number
   drawerWidth: number
+  shellWidth?: number
   onRequestClose?: () => void
   toggleLeftSidebar: () => void
 }) {
-  if (mobileDrawer) {
+  if (mobileDrawer || shellWidth !== undefined) {
     return {
       panelOpen: true,
-      panelWidth: drawerWidth,
+      panelWidth: shellWidth ?? drawerWidth,
       mode: 'drawer' as const,
       collapsePanel: onRequestClose ?? toggleLeftSidebar,
     }
@@ -406,9 +410,109 @@ function MediaSidebarResizeHandle({
   )
 }
 
+function TranscriptSidebarContent({
+  activeTab,
+  transcriptActivated,
+  hostMode,
+  transcriptActions,
+}: {
+  activeTab: EditorSidebarTab
+  transcriptActivated: boolean
+  hostMode: boolean
+  transcriptActions?: React.ReactNode
+}) {
+  const { t } = useTranslation()
+  return (
+    <div
+      className={`min-h-0 flex-1 flex-col overflow-hidden ${activeTab === 'transcript' ? 'flex' : 'hidden'}`}
+    >
+      {transcriptActions && (
+        <details className="shrink-0 border-b border-border p-3 text-xs">
+          <summary className="cursor-pointer rounded-md py-2">
+            {t('editor.refresh.generateTranscript')}
+          </summary>
+          {transcriptActions}
+        </details>
+      )}
+      {transcriptActivated && hostMode ? (
+        <HostTranscriptEditor active={activeTab === 'transcript'} />
+      ) : transcriptActivated ? (
+        <Suspense fallback={null}>
+          <LazyTranscriptEditorPanel active={activeTab === 'transcript'} />
+        </Suspense>
+      ) : null}
+    </div>
+  )
+}
+
+function LibraryToolNavigation({
+  categories: visibleCategories,
+  activeTab,
+  setActiveTab,
+  onClose: onRequestClose,
+}: {
+  categories: { id: EditorSidebarTab; label: string }[]
+  activeTab: EditorSidebarTab
+  setActiveTab: (tab: EditorSidebarTab) => void
+  onClose?: () => void
+}) {
+  const { t } = useTranslation()
+  return (
+    <nav
+      aria-label={t('editor.refresh.libraryTools')}
+      className="flex h-11 shrink-0 items-center gap-1 border-b border-border px-2 text-xs"
+    >
+      {visibleCategories
+        .filter(({ id }) => id === 'transcript' || id === 'media')
+        .sort((a) => (a.id === 'transcript' ? -1 : 1))
+        .map(({ id, label }) => (
+          <button
+            key={id}
+            type="button"
+            aria-pressed={activeTab === id}
+            className={`rounded-md px-2 py-2 focus-visible:ring-2 focus-visible:ring-primary ${activeTab === id ? 'bg-secondary text-foreground' : 'text-muted-foreground hover:bg-secondary'}`}
+            onClick={() => setActiveTab(id)}
+          >
+            {label}
+          </button>
+        ))}
+      <label className="min-w-0 flex-1">
+        <span className="sr-only">{t('editor.refresh.moreTools')}</span>
+        <select
+          aria-label={t('editor.refresh.moreTools')}
+          value={['media', 'transcript'].includes(activeTab) ? '' : activeTab}
+          className="w-full rounded-md bg-transparent px-1 py-2 text-muted-foreground"
+          onChange={(event) => {
+            if (event.target.value) setActiveTab(event.target.value as EditorSidebarTab)
+          }}
+        >
+          <option value="">{t('editor.refresh.more')}</option>
+          {visibleCategories
+            .filter(({ id }) => id !== 'transcript' && id !== 'media')
+            .map(({ id, label }) => (
+              <option key={id} value={id}>
+                {label}
+              </option>
+            ))}
+        </select>
+      </label>
+      <button
+        type="button"
+        aria-label={t('editor.refresh.collapseLibrary')}
+        className="rounded-md p-2 hover:bg-secondary focus-visible:ring-2 focus-visible:ring-primary"
+        onClick={onRequestClose}
+      >
+        <ChevronLeft className="h-4 w-4" />
+      </button>
+    </nav>
+  )
+}
+
 export const MediaSidebar = memo(function MediaSidebar({
   mobileDrawer = false,
   onRequestClose,
+  shellWidth,
+  transcriptActions,
 }: MediaSidebarProps) {
   const { t } = useTranslation()
   const hostMode = useEditorHostMode()
@@ -424,11 +528,18 @@ export const MediaSidebar = memo(function MediaSidebar({
   const toggleMediaFullColumn = useEditorStore((s) => s.toggleMediaFullColumn)
   const activeTab = useEditorStore((s) => s.activeTab)
   const setActiveTab = useEditorStore((s) => s.setActiveTab)
+  const initializedShellTab = useRef(false)
+  useEffect(() => {
+    if (shellWidth === undefined || initializedShellTab.current) return
+    initializedShellTab.current = true
+    if (!hostMode || (canTranscribe && host?.transcript)) setActiveTab('transcript')
+  }, [shellWidth, hostMode, canTranscribe, host?.transcript, setActiveTab])
   const sidebarWidth = useEditorStore((s) => s.sidebarWidth)
   const setSidebarWidth = useEditorStore((s) => s.setSidebarWidth)
   const prefersReducedMotion = useReducedMotion()
   const { panelOpen, panelWidth, mode, collapsePanel } = resolveMediaSidebarPresentation({
     mobileDrawer,
+    shellWidth,
     leftSidebarOpen,
     sidebarWidth,
     drawerWidth: editorLayout.leftSidebarDefaultWidth,
@@ -436,6 +547,10 @@ export const MediaSidebar = memo(function MediaSidebar({
     toggleLeftSidebar,
   })
 
+  const [transcriptActivated, setTranscriptActivated] = useState(activeTab === 'transcript')
+  useEffect(() => {
+    if (activeTab === 'transcript') setTranscriptActivated(true)
+  }, [activeTab])
   const [aiTabActivated, setAiTabActivated] = useState(activeTab === 'ai')
   // The Lottie panel hits an external API on mount, so keep it unmounted until
   // the tab is first opened; it then stays mounted (state preserved).
@@ -737,56 +852,68 @@ export const MediaSidebar = memo(function MediaSidebar({
   }, [])
 
   return (
-    <div className="flex h-full flex-shrink-0" data-media-sidebar={mode}>
-      {/* Vertical Category Bar */}
-      <div
-        className="panel-header border-r border-border flex flex-col items-center flex-shrink-0"
-        style={{ width: EDITOR_LAYOUT_CSS_VALUES.sidebarRailWidth }}
-      >
-        {/* Header row - aligned with content panel header */}
-        <div
-          className="flex items-center justify-center border-b border-border w-full"
-          style={{ height: EDITOR_LAYOUT_CSS_VALUES.sidebarHeaderHeight }}
-        >
-          <button
-            onClick={collapsePanel}
-            className="rounded-lg flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-secondary/50 transition-colors"
-            style={{
-              width: EDITOR_LAYOUT_CSS_VALUES.sidebarHeaderButtonSize,
-              height: EDITOR_LAYOUT_CSS_VALUES.sidebarHeaderButtonSize,
-            }}
-            data-tooltip={
-              panelOpen
-                ? t('editor.mediaSidebar.collapsePanel')
-                : t('editor.mediaSidebar.expandPanel')
-            }
-            data-tooltip-side="right"
+    <div
+      className={`flex h-full flex-shrink-0 ${shellWidth !== undefined ? 'flex-col' : ''}`}
+      data-media-sidebar={mode}
+    >
+      {shellWidth !== undefined ? (
+        <LibraryToolNavigation
+          categories={visibleCategories}
+          activeTab={activeTab}
+          setActiveTab={setActiveTab}
+          onClose={onRequestClose}
+        />
+      ) : (
+        <>
+          {/* Vertical Category Bar */}
+          <div
+            className="panel-header border-r border-border flex flex-col items-center flex-shrink-0"
+            style={{ width: EDITOR_LAYOUT_CSS_VALUES.sidebarRailWidth }}
           >
-            {panelOpen ? (
-              <ChevronLeft className="w-3.5 h-3.5" />
-            ) : (
-              <ChevronRight className="w-3.5 h-3.5" />
-            )}
-          </button>
-        </div>
+            {/* Header row - aligned with content panel header */}
+            <div
+              className="flex items-center justify-center border-b border-border w-full"
+              style={{ height: EDITOR_LAYOUT_CSS_VALUES.sidebarHeaderHeight }}
+            >
+              <button
+                onClick={collapsePanel}
+                className="rounded-lg flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-secondary/50 transition-colors"
+                style={{
+                  width: EDITOR_LAYOUT_CSS_VALUES.sidebarHeaderButtonSize,
+                  height: EDITOR_LAYOUT_CSS_VALUES.sidebarHeaderButtonSize,
+                }}
+                data-tooltip={
+                  panelOpen
+                    ? t('editor.mediaSidebar.collapsePanel')
+                    : t('editor.mediaSidebar.expandPanel')
+                }
+                data-tooltip-side="right"
+              >
+                {panelOpen ? (
+                  <ChevronLeft className="w-3.5 h-3.5" />
+                ) : (
+                  <ChevronRight className="w-3.5 h-3.5" />
+                )}
+              </button>
+            </div>
 
-        {/* Category Icons */}
-        <div className="flex flex-col gap-1 py-1.5">
-          {visibleCategories.map(({ id, icon: Icon, label }) => (
-            <button
-              key={id}
-              onClick={() =>
-                selectMediaSidebarCategory({
-                  id,
-                  mobileDrawer,
-                  activeTab,
-                  leftSidebarOpen,
-                  setActiveTab,
-                  toggleLeftSidebar,
-                  triggerPreviews,
-                })
-              }
-              className={`
+            {/* Category Icons */}
+            <div className="flex flex-col gap-1 py-1.5">
+              {visibleCategories.map(({ id, icon: Icon, label }) => (
+                <button
+                  key={id}
+                  onClick={() =>
+                    selectMediaSidebarCategory({
+                      id,
+                      mobileDrawer,
+                      activeTab,
+                      leftSidebarOpen,
+                      setActiveTab,
+                      toggleLeftSidebar,
+                      triggerPreviews,
+                    })
+                  }
+                  className={`
                 w-9 h-9 rounded-lg flex items-center justify-center transition-[transform,background-color,color] duration-150 active:scale-95
                 ${
                   activeTab === id && panelOpen
@@ -794,15 +921,16 @@ export const MediaSidebar = memo(function MediaSidebar({
                     : 'text-muted-foreground hover:text-foreground hover:bg-secondary/50'
                 }
               `}
-              data-tooltip={label}
-              data-tooltip-side="right"
-            >
-              <Icon className="w-4 h-4" />
-            </button>
-          ))}
-        </div>
-      </div>
-
+                  data-tooltip={label}
+                  data-tooltip-side="right"
+                >
+                  <Icon className="w-4 h-4" />
+                </button>
+              ))}
+            </div>
+          </div>
+        </>
+      )}
       {/* Content Panel — width animated via motion for the open/close toggle.
           We intentionally animate `width` (a layout property, not the cheaper
           transform/opacity) because collapsing must reclaim layout space for the
@@ -812,7 +940,7 @@ export const MediaSidebar = memo(function MediaSidebar({
           a touch faster than open (exit < entrance). During a resize-drag we snap
           (duration 0) so width tracks the pointer instead of easing behind it. */}
       <motion.div
-        className="panel-bg border-r border-border overflow-hidden relative"
+        className="panel-bg border-r border-border overflow-hidden relative min-h-0 flex-1"
         data-media-sidebar-panel
         initial={false}
         animate={{ width: panelOpen ? panelWidth : 0 }}
@@ -837,6 +965,7 @@ export const MediaSidebar = memo(function MediaSidebar({
           <>
             {/* Panel Header — sits with the tab content */}
             <div
+              hidden={shellWidth !== undefined}
               className="flex items-center justify-between px-3 border-b border-border flex-shrink-0"
               style={{ height: EDITOR_LAYOUT_CSS_VALUES.sidebarHeaderHeight }}
             >
@@ -1280,17 +1409,12 @@ export const MediaSidebar = memo(function MediaSidebar({
             </div>
 
             {/* Transcript Tab */}
-            <div
-              className={`min-h-0 flex-1 overflow-hidden ${activeTab === 'transcript' ? 'block' : 'hidden'}`}
-            >
-              {activeTab === 'transcript' && hostMode ? (
-                <HostTranscriptEditor active />
-              ) : activeTab === 'transcript' ? (
-                <Suspense fallback={null}>
-                  <LazyTranscriptEditorPanel active />
-                </Suspense>
-              ) : null}
-            </div>
+            <TranscriptSidebarContent
+              activeTab={activeTab}
+              transcriptActivated={transcriptActivated}
+              hostMode={hostMode}
+              transcriptActions={transcriptActions}
+            />
 
             {/* AI Tab */}
             <div
@@ -1306,7 +1430,7 @@ export const MediaSidebar = memo(function MediaSidebar({
         </div>
         {/* Resize Handle */}
         <MediaSidebarResizeHandle
-          visible={leftSidebarOpen && !mobileDrawer}
+          visible={leftSidebarOpen && !mobileDrawer && shellWidth === undefined}
           onMouseDown={handleResizeStart}
         />
       </motion.div>
