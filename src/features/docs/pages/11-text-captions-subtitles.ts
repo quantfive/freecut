@@ -82,7 +82,10 @@ const page = {
         {
           kind: 'steps',
           items: [
-            'Generate a transcript for the clip from the Media library or the Transcript panel.',
+            'Open **Library → More → Captions**. In a host-backed editor, choose **This edit** or **Selected clip**, then **Preview captions** using the current transcript.',
+            'Review the cue text and output times, then **Apply captions**. Replacing an existing generated track requires **Replace all cues**, which also replaces manual corrections in that track. Other caption tracks are preserved.',
+            'Caption text corrections change displayed text only. Transcript footage deletion remains a separate action. Hosts without occurrence-bound caption support explain why generation is unavailable.',
+            'For local media, generate a transcript for the clip from the Media library or the Transcript panel.',
             'Use **Generate Captions** (or let FreeCut enable transcript captions automatically) from the clip context menu.',
             'Edit cue timing and text, and pick a style preset (Netflix, YouTube, Bold Yellow, Outlined, TikTok) in the **Subtitle** section.',
             'Adjust caption color, size, vertical position, and an optional background.',

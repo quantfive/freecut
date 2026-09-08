@@ -312,7 +312,7 @@ export class EmbeddedEditorHostRuntime implements EmbeddedEditorHostRuntimeContr
       // applied/conflict state before the user can see it.
       const currentTab = useEditorStore.getState().activeTab
       const currentTabVisibleInHostMode =
-        currentTab === 'media' ||
+        ['media', 'captions'].includes(currentTab) ||
         (currentTab === 'text' &&
           isHostCapabilityEnabled(this.host.capabilities, 'timeline.add')) ||
         (currentTab === 'transcript' &&
