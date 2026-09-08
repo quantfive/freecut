@@ -113,7 +113,7 @@ function viewportHeightOffenders(root: ParentNode): string[] {
 describe('published FreeCut browser entry', () => {
   it('imports the package entry, mounts the real editor surfaces, and keeps host capability gates bounded', async () => {
     const host = fakeHost()
-    render(<FreeCutEditorSurface host={host} />)
+    const view = render(<FreeCutEditorSurface host={host} />)
 
     await waitFor(
       () => {
