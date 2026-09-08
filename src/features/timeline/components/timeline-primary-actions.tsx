@@ -8,7 +8,11 @@ import { usePlaybackStore } from '@/shared/state/playback'
 import { useEditorStore } from '@/shared/state/editor'
 import { useTimelineStore } from '../stores/timeline-store'
 import { useEditorCapability, useEditorHostContext } from '../deps/editor'
-import { expandSelectionWithLinkedItems, getSynchronizedLinkedItems } from '../utils/linked-items'
+import {
+  expandSelectionWithLinkedItems,
+  getSynchronizedLinkedItems,
+  getUniqueLinkedItemAnchorIds,
+} from '../utils/linked-items'
 
 function isSplitDisabled(
   item: TimelineItem | undefined,
@@ -41,7 +45,11 @@ export function TimelinePrimaryActions({ onZoomToSelection }: { onZoomToSelectio
     (item) =>
       cohortIds.includes(item.id) && tracks.find((track) => track.id === item.trackId)?.locked,
   )
-  const splitItem = selected.length === 1 ? selected[0] : undefined
+  const splitAnchorIds = linked ? getUniqueLinkedItemAnchorIds(items, selectedIds) : selectedIds
+  const splitItem =
+    splitAnchorIds.length === 1 && selected.length === selectedIds.length
+      ? selected.find((item) => item.id === splitAnchorIds[0])
+      : undefined
   const malformed =
     splitItem &&
     linked &&

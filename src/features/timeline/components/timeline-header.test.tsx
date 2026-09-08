@@ -108,7 +108,8 @@ describe('TimelineHeader zoom slider', () => {
     const targetZoom = ZOOM_MIN * Math.pow(ZOOM_MAX / ZOOM_MIN, 0.75)
 
     render(<TimelineHeader onZoomChange={onZoomChange} />)
-    expect(micRenderSpy).not.toHaveBeenCalled()
+    expect(micRenderSpy).toHaveBeenCalledTimes(1)
+    micRenderSpy.mockClear()
 
     fireEvent.mouseDown(screen.getByRole('slider'))
 

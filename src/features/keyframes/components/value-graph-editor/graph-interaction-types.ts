@@ -124,6 +124,7 @@ export interface UseGraphInteractionOptions {
   onDragStart?: () => void
   /** Callback when drag ends (for undo batching) */
   onDragEnd?: () => void
+  onDragCancel?: () => void
   /** Whether snapping is enabled */
   snapEnabled?: boolean
   /** Snap targets for frames (other keyframe frames, playhead, etc.) */

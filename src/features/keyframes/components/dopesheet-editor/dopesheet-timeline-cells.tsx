@@ -328,6 +328,7 @@ interface PropertyTimelineCellProps {
   onSegmentEasingChange?: SegmentEasingChange
   onSegmentDragStart?: () => void
   onSegmentDragEnd?: () => void
+  onSegmentDragCancel?: () => void
   setKeyframeButtonRef: (keyframeId: string, node: HTMLButtonElement | null) => void
   keyframeMetaByIdRef: MutableRefObject<Map<string, KeyframeMeta>>
   sheetPreviewFrames: Record<string, number> | null
@@ -354,6 +355,7 @@ export const PropertyTimelineCell = memo(function PropertyTimelineCell({
   onSegmentEasingChange,
   onSegmentDragStart,
   onSegmentDragEnd,
+  onSegmentDragCancel,
   setKeyframeButtonRef,
   keyframeMetaByIdRef,
   sheetPreviewFrames,
@@ -456,6 +458,7 @@ export const PropertyTimelineCell = memo(function PropertyTimelineCell({
                 onChange={onSegmentEasingChange}
                 onDragStart={onSegmentDragStart}
                 onDragEnd={onSegmentDragEnd}
+                onDragCancel={onSegmentDragCancel}
               />
             ))}
 

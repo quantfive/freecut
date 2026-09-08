@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { Settings2, X } from 'lucide-react'
 import { usePlaybackStore } from '@/shared/state/playback'
 import { useSelectionStore } from '@/shared/state/selection'
+import { useSourcePlayerStore } from '@/shared/state/source-player'
 import { MediaSidebar } from './media-sidebar'
 import { AudioMeterPanel } from './audio-meter-panel'
 import { PropertiesSidebar } from './properties-sidebar'
@@ -37,6 +38,7 @@ export function EditorWorkspaceShell({
   const [settingsOpen, setSettingsOpen] = useState(false)
   const libraryToggleRef = useRef<HTMLButtonElement>(null)
   const settingsTrigger = useRef<HTMLButtonElement>(null)
+  const settingsPanel = useRef<HTMLElement>(null)
   const selectedIds = useSelectionStore((s) => s.selectedItemIds)
   const rootRef = useRef<HTMLDivElement>(null)
   useEffect(() => {
@@ -52,7 +54,9 @@ export function EditorWorkspaceShell({
     if (settingsOpen && settingsSelection.current.some((id) => !selectedIds.includes(id))) {
       setSettingsOpen(false)
       setSettingsNotice(true)
-      settingsTrigger.current?.focus()
+      if (settingsPanel.current?.contains(document.activeElement)) {
+        settingsTrigger.current?.focus()
+      }
     }
   }, [selectedIds, settingsOpen])
   const onLayoutChange = options?.onLayoutChange
@@ -77,6 +81,9 @@ export function EditorWorkspaceShell({
         new CustomEvent('freecut:cancel-timeline-gesture', { bubbles: true }),
       )
       usePlaybackStore.getState().pause()
+      const sourcePlayer = useSourcePlayerStore.getState()
+      sourcePlayer.setPendingPlay(false)
+      sourcePlayer.playerMethods?.pause()
     }
     setEditorVisible(!editorVisible)
   }
@@ -216,6 +223,7 @@ export function EditorWorkspaceShell({
           )}
           {settingsOpen && (
             <section
+              ref={settingsPanel}
               role="region"
               aria-label={t('editor.refresh.settings')}
               className="absolute right-3 top-3 z-40 flex max-h-[55%] w-[320px] max-w-[calc(100%-24px)] flex-col overflow-hidden rounded-xl border border-border bg-card shadow-xl"

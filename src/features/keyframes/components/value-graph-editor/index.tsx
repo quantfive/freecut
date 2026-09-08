@@ -106,6 +106,7 @@ interface ValueGraphEditorSharedProps {
   onDragStart?: () => void
   /** Callback when drag ends (for undo batching) */
   onDragEnd?: () => void
+  onDragCancel?: () => void
   /** Callback to add a keyframe at the current frame */
   onAddKeyframe?: (property: AnimatableProperty, frame: number) => void
   /** Callback to remove selected keyframes */
@@ -183,6 +184,7 @@ const ValueGraphEditorBase = memo(function ValueGraphEditorBase({
   onScrubEnd,
   onDragStart,
   onDragEnd,
+  onDragCancel,
   onAddKeyframe,
   onRemoveKeyframes,
   onNavigateToKeyframe,
@@ -430,8 +432,7 @@ const ValueGraphEditorBase = memo(function ValueGraphEditorBase({
   }> => {
     if (
       !proceduralPreview ||
-      (proceduralPreview.modifiers.length === 0 &&
-        (proceduralPreview.layers?.length ?? 0) === 0)
+      (proceduralPreview.modifiers.length === 0 && (proceduralPreview.layers?.length ?? 0) === 0)
     )
       return []
     const { graphLeft, graphTop, graphWidth, graphHeight, frameRange } = getGraphDimensions(
@@ -578,6 +579,7 @@ const ValueGraphEditorBase = memo(function ValueGraphEditorBase({
     onBezierHandleMove,
     onDragStart,
     onDragEnd,
+    onDragCancel,
     snapEnabled,
     snapFrameTargets: snapTargets.frameTargets,
     snapValueTargets: snapTargets.valueTargets,

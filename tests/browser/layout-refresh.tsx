@@ -1,8 +1,20 @@
 // fallow-ignore-file unused-file
 import { useState } from 'react'
+import { useSelectionStore } from '../../src/shared/state/selection'
+import { createPortal } from 'react-dom'
+import { EditorWorkspaceShell } from '../../src/features/editor/components/editor-workspace-shell'
 import { createRoot } from 'react-dom/client'
 import { FreeCutEditorSurface } from '../../src/features/editor/host/editor-surface'
-import type { EditorHost, EmbeddedEditorSnapshot } from '../../src/features/editor/host/contract'
+import {
+  DEFAULT_HOST_CAPABILITIES,
+  type EditorHost,
+  type EmbeddedEditorSnapshot,
+} from '../../src/features/editor/host/contract'
+import {
+  createCodePressCommandAdapter,
+  freeCutDocumentToControlledDocument,
+  controlledDocumentToFreeCutDocument,
+} from '../../src/features/editor/codepress'
 
 const MEDIA_ID = 'generated-av'
 const ITEM_ID = 'retained-video'
@@ -79,10 +91,14 @@ function snapshot(
 
 let currentSnapshot = snapshot(0, 0, 60)
 let loadCount = 0
+let submitCount = 0
+let adapter = createCodePressCommandAdapter({
+  document: freeCutDocumentToControlledDocument(currentSnapshot.timeline),
+})
 const listeners = new Set<(value: EmbeddedEditorSnapshot) => void>()
 
 const host: EditorHost = {
-  capabilities: { 'media.resolve': true, 'media.transcription': true },
+  capabilities: { ...DEFAULT_HOST_CAPABILITIES, 'media.transcription': true },
   transcript: {
     getStatus: () => ({
       transcriptId: 'layout-transcript',
@@ -124,8 +140,16 @@ const host: EditorHost = {
     return currentSnapshot
   },
   resolveMedia: ({ mediaId }) => (mediaId === MEDIA_ID ? { source: MEDIA_SOURCE } : null),
-  submitEdit: () => {
-    throw new Error('The source-range fixture does not submit edits')
+  submitEdit: (batch) => {
+    submitCount += 1
+    const result = adapter.apply(batch)
+    if (result.status === 'rejected')
+      return { status: 'rejected', snapshot: currentSnapshot, result }
+    currentSnapshot = {
+      ...currentSnapshot,
+      timeline: controlledDocumentToFreeCutDocument(adapter.getDocument()),
+    }
+    return { status: result.status, snapshot: currentSnapshot, result }
   },
   subscribe: (listener) => {
     listeners.add(listener)
@@ -133,13 +157,63 @@ const host: EditorHost = {
   },
 }
 
+declare global {
+  interface Window {
+    __layoutHarness: {
+      state(): { snapshot: EmbeddedEditorSnapshot; submitCount: number; dragging: boolean }
+      removeClip(): void
+    }
+  }
+}
+window.__layoutHarness = {
+  state: () => ({
+    snapshot: currentSnapshot,
+    submitCount,
+    dragging: useSelectionStore.getState().dragState?.isDragging === true,
+  }),
+  removeClip: () => {
+    currentSnapshot = {
+      ...currentSnapshot,
+      timeline: {
+        ...currentSnapshot.timeline,
+        revision: currentSnapshot.timeline.revision + 1,
+        tracks: currentSnapshot.timeline.tracks.map(
+          (track: EmbeddedEditorSnapshot['timeline']['tracks'][number]) => ({
+            ...track,
+            items: [],
+          }),
+        ),
+      },
+    }
+    adapter = createCodePressCommandAdapter({
+      document: freeCutDocumentToControlledDocument(currentSnapshot.timeline),
+    })
+    listeners.forEach((listener) => listener(currentSnapshot))
+  },
+}
+
+export const containment = new URLSearchParams(location.search).get('containment')
+
 function LayoutReview() {
+  const [containmentTarget, setContainmentTarget] = useState<HTMLDivElement | null>(null)
   const [chatOpen, setChatOpen] = useState(true)
   return (
     <div style={{ height: '100vh', display: 'flex', flexDirection: 'column' }}>
       <header style={{ height: 56, padding: 16, background: '#f5f6f8', color: '#14151a' }}>
         CodePress · Video editor · Layout fixture
       </header>
+      {containment && (
+        <div
+          ref={setContainmentTarget}
+          id="other-shell"
+          style={{
+            height: 120,
+            flexShrink: 0,
+            overflow: 'hidden',
+            order: containment === 'first' ? 2 : -1,
+          }}
+        />
+      )}
       <div style={{ display: 'flex', flex: 1, minHeight: 0, overflowX: 'auto' }}>
         <aside
           aria-label="Chat"
@@ -186,9 +260,18 @@ function LayoutReview() {
             host={host}
             shell={{
               navigationActions: (
-                <button onClick={() => setChatOpen(!chatOpen)}>
-                  {chatOpen ? 'Hide Chat' : 'Show Chat'}
-                </button>
+                <>
+                  {containmentTarget &&
+                    createPortal(
+                      <EditorWorkspaceShell>
+                        <span>Containment-only second shell, no editor runtime</span>
+                      </EditorWorkspaceShell>,
+                      containmentTarget,
+                    )}
+                  <button onClick={() => setChatOpen(!chatOpen)}>
+                    {chatOpen ? 'Hide Chat' : 'Show Chat'}
+                  </button>
+                </>
               ),
               headerActions: (
                 <>

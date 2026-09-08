@@ -784,7 +784,7 @@ function SourcePlaybackControls({
       if (!bar) return null
       const rect = bar.getBoundingClientRect()
       if (rect.width <= 0) {
-        return 0
+        return null
       }
       const pct = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width))
       return Math.round(pct * lastFrame)
@@ -915,26 +915,23 @@ function SourcePlaybackControls({
     [flushBarSeekFrame, frameFromBarX, player, playing, scheduleBarSeekFrame],
   )
 
-  // Clean up document listeners on unmount
-  useEffect(() => {
-    return () => {
-      pendingBarSeekFrameRef.current = null
-      pendingBarPointerXRef.current = null
-      lastIssuedBarSeekFrameRef.current = null
-      if (barSeekRafRef.current !== null) {
-        cancelAnimationFrame(barSeekRafRef.current)
-        barSeekRafRef.current = null
-      }
-      if (onMoveRef.current) {
-        document.removeEventListener('mousemove', onMoveRef.current)
-        onMoveRef.current = null
-      }
-      if (onUpRef.current) {
-        document.removeEventListener('mouseup', onUpRef.current)
-        onUpRef.current = null
-      }
-      draggingRef.current = false
+  const cancelBarScrub = useCallback(() => {
+    pendingBarSeekFrameRef.current = null
+    pendingBarPointerXRef.current = null
+    lastIssuedBarSeekFrameRef.current = null
+    if (barSeekRafRef.current !== null) {
+      cancelAnimationFrame(barSeekRafRef.current)
+      barSeekRafRef.current = null
     }
+    if (onMoveRef.current) {
+      document.removeEventListener('mousemove', onMoveRef.current)
+      onMoveRef.current = null
+    }
+    if (onUpRef.current) {
+      document.removeEventListener('mouseup', onUpRef.current)
+      onUpRef.current = null
+    }
+    draggingRef.current = false
   }, [])
 
   // I/O marker positions as percentages
@@ -1027,8 +1024,27 @@ function SourcePlaybackControls({
   )
 
   useEffect(() => {
-    return () => ioDragCleanupRef.current?.()
-  }, [])
+    const cancel = (event: Event) => {
+      const root = barRef.current?.closest(
+        '[data-editor-workspace-shell], [data-freecut-editor-surface], [role="application"]',
+      )
+      if (!root || event.target !== root) return
+      cancelBarScrub()
+      // I/O updates are already applied. End capture/readout, retaining the
+      // last visible preview for the existing explicit play/seek path.
+      if (ioDragCleanupRef.current) {
+        const previewFrame = useSourcePlayerStore.getState().previewSourceFrame
+        ioDragCleanupRef.current()
+        useSourcePlayerStore.getState().setPreviewSourceFrame(previewFrame)
+      }
+    }
+    window.addEventListener('freecut:cancel-timeline-gesture', cancel)
+    return () => {
+      window.removeEventListener('freecut:cancel-timeline-gesture', cancel)
+      cancelBarScrub()
+      ioDragCleanupRef.current?.()
+    }
+  }, [cancelBarScrub])
 
   // Duration display when both I/O are set
   const ioDuration =
@@ -1250,10 +1266,12 @@ function SourcePlaybackControls({
                   left={`${inPct}%`}
                   width={`${outPct - inPct}%`}
                   height={SOURCE_IO_LANE_HEIGHT}
+                  testId="source-monitor-io-range"
                   onDragStart={handleIORangeDragStart}
                 />
               )}
               <IoRangeHandles
+                testIdPrefix="source-monitor-io"
                 inLeft={inPct !== null ? `${inPct}%` : null}
                 outLeft={outPct !== null ? `${outPct}%` : null}
                 spanPx={

@@ -2,8 +2,10 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vite-plus/test'
 import { useEffect } from 'react'
-const { pause, cancel, actionMounts, actionUnmounts, selection } = vi.hoisted(() => ({
+const { pause, sourcePause, setPendingPlay, cancel, actionMounts, actionUnmounts, selection } = vi.hoisted(() => ({
   pause: vi.fn(),
+  sourcePause: vi.fn(),
+  setPendingPlay: vi.fn(),
   cancel: vi.fn(),
   actionMounts: vi.fn(),
   actionUnmounts: vi.fn(),
@@ -11,6 +13,11 @@ const { pause, cancel, actionMounts, actionUnmounts, selection } = vi.hoisted(()
 }))
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }))
 vi.mock('@/shared/state/playback', () => ({ usePlaybackStore: { getState: () => ({ pause }) } }))
+vi.mock('@/shared/state/source-player', () => ({
+  useSourcePlayerStore: {
+    getState: () => ({ playerMethods: { pause: sourcePause }, setPendingPlay }),
+  },
+}))
 vi.mock('@/shared/state/selection', () => ({
   useSelectionStore: (select: (s: typeof selection) => unknown) => select(selection),
 }))
@@ -68,9 +75,16 @@ describe('editor workspace columns', () => {
       libraryVisible: false,
       editorVisible: true,
     })
+    sourcePause.mockImplementationOnce(() => {
+      expect(editor.style.display).toBe('flex')
+      expect(cancel).toHaveBeenCalledOnce()
+      expect(pause).toHaveBeenCalledOnce()
+      expect(setPendingPlay).toHaveBeenCalledWith(false)
+    })
     fireEvent.click(screen.getByRole('button', { name: 'editor.refresh.hideEditor' }))
     expect(cancel).toHaveBeenCalledOnce()
     expect(pause).toHaveBeenCalledOnce()
+    expect(sourcePause).toHaveBeenCalledOnce()
     expect(editor.style.display).toBe('none')
     expect(actionMounts).toHaveBeenCalledOnce()
     expect(actionUnmounts).not.toHaveBeenCalled()
@@ -109,6 +123,34 @@ describe('editor workspace columns', () => {
       screen.getByRole('button', { name: 'editor.refresh.canvasSettings' }),
     )
   })
+  it('closes stale settings without stealing focus from the host chat', () => {
+    const workspace = (
+      <>
+        <textarea aria-label="Host chat" />
+        <EditorWorkspaceShell>
+          <div />
+        </EditorWorkspaceShell>
+      </>
+    )
+    const { rerender } = render(workspace)
+    fireEvent.click(screen.getByRole('button', { name: 'editor.refresh.clipSettings' }))
+    const chat = screen.getByRole('textbox', { name: 'Host chat' })
+    chat.focus()
+    selection.selectedItemIds = []
+    rerender(
+      <>
+        <textarea aria-label="Host chat" />
+        <EditorWorkspaceShell>
+          <div />
+        </EditorWorkspaceShell>
+      </>,
+    )
+    expect(screen.queryByRole('region', { name: 'editor.refresh.settings' })).toBeNull()
+    expect(document.activeElement).toBe(chat)
+    fireEvent.change(chat, { target: { value: 'continue the draft' } })
+    expect(chat).toHaveValue('continue the draft')
+  })
+
   it('resizes with keyboard without resetting the reading state', () => {
     render(
       <EditorWorkspaceShell>
