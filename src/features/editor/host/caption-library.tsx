@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { useSelectionStore } from '@/shared/state/selection'
 import { usePlaybackStore } from '@/shared/state/playback'
@@ -30,7 +30,21 @@ export function HostCaptionLibrary() {
   const [message, setMessage] = useState('')
   const [error, setError] = useState(false)
   const [preview, setPreview] = useState<HostTranscriptCommandPreview | null>(null)
+  const requestGeneration = useRef(0)
   const port = host?.transcript
+
+  useEffect(() => {
+    const unsubscribe = useSelectionStore.subscribe((state, previous) => {
+      if (state.selectedItemIds !== previous.selectedItemIds) {
+        requestGeneration.current += 1
+        setPreview(null)
+      }
+    })
+    return () => {
+      requestGeneration.current += 1
+      unsubscribe()
+    }
+  }, [])
 
   useEffect(() => {
     if (!runtime) return
@@ -50,15 +64,24 @@ export function HostCaptionLibrary() {
 
   async function prepare() {
     if (!port || !runtime || busy) return
+    const generation = ++requestGeneration.current
+    const assertCurrentRequest = () => {
+      if (generation !== requestGeneration.current)
+        throw new Error(
+          'The selection changed while captions were loading. Preview again using the current selection.',
+        )
+    }
     setBusy(true)
     setError(false)
     setPreview(null)
     setMessage('Loading the edited transcript…')
     try {
       const status = captionStatusOrThrow(await port.getStatus())
+      assertCurrentRequest()
       const snapshot = runtime.controller.getSnapshot()
       assertCaptionTargetAvailable(snapshot.timeline, replaceAll)
       const sections = await loadCaptionSections(port, status.transcriptId)
+      assertCurrentRequest()
       const ranges = captionRangesForEdit(
         snapshot.timeline,
         status.assetId,
@@ -84,6 +107,7 @@ export function HostCaptionLibrary() {
         request,
         snapshot.timeline.timelineId,
       )
+      assertCurrentRequest()
       if (runtime.controller.getSnapshot().timeline.revision !== snapshot.timeline.revision)
         throw new Error(
           'The edit changed while captions were loading. Preview again using the latest edit.',
@@ -150,7 +174,10 @@ export function HostCaptionLibrary() {
           <select
             className="mt-1 h-9 w-full rounded-md border border-input bg-background px-2"
             value={scope}
-            onChange={(event) => setScope(event.target.value)}
+            onChange={(event) => {
+              requestGeneration.current += 1
+              setScope(event.target.value)
+            }}
             disabled={busy}
           >
             <option value="edit">This edit</option>

@@ -80,6 +80,7 @@ const listeners = new Set<(value: EmbeddedEditorSnapshot) => void>()
 const history: EmbeddedEditorSnapshot[] = []
 const fixtureState = {
   applies: 0,
+  resolvePreview: () => {},
   undo: () => host.history!.undo(),
   requests: [] as unknown[],
   native: () => hostSnapshotToNativeTimeline(snapshot),
@@ -156,9 +157,13 @@ const host: EditorHost = {
         },
       ],
     }),
-    previewCommands: (request) => {
+    previewCommands: async (request) => {
       if (scenario === 'error') throw new Error('Fixture preview unavailable. Retry preview.')
       fixtureState.requests.push(request)
+      if (scenario === 'deferred')
+        await new Promise<void>((resolve) => {
+          fixtureState.resolvePreview = resolve
+        })
       const trackId = request.captionTrackId!
       const existing = snapshot.timeline.tracks.find((track) => track.id === trackId)
       const cues = request.ranges!.map((range, index) => {

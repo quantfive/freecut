@@ -67,6 +67,26 @@ describe('captions from the edited sequence', () => {
       { itemId: 'after-cut', startUs: 2_000_000, endUs: 3_000_000, text: 'world' },
     ])
   })
+  it('scopes individually selected linked audio before occurrence deduplication', () => {
+    const linked = {
+      ...document,
+      tracks: [
+        {
+          ...document.tracks[0]!,
+          items: [
+            { ...clip, linkedGroupId: 'linked' },
+            { ...clip, type: 'audio' as const, id: 'audio', linkedGroupId: 'linked' },
+          ],
+        },
+      ],
+    }
+    expect(captionRangesForEdit(linked, 'm', [section], new Set(['audio']))).toEqual([
+      { itemId: 'audio', startUs: 0, endUs: 1_000_000, text: 'hello' },
+    ])
+    expect(captionRangesForEdit(linked, 'm', [section])).toEqual([
+      { itemId: 'a', startUs: 0, endUs: 1_000_000, text: 'hello' },
+    ])
+  })
   it('clamps measured word boundaries to trimmed source handles for caption containment', () => {
     const trimmed = {
       ...document,
