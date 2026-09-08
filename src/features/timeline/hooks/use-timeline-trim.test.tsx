@@ -18,6 +18,9 @@ import { useLinkedEditPreviewStore } from '../stores/linked-edit-preview-store'
 import { useTrimPreviewStore } from '@/shared/state/trim-preview'
 import { useTimelineTrim } from './use-timeline-trim'
 
+const hostContext = vi.hoisted(() => ({ value: { mode: 'local' } as Record<string, unknown> }))
+vi.mock('../deps/editor', () => ({ useEditorHostContext: () => hostContext.value }))
+
 const TIMELINE_DURATION = 600
 let rafCallbacks: FrameRequestCallback[] = []
 
@@ -26,6 +29,7 @@ let rafCallbacks: FrameRequestCallback[] = []
  * deltaFrames === deltaX in every gesture below.
  */
 function setupStores() {
+  hostContext.value = { mode: 'local' }
   useEditorStore.setState({ hostMode: false })
   useTimelineCommandStore.getState().clearHistory()
   useTimelineSettingsStore.setState({ fps: 30, isDirty: false, snapEnabled: false })
@@ -139,6 +143,121 @@ describe('useTimelineTrim', () => {
   })
 
   afterEach(() => vi.unstubAllGlobals())
+
+  describe('semantic host gesture', () => {
+    function setupHost() {
+      const port = {
+        beginTrim: vi.fn(() => 'gesture-1'),
+        commitTrim: vi.fn(async () => {}),
+        cancelTrim: vi.fn(),
+      }
+      hostContext.value = { mode: 'host', timeline: port }
+      useEditorStore.setState({ hostMode: true })
+      const clip = makeTimelineVideoItem({ id: 'a' })
+      useItemsStore.getState().setItems([clip])
+      return { port, clip }
+    }
+
+    it('submits one intent and never also applies the local store command', () => {
+      const { port, clip } = setupHost()
+      const { result } = renderTrimHook(clip)
+      startTrim(result, 'end')
+      moveMouse(12)
+      releaseMouse()
+      releaseMouse()
+      expect(port.beginTrim).toHaveBeenCalledExactlyOnceWith('a')
+      expect(port.commitTrim).toHaveBeenCalledExactlyOnceWith(
+        'gesture-1',
+        expect.objectContaining({ handle: 'end', deltaFrames: 12, mode: 'ripple' }),
+      )
+      expect(port.cancelTrim).not.toHaveBeenCalled()
+      expect(getItem('a')).toEqual(clip)
+      expect(useTrimPreviewStore.getState().projection).toBeNull()
+    })
+
+    it.each(['Escape', 'freecut:cancel-timeline-gesture', 'unmount', 'zero delta'])(
+      'cancels once on %s and ignores late release',
+      (reason) => {
+        const { port, clip } = setupHost()
+        const { result, unmount } = renderTrimHook(clip)
+        startTrim(result, 'end')
+        if (reason !== 'zero delta') moveMouse(12)
+        act(() => {
+          if (reason === 'unmount') unmount()
+          else if (reason === 'Escape')
+            window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+          else if (reason !== 'zero delta') window.dispatchEvent(new Event(reason))
+        })
+        releaseMouse()
+        expect(port.cancelTrim).toHaveBeenCalledExactlyOnceWith('gesture-1')
+        expect(port.commitTrim).not.toHaveBeenCalled()
+        expect(getItem('a')).toEqual(clip)
+      },
+    )
+
+    it('clears preview after rejected commit without falling back to a local edit', async () => {
+      const { port, clip } = setupHost()
+      port.commitTrim.mockRejectedValue(new Error('conflict'))
+      const { result } = renderTrimHook(clip)
+      startTrim(result, 'end')
+      moveMouse(12)
+      await act(async () => releaseMouse())
+      expect(port.commitTrim).toHaveBeenCalledTimes(1)
+      expect(getItem('a')).toEqual(clip)
+      expect(useTrimPreviewStore.getState().projection).toBeNull()
+    })
+
+    it('fails closed for a partially implemented gesture port', () => {
+      const { port, clip } = setupHost()
+      hostContext.value = { mode: 'host', timeline: { beginTrim: port.beginTrim } }
+      const { result } = renderTrimHook(clip)
+      startTrim(result, 'end')
+      moveMouse(12)
+      releaseMouse()
+      expect(port.beginTrim).not.toHaveBeenCalled()
+      expect(getItem('a')).toEqual(clip)
+    })
+
+    it('only cancels when the collapsing surface owns this clip', () => {
+      const { port, clip } = setupHost()
+      const surface = document.createElement('div')
+      const other = document.createElement('div')
+      const owner = document.createElement('div')
+      surface.append(owner)
+      document.body.append(surface, other)
+      const { result } = renderHook(() =>
+        useTimelineTrim(clip, TIMELINE_DURATION, false, { current: owner }),
+      )
+      startTrim(result, 'end')
+      moveMouse(12)
+      act(() =>
+        other.dispatchEvent(new CustomEvent('freecut:cancel-timeline-gesture', { bubbles: true })),
+      )
+      expect(port.cancelTrim).not.toHaveBeenCalled()
+      act(() =>
+        surface.dispatchEvent(
+          new CustomEvent('freecut:cancel-timeline-gesture', { bubbles: true }),
+        ),
+      )
+      releaseMouse()
+      expect(port.cancelTrim).toHaveBeenCalledExactlyOnceWith('gesture-1')
+      expect(port.commitTrim).not.toHaveBeenCalled()
+      surface.remove()
+      other.remove()
+    })
+
+    it('aborts when a present authority port rejects begin', () => {
+      const { port, clip } = setupHost()
+      port.beginTrim.mockReturnValue(null as unknown as string)
+      const { result } = renderTrimHook(clip)
+      startTrim(result, 'end')
+      moveMouse(12)
+      releaseMouse()
+      expect(result.current.isTrimming).toBe(false)
+      expect(port.commitTrim).not.toHaveBeenCalled()
+      expect(getItem('a')).toEqual(clip)
+    })
+  })
 
   describe('normal trim', () => {
     it('extends the end handle and updates sourceEnd on commit', () => {
@@ -722,7 +841,7 @@ describe('useTimelineTrim', () => {
       expect(useTimelineCommandStore.getState().undoStack.length).toBe(undoDepthBefore)
     })
 
-    it.each(['Escape', 'pointercancel'] as const)(
+    it.each(['Escape', 'pointercancel', 'freecut:cancel-timeline-gesture'] as const)(
       'cancels a %s gesture without mutating the authoritative timeline',
       (cancellation) => {
         const clip = makeTimelineVideoItem({ id: 'a' })
@@ -737,7 +856,7 @@ describe('useTimelineTrim', () => {
           if (cancellation === 'Escape') {
             window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
           } else {
-            window.dispatchEvent(new Event('pointercancel'))
+            window.dispatchEvent(new Event(cancellation))
           }
         })
 

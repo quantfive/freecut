@@ -1,3 +1,4 @@
+import { HostEditStatus } from './edit-status'
 import { useEffect, useState } from 'react'
 import { I18nextProvider } from 'react-i18next'
 import { TooltipProvider } from '@/components/ui/tooltip'
@@ -134,6 +135,9 @@ export function FreeCutEditorSurface({
             capabilities,
             host,
             timeline: {
+              beginTrim: state.runtime.beginTrim,
+              commitTrim: state.runtime.commitTrim,
+              cancelTrim: state.runtime.cancelTrim,
               requestRippleDelete: state.runtime.requestRippleDelete,
               requestSetItemAttachment: (itemIds, rippleLinked) =>
                 state.runtime.requestSetItemAttachment(itemIds, rippleLinked),
@@ -143,19 +147,22 @@ export function FreeCutEditorSurface({
           <HostCaptionEditorProvider runtime={state.runtime}>
             <HostTranscriptEditorProvider runtime={state.runtime}>
               <ErrorBoundary level="feature">
-                <div data-freecut-editor-surface="host" className="h-full min-h-0">
-                  <LoadedEditor
-                    projectId={state.snapshot.project.id}
-                    project={state.snapshot.project}
-                    migration={{
-                      storedSchemaVersion: 1,
-                      currentSchemaVersion: 1,
-                      requiresUpgrade: false,
-                    }}
-                    shell={shell}
-                    hostRuntime={state.runtime}
-                    onNavigateBack={onNavigateBack}
-                  />
+                <div data-freecut-editor-surface="host" className="flex h-full min-h-0 flex-col">
+                  <HostEditStatus controller={state.runtime.controller} />
+                  <div className="min-h-0 flex-1">
+                    <LoadedEditor
+                      projectId={state.snapshot.project.id}
+                      project={state.snapshot.project}
+                      migration={{
+                        storedSchemaVersion: 1,
+                        currentSchemaVersion: 1,
+                        requiresUpgrade: false,
+                      }}
+                      shell={shell}
+                      hostRuntime={state.runtime}
+                      onNavigateBack={onNavigateBack}
+                    />
+                  </div>
                 </div>
               </ErrorBoundary>
             </HostTranscriptEditorProvider>

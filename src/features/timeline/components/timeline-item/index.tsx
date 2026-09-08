@@ -310,8 +310,9 @@ export const TimelineItem = memo(function TimelineItem({
     isRollingEdit,
     isRippleEdit,
     trimConstrained,
+    trimConstraintLabel,
     handleTrimStart,
-  } = useTimelineTrim(item, timelineDuration, trackLocked)
+  } = useTimelineTrim(item, timelineDuration, trackLocked, transformRef)
 
   // Rate stretch functionality - disabled if track is locked
   const { isStretching, stretchHandle, stretchConstrained, handleStretchStart, getVisualFeedback } =
@@ -904,13 +905,20 @@ export const TimelineItem = memo(function TimelineItem({
     (item.type === 'shape' && (item.isMask ?? false))
   // hasActiveClipInteraction is hoisted before fade memos (see above)
   const useCompactClipShell =
-    activeTool === 'select' && isCompactWidth && !hasDetailBadges && !hasActiveClipInteraction
+    activeTool === 'select' &&
+    isCompactWidth &&
+    !isSelected &&
+    !hasDetailBadges &&
+    !hasActiveClipInteraction
   const { trimInfoLabel, moveInfoLabel } = useClipReadoutLabels({
     fps,
     isTrimming,
     trimHandle,
     trimDelta,
     visualWidthFrames,
+    visualLeftFrame,
+    item,
+    constraintLabel: trimConstraintLabel,
     isDragging,
     dragOffsetX: dragOffset.x,
   })
@@ -1019,7 +1027,7 @@ export const TimelineItem = memo(function TimelineItem({
                   : undefined,
               opacity: shouldDimForDrag ? DRAG_OPACITY : trackHidden ? 0.3 : trackLocked ? 0.6 : 1,
               pointerEvents: isBeingDragged ? 'none' : 'auto',
-              zIndex: isBeingDragged ? 50 : undefined,
+              zIndex: isBeingDragged ? 50 : isSelected && width < 36 ? 40 : undefined,
               transition: isBeingDragged ? 'none' : undefined,
               // Compact shells already suppress rich content, and almost all
               // of them are onscreen in a dense track. Avoid giving each one a
@@ -1027,7 +1035,7 @@ export const TimelineItem = memo(function TimelineItem({
               // real-width zoom step. Full-detail buffered clips keep browser
               // layout/paint skipping while offscreen.
               contain:
-                useCompactClipShell || hasSharedRollingHandle
+                useCompactClipShell || hasSharedRollingHandle || (isSelected && width < 36)
                   ? 'layout style'
                   : 'layout style paint',
               contentVisibility: useCompactClipShell ? 'visible' : 'auto',
@@ -1280,6 +1288,8 @@ export const TimelineItem = memo(function TimelineItem({
           {/* Trim handles */}
           {!useCompactClipShell && (
             <TrimHandles
+              isSelected={isSelected}
+              clipWidth={width}
               trackLocked={trackLocked}
               isAnyDragActive={isAnyDragActiveRef.current}
               isTrimming={isTrimming}

@@ -9,6 +9,7 @@ import {
   type TrimProjection,
 } from '@/shared/timeline/trim-preview'
 import { toast } from 'sonner'
+import { useEditorHostContext } from '../deps/editor'
 import type { SnapTarget } from '../types/drag'
 import { useTimelineStore } from '../stores/timeline-store'
 import { useItemsStore } from '../stores/items-store'
@@ -56,6 +57,23 @@ import {
 import { getTransitionBridgeAtHandle } from '../utils/transition-edit-guards'
 import { createRafCoalescedCallback } from '../utils/raf-coalesced-callback'
 import { resolveAttachedRippleTail } from '../utils/attached-chain'
+
+// Optional until hosts adopt the semantic gesture port. Keep the release
+// store path for older hosts; never run both paths for one gesture.
+interface HostTrimGesturePort {
+  beginTrim?: (itemId: string) => string | null
+  commitTrim?: (
+    token: string,
+    intent: {
+      handle: 'start' | 'end'
+      deltaFrames: number
+      mode: 'normal' | 'ripple' | 'rolling'
+      itemIds: readonly string[]
+      neighborId?: string | null
+    },
+  ) => Promise<void>
+  cancelTrim?: (token: string) => void
+}
 
 interface TrimState {
   isTrimming: boolean
@@ -169,7 +187,17 @@ export function useTimelineTrim(
   item: TimelineItem,
   timelineDuration: number,
   trackLocked: boolean = false,
+  ownerRef?: React.RefObject<HTMLElement | null>,
 ) {
+  const { mode: editorMode, timeline: hostTimeline } = useEditorHostContext()
+  const hostTrimPort = hostTimeline as typeof hostTimeline & HostTrimGesturePort
+  const hostGestureRef = useRef<{ token: string; port: Required<HostTrimGesturePort> } | null>(null)
+  const cancelHostGesture = useCallback(() => {
+    const gesture = hostGestureRef.current
+    hostGestureRef.current = null
+    if (gesture) gesture.port.cancelTrim(gesture.token)
+  }, [])
+  useEffect(() => cancelHostGesture, [cancelHostGesture])
   const pixelsToTime = pixelsToTimeNow
   const fps = useTimelineStore((s) => s.fps)
   const setDragState = useSelectionStore((s) => s.setDragState)
@@ -794,9 +822,10 @@ export function useTimelineTrim(
 
   const handleTrimCancel = useCallback(() => {
     if (!trimStateRef.current.isTrimming) return
+    cancelHostGesture()
     clearTrimPresentation()
     resetTrimState()
-  }, [clearTrimPresentation, resetTrimState])
+  }, [cancelHostGesture, clearTrimPresentation, resetTrimState])
 
   // Mouse up handler - commits changes to store (single update)
   const handleMouseUp = useCallback(() => {
@@ -804,8 +833,25 @@ export function useTimelineTrim(
       const state = trimStateRef.current
       const deltaFrames = trimStateRef.current.currentDelta
 
-      // Only update store if there was actual change
-      if (deltaFrames !== 0) {
+      const gesture = hostGestureRef.current
+      hostGestureRef.current = null
+      if (gesture) {
+        if (deltaFrames !== 0 && state.handle) {
+          void gesture.port
+            .commitTrim(gesture.token, {
+              handle: state.handle,
+              deltaFrames,
+              mode: state.isRollingEdit ? 'rolling' : state.isRippleEdit ? 'ripple' : 'normal',
+              itemIds: state.trimmedItemIds,
+              neighborId: state.neighborId,
+            })
+            .catch(() => toast.error('Could not save this trim. Try again.'))
+        } else {
+          gesture.port.cancelTrim(gesture.token)
+        }
+      }
+      // Only update store if there was actual change and no semantic host port.
+      if (!gesture && deltaFrames !== 0) {
         const transitionIdsToRemove =
           state.destroyTransitionAtHandle && state.handle
             ? useTransitionsStore
@@ -882,9 +928,19 @@ export function useTimelineTrim(
         handleTrimCancel()
       }
 
+      const handleEditorCollapse = (event: Event) => {
+        if (
+          ownerRef?.current &&
+          (!(event.target instanceof Element) || !event.target.contains(ownerRef.current))
+        )
+          return
+        handlePointerCancel()
+      }
+
       window.addEventListener('mousemove', coalescedMouseMove.queue)
       window.addEventListener('mouseup', handleCoalescedMouseUp)
       window.addEventListener('pointercancel', handlePointerCancel)
+      window.addEventListener('freecut:cancel-timeline-gesture', handleEditorCollapse)
       window.addEventListener('blur', handlePointerCancel)
       window.addEventListener('keydown', handleKeyDown)
       window.addEventListener('keyup', handleKeyUp)
@@ -893,6 +949,7 @@ export function useTimelineTrim(
         window.removeEventListener('mousemove', coalescedMouseMove.queue)
         window.removeEventListener('mouseup', handleCoalescedMouseUp)
         window.removeEventListener('pointercancel', handlePointerCancel)
+        window.removeEventListener('freecut:cancel-timeline-gesture', handleEditorCollapse)
         window.removeEventListener('blur', handlePointerCancel)
         coalescedMouseMove.cancel()
         window.removeEventListener('keydown', handleKeyDown)
@@ -903,6 +960,7 @@ export function useTimelineTrim(
     }
   }, [
     trimState.isTrimming,
+    ownerRef,
     clearTrimPresentation,
     handleMouseMove,
     handleMouseUp,
@@ -921,7 +979,7 @@ export function useTimelineTrim(
     ) => {
       // Only respond to left mouse button
       if (e.button !== 0) return
-      if (trackLocked) return
+      if (trackLocked || trimStateRef.current.isTrimming) return
 
       // Always prevent default trim-handle mouse behavior for all paths,
       // including guardrail early returns.
@@ -993,6 +1051,27 @@ export function useTimelineTrim(
         ? verticallyAlignedTrimItemIds
         : [currentItem.id]
 
+      const hasAnyGestureMethod =
+        hostTrimPort?.beginTrim || hostTrimPort?.commitTrim || hostTrimPort?.cancelTrim
+      if (
+        editorMode === 'host' &&
+        hasAnyGestureMethod &&
+        !(hostTrimPort?.beginTrim && hostTrimPort.commitTrim && hostTrimPort.cancelTrim)
+      ) {
+        toast.error('Trim is unavailable. Reload the editor and try again.')
+        return
+      }
+      if (
+        editorMode === 'host' &&
+        hostTrimPort?.beginTrim &&
+        hostTrimPort.commitTrim &&
+        hostTrimPort.cancelTrim
+      ) {
+        const token = hostTrimPort.beginTrim(currentItem.id)
+        if (token === null) return
+        hostGestureRef.current = { token, port: hostTrimPort as Required<HostTrimGesturePort> }
+      }
+
       magneticSnapTargetsRef.current = getMagneticSnapTargets()
       setDragState({
         isDragging: true,
@@ -1003,7 +1082,7 @@ export function useTimelineTrim(
       })
       setActiveSnapTarget(null)
 
-      setTrimState({
+      const nextTrimState: TrimState = {
         isTrimming: true,
         handle,
         startX: e.clientX,
@@ -1018,7 +1097,9 @@ export function useTimelineTrim(
         constraintLabel: null,
         destroyTransitionAtHandle,
         trimmedItemIds,
-      })
+      }
+      trimStateRef.current = nextTrimState
+      setTrimState(nextTrimState)
 
       const initialTrimMode: TrimPreviewMode = wantsRolling
         ? 'rolling'
@@ -1076,6 +1157,8 @@ export function useTimelineTrim(
     [
       item.from,
       item.durationInFrames,
+      editorMode,
+      hostTrimPort,
       trackLocked,
       getItemFromStore,
       getMagneticSnapTargets,

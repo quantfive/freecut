@@ -115,8 +115,8 @@ export function useSmartTrimHover({
         const nextIntent = resolveSmartTrimIntent({
           x,
           width: itemWidth,
-          hasLeftNeighbor,
-          hasRightNeighbor,
+          hasLeftNeighbor: activeToolRef.current === 'trim-edit' && hasLeftNeighbor,
+          hasRightNeighbor: activeToolRef.current === 'trim-edit' && hasRightNeighbor,
           hasStartBridge,
           hasEndBridge,
           preferRippleOuterEdges: activeToolRef.current === 'trim-edit',

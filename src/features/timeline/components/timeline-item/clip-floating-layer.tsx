@@ -79,6 +79,9 @@ export function ClipFloatingLayer({
           side={trimInfoLabel.side}
           delta={trimInfoLabel.delta}
           duration={trimInfoLabel.duration}
+          boundary={trimInfoLabel.boundary}
+          remaining={trimInfoLabel.remaining}
+          constraintLabel={trimInfoLabel.constraintLabel}
           measureKey={`${visualLeftFrame}:${visualWidthFrames}:${trimInfoLabel.side}:${trimInfoLabel.delta}:${trimInfoLabel.duration}`}
         />
       )}

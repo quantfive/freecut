@@ -119,7 +119,10 @@ describe('published FreeCut browser entry', () => {
       () => {
         expect(screen.getAllByRole('toolbar').length).toBeGreaterThanOrEqual(2)
         expect(screen.getByRole('region', { name: 'Preview area' })).toBeInTheDocument()
-        expect(screen.getByText('Timeline')).toBeInTheDocument()
+        const timelineToolbar = within(view.container).getByRole('toolbar', { name: 'Controls' })
+        expect(
+          within(timelineToolbar).getByRole('button', { name: 'Split' }),
+        ).toBeInTheDocument()
       },
       { timeout: 10_000 },
     )

@@ -203,7 +203,8 @@ describe('TimelineItem contiguous rolling trim affordance', () => {
 
     act(() => useSelectionStore.getState().selectItems(['video-left']))
     const leftRoot = view.container.querySelector<HTMLElement>('[data-item-id="video-left"]')!
-    expect(leftRoot).toHaveAttribute('data-compact-clip', 'true')
+    expect(leftRoot).not.toHaveAttribute('data-compact-clip')
+    expect(leftRoot.querySelector('[data-trim-handle="start"]')).toBeVisible()
     const leftOwnedHandle = within(leftRoot).getByRole('slider', { name: /rolling trim/i })
     expect(leftOwnedHandle).toHaveAttribute('data-rolling-trim-handle', 'end')
     expect(leftOwnedHandle).not.toHaveClass('pointer-events-none')
@@ -215,6 +216,7 @@ describe('TimelineItem contiguous rolling trim affordance', () => {
     expect(rightOwnedHandle).toHaveAttribute('data-rolling-trim-handle', 'start')
 
     act(() => useSelectionStore.getState().clearSelection())
+    act(() => useSelectionStore.getState().setActiveTool('trim-edit'))
     fireEvent.mouseMove(leftRoot, { clientX: CLIP_FRAMES, clientY: 40 })
     expect(within(leftRoot).getByRole('slider', { name: /rolling trim/i })).toBeVisible()
 
