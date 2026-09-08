@@ -12,6 +12,19 @@ function isGeneratedWorkerBase(node) {
     node.left.type === 'Literal' && node.left.value === '' && isImportMetaUrl(node.right))
 }
 
+function isNamedConstructor(node, name) {
+  return node?.type === 'NewExpression' && node.callee.type === 'Identifier' &&
+    node.callee.name === name
+}
+
+function publicWorkerUrl(url) {
+  if (!isNamedConstructor(url, 'URL') || url.arguments.length !== 2) return null
+  const [asset, base] = url.arguments
+  if (asset.type !== 'Literal' || typeof asset.value !== 'string' ||
+    !/^\/assets\/[A-Za-z0-9][A-Za-z0-9._-]*\.js$/.test(asset.value) || !isGeneratedWorkerBase(base)) return null
+  return { start: url.start, end: url.end, text: JSON.stringify(asset.value) }
+}
+
 /** Embedded hosts stage workers at their public root; keep them runtime URLs for Turbopack. */
 export function normalizeEditorWorkerUrls(code, filename = 'editor-chunk.js') {
   if (!code.includes('/assets/')) return code
@@ -21,13 +34,8 @@ export function normalizeEditorWorkerUrls(code, filename = 'editor-chunk.js') {
   new Visitor({
     NewExpression(node) {
       if (node.callee.type !== 'Identifier' || !['Worker', 'SharedWorker'].includes(node.callee.name)) return
-      const url = node.arguments[0]
-      if (url?.type !== 'NewExpression' || url.callee.type !== 'Identifier' ||
-        url.callee.name !== 'URL' || url.arguments.length !== 2) return
-      const [asset, base] = url.arguments
-      if (asset.type !== 'Literal' || typeof asset.value !== 'string' ||
-        !/^\/assets\/[A-Za-z0-9][A-Za-z0-9._-]*\.js$/.test(asset.value) || !isGeneratedWorkerBase(base)) return
-      replacements.push({ start: url.start, end: url.end, text: JSON.stringify(asset.value) })
+      const replacement = publicWorkerUrl(node.arguments[0])
+      if (replacement) replacements.push(replacement)
     },
   }).visit(parsed.program)
   return replacements.sort((left, right) => right.start - left.start).reduce(

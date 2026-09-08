@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import test from 'node:test'
+import { test } from 'vite-plus/test'
 import { normalizeEditorWorkerUrls } from './editor-package-worker-urls.mjs'
 
 test('unwraps generated worker URLs while retaining worker options and content', () => {
