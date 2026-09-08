@@ -112,23 +112,7 @@ export class EmbeddedEditorHostRuntime implements EmbeddedEditorHostRuntimeContr
     this.trimGesture = null // one-shot, including no-op and rejection
     try {
       if (intent.deltaFrames === 0) return
-      const current = this.controller.getSnapshot().timeline
-      if (
-        current.timelineId !== gesture.snapshot.timeline.timelineId ||
-        current.revision !== gesture.snapshot.timeline.revision ||
-        JSON.stringify(current) !== JSON.stringify(gesture.snapshot.timeline) ||
-        JSON.stringify(this.controller.getSnapshot().assets) !==
-          JSON.stringify(gesture.snapshot.assets)
-      ) {
-        throw new Error('This clip changed during the trim. Review the updated cut and try again.')
-      }
-      const batch = trimIntentBatch(gesture.snapshot.timeline, gesture.itemId, {
-        ...intent,
-        itemIds: gesture.itemIds,
-      })
-      const result = await this.controller.submitEdit(batch)
-      if (result.status === 'unsupported')
-        this.host.notify?.({ kind: 'warning', message: result.reason })
+      await this.submitTrimGesture(gesture, intent)
     } catch (error) {
       this.host.notify?.({
         kind: 'error',
@@ -140,6 +124,29 @@ export class EmbeddedEditorHostRuntime implements EmbeddedEditorHostRuntimeContr
     } finally {
       if (this.mounted) this.applySnapshotToStores(this.authoritativeSnapshot)
     }
+  }
+
+  private async submitTrimGesture(
+    gesture: NonNullable<EmbeddedEditorHostRuntime['trimGesture']>,
+    intent: HostTrimIntent,
+  ): Promise<void> {
+    const current = this.controller.getSnapshot().timeline
+    if (
+      current.timelineId !== gesture.snapshot.timeline.timelineId ||
+      current.revision !== gesture.snapshot.timeline.revision ||
+      JSON.stringify(current) !== JSON.stringify(gesture.snapshot.timeline) ||
+      JSON.stringify(this.controller.getSnapshot().assets) !==
+        JSON.stringify(gesture.snapshot.assets)
+    ) {
+      throw new Error('This clip changed during the trim. Review the updated cut and try again.')
+    }
+    const batch = trimIntentBatch(gesture.snapshot.timeline, gesture.itemId, {
+      ...intent,
+      itemIds: gesture.itemIds,
+    })
+    const result = await this.controller.submitEdit(batch)
+    if (result.status === 'unsupported')
+      this.host.notify?.({ kind: 'warning', message: result.reason })
   }
 
   /**
