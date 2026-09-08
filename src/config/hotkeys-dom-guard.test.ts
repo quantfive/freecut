@@ -87,6 +87,18 @@ describe('global shortcut DOM guards', () => {
     })
   })
 
+  it.each(['ArrowRight', 'ArrowLeft', ' ', 'Backspace', 'Delete'])(
+    'leaves %s to a focused resize separator',
+    (key) => {
+      expect(
+        dispatchFrom('<div role="separator" tabindex="0" id="control"></div>', '#control', key),
+      ).toEqual({ captureSawEvent: true, defaultPrevented: false })
+      expect(
+        dispatchFrom('<div data-timeline-item="true" id="timeline"></div>', '#timeline', key),
+      ).toEqual({ captureSawEvent: true, defaultPrevented: true })
+    },
+  )
+
   it('guards every dialog descendant, even when the target is a plain span', () => {
     expect(
       dispatchFrom('<div role="dialog"><span id="control">Message</span></div>', '#control', 'j'),

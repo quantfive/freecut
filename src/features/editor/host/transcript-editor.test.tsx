@@ -547,7 +547,7 @@ describe('host-backed transcript consumer', () => {
     ).toBeInTheDocument()
     expect(requestTranscription).toHaveBeenCalledWith({ assetId: 'asset-1', language: 'en' })
     expect(polls).toBeGreaterThanOrEqual(2)
-    expect(screen.getByTestId('host-transcript-status')).toHaveTextContent('succeeded')
+    expect(screen.getByTestId('host-transcript-status')).toBeEmptyDOMElement()
   })
 
   it('hides Transcribe when the transcription capability is off', async () => {

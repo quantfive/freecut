@@ -56,3 +56,7 @@ export type {
   MediaLocator,
   ResolvedMediaLocator,
 } from '@/features/editor/host/contract'
+
+export type { EditorShellOptions } from '@/features/editor/components/editor-workspace-shell'
+
+export const FREECUT_EDITOR_SHELL_VERSION = 1

@@ -71,6 +71,7 @@ function LocalInferenceToolbarStatus({ hostMode }: { hostMode: boolean }) {
 }
 
 interface ToolbarProps {
+  headerActions?: React.ReactNode
   projectId: string
   project: {
     id: string
@@ -112,6 +113,7 @@ interface MobileToolbarProps extends ToolbarProps {
 // fallow-ignore-next-line complexity
 function MobileToolbar({
   project,
+  headerActions,
   onBack,
   onSave,
   onExport,
@@ -185,6 +187,7 @@ function MobileToolbar({
         </Button>
       )}
 
+      {headerActions}
       {(onExport || onExportBundle) && (
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
@@ -290,6 +293,44 @@ function requestToolbarBack({
   if (onSave && onBack) showUnsavedDialog()
 }
 
+function ToolbarSaveAction({
+  onSave,
+  handleSave,
+  isSaveAnimating,
+  saveAnimationKey,
+}: {
+  onSave?: () => Promise<void>
+  handleSave: () => Promise<void>
+  isSaveAnimating: boolean
+  saveAnimationKey: number
+}) {
+  const { t } = useTranslation()
+  return (
+    <>
+      {onSave && (
+        <Button
+          variant="outline"
+          size="sm"
+          className="gap-1.5"
+          onClick={handleSave}
+          disabled={!onSave}
+          aria-label={t('toolbar.saveAria')}
+        >
+          <div className="relative">
+            {isSaveAnimating ? (
+              <SaveAnimationIcon key={saveAnimationKey} className="h-5 w-5" />
+            ) : (
+              <Save className="h-4 w-4" />
+            )}
+            <SaveDirtyIndicator />
+          </div>
+          {t('toolbar.save')}
+        </Button>
+      )}
+    </>
+  )
+}
+
 export const Toolbar = memo(function Toolbar({
   projectId,
   project,
@@ -300,6 +341,7 @@ export const Toolbar = memo(function Toolbar({
   onOpenRenderQueue,
   renderQueueCount = 0,
   compact = false,
+  headerActions,
 }: ToolbarProps) {
   const { t } = useTranslation()
   const hostMode = useEditorHostMode()
@@ -382,6 +424,7 @@ export const Toolbar = memo(function Toolbar({
   if (compact) {
     return (
       <MobileToolbar
+        headerActions={headerActions}
         projectId={projectId}
         project={project}
         onBack={onBack}
@@ -415,7 +458,7 @@ export const Toolbar = memo(function Toolbar({
       role="toolbar"
       aria-label={t('toolbar.ariaLabel')}
     >
-      <div className="flex items-center gap-2.5">
+      <div className="flex min-w-0 items-center gap-2.5">
         <Button
           variant="ghost"
           size="icon"
@@ -441,11 +484,11 @@ export const Toolbar = memo(function Toolbar({
 
         <Separator orientation="vertical" className="h-5" />
 
-        <div className="flex flex-col -space-y-0.5">
-          <h1 className="text-sm font-medium leading-none">
+        <div className="flex min-w-0 max-w-[240px] flex-col -space-y-0.5">
+          <h1 className="truncate text-sm font-medium leading-tight">
             {project?.name || t('common.untitledProject')}
           </h1>
-          <span className="font-mono text-[11px] text-muted-foreground">
+          <span className="sr-only">
             {t('toolbar.specsDetailed', {
               width: project?.width,
               height: project?.height,
@@ -478,110 +521,105 @@ export const Toolbar = memo(function Toolbar({
           <DebugPopover projectId={projectId} />
         )}
 
-        {/* Socials */}
-        <Button variant="outline" size="icon" className="h-7 w-7" asChild>
-          <a
-            href="https://github.com/walterlow/freecut"
-            target="_blank"
-            rel="noopener noreferrer"
-            data-tooltip={t('toolbar.viewOnGitHub')}
-            data-tooltip-side="bottom"
-            aria-label={t('toolbar.viewOnGitHub')}
-          >
-            <Github className="h-4 w-4" />
-          </a>
-        </Button>
-        <Button variant="outline" size="icon" className="h-7 w-7" asChild>
-          <a
-            href={DISCORD_INVITE_URL}
-            target="_blank"
-            rel="noopener noreferrer"
-            data-tooltip={t('toolbar.joinDiscord')}
-            data-tooltip-side="bottom"
-            aria-label={t('toolbar.joinDiscord')}
-          >
-            <DiscordIcon className="h-4 w-4" />
-          </a>
-        </Button>
+        <details className="relative text-xs">
+          <summary className="cursor-pointer rounded-md border border-border px-3 py-2">
+            {t('editor.refresh.helpSettings')}
+          </summary>
+          <div className="absolute right-0 top-full z-50 mt-2 flex flex-wrap gap-2 rounded-lg border border-border bg-card p-3 shadow-xl">
+            {/* Socials */}
+            <Button variant="outline" size="icon" className="h-7 w-7" asChild>
+              <a
+                href="https://github.com/walterlow/freecut"
+                target="_blank"
+                rel="noopener noreferrer"
+                data-tooltip={t('toolbar.viewOnGitHub')}
+                data-tooltip-side="bottom"
+                aria-label={t('toolbar.viewOnGitHub')}
+              >
+                <Github className="h-4 w-4" />
+              </a>
+            </Button>
+            <Button variant="outline" size="icon" className="h-7 w-7" asChild>
+              <a
+                href={DISCORD_INVITE_URL}
+                target="_blank"
+                rel="noopener noreferrer"
+                data-tooltip={t('toolbar.joinDiscord')}
+                data-tooltip-side="bottom"
+                aria-label={t('toolbar.joinDiscord')}
+              >
+                <DiscordIcon className="h-4 w-4" />
+              </a>
+            </Button>
 
-        <Separator orientation="vertical" className="h-5" />
+            <Separator orientation="vertical" className="h-5" />
 
-        {/* Utility */}
-        <Button variant="outline" size="icon" className="h-7 w-7" asChild>
-          <a
-            href="/docs"
-            target="_blank"
-            rel="noopener noreferrer"
-            data-tooltip="User Guide"
-            data-tooltip-side="bottom"
-            aria-label="User Guide"
-          >
-            <BookOpen className="h-4 w-4" />
-          </a>
-        </Button>
-        <Button
-          variant="outline"
-          size="icon"
-          className="h-7 w-7 relative"
-          onClick={openWhatsNew}
-          data-tooltip={t('toolbar.whatsNew')}
-          data-tooltip-side="bottom"
-          aria-label={t('toolbar.whatsNewAria')}
-        >
-          <Sparkles className="h-4 w-4" />
-          {hasUnseenWhatsNew && (
-            <span
-              className="absolute top-1 right-1 h-1.5 w-1.5 rounded-full bg-primary"
-              aria-hidden="true"
-            />
-          )}
-        </Button>
-        <Button
-          variant="outline"
-          size="icon"
-          className="h-7 w-7"
-          onClick={() => setShowSettingsDialog(true)}
-          disabled={hostMode}
-          data-tooltip={t('toolbar.settings')}
-          data-tooltip-side="bottom"
-          aria-label={t('toolbar.settings')}
-        >
-          <Settings className="h-4 w-4" />
-        </Button>
-        <Button
-          variant="outline"
-          size="icon"
-          className="h-7 w-7"
-          onClick={() => setShowShortcutsDialog(true)}
-          data-tooltip={t('toolbar.keyboardShortcuts')}
-          data-tooltip-side="bottom"
-          aria-label={t('toolbar.keyboardShortcutsAria')}
-        >
-          <Keyboard className="h-4 w-4" />
-        </Button>
-        <LanguageSwitcher size="sm" align="end" side="bottom" />
+            {/* Utility */}
+            <Button variant="outline" size="icon" className="h-7 w-7" asChild>
+              <a
+                href="/docs"
+                target="_blank"
+                rel="noopener noreferrer"
+                data-tooltip="User Guide"
+                data-tooltip-side="bottom"
+                aria-label="User Guide"
+              >
+                <BookOpen className="h-4 w-4" />
+              </a>
+            </Button>
+            <Button
+              variant="outline"
+              size="icon"
+              className="h-7 w-7 relative"
+              onClick={openWhatsNew}
+              data-tooltip={t('toolbar.whatsNew')}
+              data-tooltip-side="bottom"
+              aria-label={t('toolbar.whatsNewAria')}
+            >
+              <Sparkles className="h-4 w-4" />
+              {hasUnseenWhatsNew && (
+                <span
+                  className="absolute top-1 right-1 h-1.5 w-1.5 rounded-full bg-primary"
+                  aria-hidden="true"
+                />
+              )}
+            </Button>
+            <Button
+              variant="outline"
+              size="icon"
+              className="h-7 w-7"
+              onClick={() => setShowSettingsDialog(true)}
+              disabled={hostMode}
+              data-tooltip={t('toolbar.settings')}
+              data-tooltip-side="bottom"
+              aria-label={t('toolbar.settings')}
+            >
+              <Settings className="h-4 w-4" />
+            </Button>
+            <Button
+              variant="outline"
+              size="icon"
+              className="h-7 w-7"
+              onClick={() => setShowShortcutsDialog(true)}
+              data-tooltip={t('toolbar.keyboardShortcuts')}
+              data-tooltip-side="bottom"
+              aria-label={t('toolbar.keyboardShortcutsAria')}
+            >
+              <Keyboard className="h-4 w-4" />
+            </Button>
+            <LanguageSwitcher size="sm" align="end" side="bottom" />
 
-        <Separator orientation="vertical" className="h-5" />
-
-        {/* Actions */}
-        <Button
-          variant="outline"
-          size="sm"
-          className="gap-1.5"
-          onClick={handleSave}
-          disabled={!onSave}
-          aria-label={t('toolbar.saveAria')}
-        >
-          <div className="relative">
-            {isSaveAnimating ? (
-              <SaveAnimationIcon key={saveAnimationKey} className="h-5 w-5" />
-            ) : (
-              <Save className="h-4 w-4" />
-            )}
-            <SaveDirtyIndicator />
+            <Separator orientation="vertical" className="h-5" />
           </div>
-          {t('toolbar.save')}
-        </Button>
+        </details>
+        {headerActions}
+        {/* Actions */}
+        <ToolbarSaveAction
+          onSave={onSave}
+          handleSave={handleSave}
+          isSaveAnimating={isSaveAnimating}
+          saveAnimationKey={saveAnimationKey}
+        />
 
         {onOpenRenderQueue && (
           <Button

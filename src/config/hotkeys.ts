@@ -1234,6 +1234,7 @@ const INTERACTIVE_CONTROL_SELECTOR = [
   '[role="treeitem"]',
   '[role="slider"]',
   '[role="scrollbar"]',
+  '[role="separator"]',
   '[role="spinbutton"]',
   '[role="textbox"]',
   '[role="searchbox"]',

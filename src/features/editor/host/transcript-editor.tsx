@@ -958,7 +958,7 @@ export function HostTranscriptEditor({ active = true }: { active?: boolean }) {
             }}
             placeholder={t('transcript.searchPlaceholder', { defaultValue: 'Search transcript' })}
             aria-label={t('transcript.searchPlaceholder', { defaultValue: 'Search transcript' })}
-            className="h-8 pl-7 text-xs"
+            className="h-9 pl-7 text-sm"
           />
         </div>
         <Button
@@ -975,7 +975,9 @@ export function HostTranscriptEditor({ active = true }: { active?: boolean }) {
       </div>
 
       <div className="flex items-center justify-between border-b border-border px-3 py-2 text-[11px] text-muted-foreground">
-        <span data-testid="host-transcript-status">{status?.status}</span>
+        <span data-testid="host-transcript-status">
+          {status?.status === 'succeeded' ? '' : status?.status}
+        </span>
         <span>
           {selectedIds.size}/{MAX_TRANSCRIPT_SELECTIONS} selected
         </span>
@@ -1011,7 +1013,7 @@ export function HostTranscriptEditor({ active = true }: { active?: boolean }) {
               : 'No transcript sections are available.'}
           </div>
         ) : (
-          <div className="mx-auto max-w-[62ch] space-y-1">
+          <div className="mx-auto max-w-[62ch] space-y-2">
             {visibleSections.map((section, index) => {
               const selected = selectedIds.has(section.id)
               return (
@@ -1030,7 +1032,7 @@ export function HostTranscriptEditor({ active = true }: { active?: boolean }) {
                   <span className="mt-px select-none text-right font-mono text-[11px] tabular-nums leading-7 opacity-70">
                     {formatTimecode(section.startUs)}
                   </span>
-                  <span className="min-w-0 break-words text-[13px] leading-7">
+                  <span className="min-w-0 break-words text-sm leading-7">
                     {section.text}
                     {section.speaker ? (
                       <span className="ml-1 text-[11px] opacity-70">({section.speaker})</span>

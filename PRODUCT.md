@@ -6,8 +6,10 @@ product
 
 ## Users
 
-Experienced video editors. They come from Premiere Pro and DaVinci Resolve and
-expect those workflows: keyboard-driven, frame-accurate, dense panels they read
+Creators making a clear cut with AI assistance, alongside experienced video
+editors coming from Premiere Pro and DaVinci Resolve. Common actions must be
+discoverable through readable labels and progressive disclosure. Preserve expert
+workflows: keyboard-driven, frame-accurate, dense panels they read
 at a glance. Their context is a focused editing session, often hours long, eyes
 on the preview and timeline, hands on shortcuts. They want professional power
 without an install, a subscription, or cloud uploads. The headline draw is that

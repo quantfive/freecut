@@ -173,3 +173,23 @@ lockfile:
 ```bash
 npm install @quantfive/freecut-editor-surface@0.3.13
 ```
+
+## Three-column shell (pending next package release)
+
+`FREECUT_EDITOR_SHELL_VERSION = 1` identifies the optional `shell` prop. Hosts
+resolve the marker from the same module as the component. `headerActions` places
+the host history/export group in the project toolbar; `navigationActions` keeps
+the host Chat visibility control outside hidden columns; `transcriptActions`
+mounts generation/consent controls in Library without unmounting polling across
+tab switches. `onLayoutChange` reports the visible Library/Editor minimum width
+so the host can bound its own Chat separator. Existing callers need no props.
+
+The shell dispatches `freecut:cancel-timeline-gesture` on its own DOM root with
+`bubbles: true` before pausing playback and hiding Editor. The timeline consumer
+must accept only events whose target contains its own clip element and cancel
+through its existing preview cleanup path; see the companion timeline PR for
+that listener. Hiding a column never remounts its contents or commits a preview.
+
+Tracking: https://github.com/quantfive/codepress/issues/7144. Package publication
+and CodePress's pinned vendor-patch/static-asset reconciliation are separate
+integration steps. This source PR does not publish or bump a package version.
