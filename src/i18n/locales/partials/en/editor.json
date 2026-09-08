@@ -883,6 +883,31 @@
       "dockTitle": "Color",
       "emptyState": "Select a clip to grade",
       "adjustmentLayerLabel": "Grade"
+    },
+    "refresh": {
+      "columns": "Workspace columns",
+      "view": "View",
+      "audioMeters": "Audio meters",
+      "library": "Library",
+      "editor": "Editor",
+      "resizeLibrary": "Resize Library",
+      "hideLibrary": "Hide Library",
+      "showLibrary": "Show Library",
+      "hideEditor": "Hide Editor",
+      "showEditor": "Show Editor",
+      "collapseEditor": "Collapse Editor",
+      "collapseLibrary": "Collapse Library",
+      "settings": "Settings",
+      "closeSettings": "Close settings",
+      "clipSettings": "Clip settings",
+      "canvasSettings": "Canvas settings",
+      "restoreHint": "Show Library or Editor to continue editing.",
+      "selectionChanged": "The selected clip changed. Settings closed; select a clip to continue.",
+      "libraryTools": "Library tools",
+      "moreTools": "More library tools",
+      "more": "More",
+      "generateTranscript": "Generate transcript",
+      "helpSettings": "Help & settings"
     }
   }
 }

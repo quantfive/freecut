@@ -8,6 +8,7 @@ import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from '@/componen
 import { ErrorBoundary } from '@/app/error-boundary'
 import { Toolbar } from './toolbar'
 import { MediaSidebar } from './media-sidebar'
+import { EditorWorkspaceShell, type EditorShellOptions } from './editor-workspace-shell'
 import { PropertiesSidebar } from './properties-sidebar'
 import { PreviewArea } from './preview-area'
 import { MotionPreviewArea, MotionTimelineDock } from './compose-workspace/compose-layout'
@@ -195,6 +196,7 @@ interface EditorProps {
     currentSchemaVersion: number
     requiresUpgrade: boolean
   }
+  shell?: EditorShellOptions
   hostRuntime?: LoadedEditorHostRuntime
   onNavigateBack?: () => void
   onRefreshMigration?: () => Promise<void>
@@ -455,6 +457,7 @@ export const LoadedEditor = memo(function LoadedEditor({
   hostRuntime,
   onNavigateBack,
   onRefreshMigration,
+  shell,
 }: EditorProps) {
   const { t } = useTranslation()
   const [exportDialogOpen, setExportDialogOpen] = useState(false)
@@ -819,145 +822,184 @@ export const LoadedEditor = memo(function LoadedEditor({
           onOpenRenderQueue={hostRuntime ? undefined : handleOpenRenderQueue}
           renderQueueCount={hostRuntime ? 0 : renderQueueActiveCount}
           compact={compact}
+          headerActions={shell?.headerActions}
         />
       </InteractionLockRegion>
 
-      {compact && (
-        <MobileEditorPanelBar
-          sourceAvailable={sourcePreviewMediaId !== null}
-          onOpen={openMobilePanel}
-        />
-      )}
-
-      {/* Main Layout: Full-height sidebar + vertical split */}
-      <div className="flex-1 flex overflow-hidden">
-        {/* Left Sidebar - Media Library (full column mode) */}
-        {!compact && mediaFullColumn && !hidesDefaultSidebars && (
-          <InteractionLockRegion locked={isMaskEditingActive}>
-            <ErrorBoundary level="feature">
-              <MediaSidebar />
-            </ErrorBoundary>
-          </InteractionLockRegion>
-        )}
-
-        {/* Right side: Preview/Properties + Timeline */}
-        {isColorWorkspace ? (
-          <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
-            <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-              <ErrorBoundary level="feature">
-                <PreviewArea project={project} compact={compact} />
-              </ErrorBoundary>
-            </div>
-            <Suspense fallback={null}>
-              <LazyColorTimelineNavigator />
-            </Suspense>
-            <InteractionLockRegion
-              locked={isMaskEditingActive}
-              className="h-[37%] min-h-[288px] max-h-[39vh] shrink-0"
-            >
-              <ErrorBoundary level="feature">
-                <Suspense fallback={null}>
-                  <LazyColorGradingDock />
-                </Suspense>
-              </ErrorBoundary>
-            </InteractionLockRegion>
-          </div>
-        ) : (
+      {!isColorWorkspace ? (
+        <EditorWorkspaceShell options={shell}>
           <ResizablePanelGroup
             direction="vertical"
-            className="flex-1 min-w-0"
-            autoSaveId="editor:timeline-layout"
+            className="min-h-0 flex-1"
+            autoSaveId="editor:timeline-layout-refresh"
           >
-            {/* Top - Preview + Properties (inline mode) */}
-            <ResizablePanel
-              defaultSize={100 - editorLayout.timelineDefaultSize}
-              minSize={100 - editorLayout.timelineMaxSize}
-              maxSize={100 - editorLayout.timelineMinSize}
-            >
-              <div className="h-full flex overflow-hidden relative">
-                {/* Left Sidebar - Media Library (inline with preview) */}
-                {!compact && !mediaFullColumn && (
-                  <InteractionLockRegion locked={isMaskEditingActive}>
-                    <ErrorBoundary level="feature">
-                      <MediaSidebar />
-                    </ErrorBoundary>
-                  </InteractionLockRegion>
-                )}
-
-                {/* Center - Preview */}
+            <ResizablePanel defaultSize={62} minSize={25}>
+              <div className="relative flex h-full min-h-0 p-3">
                 <ErrorBoundary level="feature">
                   {isMotionWorkspace ? (
                     <MotionPreviewArea project={project} />
                   ) : (
-                    <PreviewArea project={project} compact={compact} />
+                    <PreviewArea project={project} compact={false} />
                   )}
                 </ErrorBoundary>
-
-                {/* Right Sidebar - Properties (inline with preview) */}
-                {!compact && !propertiesFullColumn && (
-                  <InteractionLockRegion locked={isMaskEditingActive}>
-                    <ErrorBoundary level="feature">
-                      <PropertiesSidebar />
-                    </ErrorBoundary>
-                  </InteractionLockRegion>
-                )}
               </div>
             </ResizablePanel>
-
-            <ResizableHandle
-              withHandle
-              className={isMaskEditingActive ? 'pointer-events-none opacity-60' : undefined}
-            />
-
-            {/* Bottom - Timeline */}
-            <ResizablePanel
-              ref={timelinePanelRef}
-              defaultSize={editorLayout.timelineDefaultSize}
-              minSize={editorLayout.timelineMinSize}
-              maxSize={editorLayout.timelineMaxSize}
-            >
+            <ResizableHandle withHandle />
+            <ResizablePanel ref={timelinePanelRef} defaultSize={38} minSize={20}>
               <InteractionLockRegion locked={isMaskEditingActive} className="h-full">
                 <ErrorBoundary level="feature">
-                  <div className="h-full flex overflow-hidden">
-                    <div className="min-w-0 flex-1">
-                      {isMotionWorkspace ? (
-                        <MotionTimelineDock project={project} />
-                      ) : (
-                        <Suspense fallback={null}>
-                          <LazyTimeline duration={timelineDuration} compact={compact} />
-                        </Suspense>
-                      )}
-                    </div>
-                    {!compact && <AudioMeterPanel />}
-                  </div>
+                  {isMotionWorkspace ? (
+                    <MotionTimelineDock project={project} />
+                  ) : (
+                    <Suspense fallback={null}>
+                      <LazyTimeline duration={timelineDuration} compact={false} />
+                    </Suspense>
+                  )}
                 </ErrorBoundary>
               </InteractionLockRegion>
             </ResizablePanel>
           </ResizablePanelGroup>
-        )}
+        </EditorWorkspaceShell>
+      ) : (
+        <>
+          {compact && (
+            <MobileEditorPanelBar
+              sourceAvailable={sourcePreviewMediaId !== null}
+              onOpen={openMobilePanel}
+            />
+          )}
 
-        {/* Right Sidebar - Properties (full column mode) */}
-        {!compact && propertiesFullColumn && !hidesDefaultSidebars && (
-          <InteractionLockRegion locked={isMaskEditingActive}>
-            <ErrorBoundary level="feature">
-              <PropertiesSidebar />
-            </ErrorBoundary>
-          </InteractionLockRegion>
-        )}
-      </div>
+          {/* Main Layout: Full-height sidebar + vertical split */}
+          <div className="flex-1 flex overflow-hidden">
+            {/* Left Sidebar - Media Library (full column mode) */}
+            {!compact && mediaFullColumn && !hidesDefaultSidebars && (
+              <InteractionLockRegion locked={isMaskEditingActive}>
+                <ErrorBoundary level="feature">
+                  <MediaSidebar />
+                </ErrorBoundary>
+              </InteractionLockRegion>
+            )}
 
-      {compact && (
-        <MobileEditorDrawer
-          panel={mobilePanel}
-          container={editorRootRef.current}
-          sourceMediaId={sourcePreviewMediaId}
-          restoreFocusTo={mobilePanelTriggerRef.current}
-          onClose={closeMobilePanel}
-          onCloseSource={() => {
-            useEditorStore.getState().setSourcePreviewMediaId(null)
-            closeMobilePanel()
-          }}
-        />
+            {/* Right side: Preview/Properties + Timeline */}
+            {isColorWorkspace ? (
+              <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
+                <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+                  <ErrorBoundary level="feature">
+                    <PreviewArea project={project} compact={compact} />
+                  </ErrorBoundary>
+                </div>
+                <Suspense fallback={null}>
+                  <LazyColorTimelineNavigator />
+                </Suspense>
+                <InteractionLockRegion
+                  locked={isMaskEditingActive}
+                  className="h-[37%] min-h-[288px] max-h-[39vh] shrink-0"
+                >
+                  <ErrorBoundary level="feature">
+                    <Suspense fallback={null}>
+                      <LazyColorGradingDock />
+                    </Suspense>
+                  </ErrorBoundary>
+                </InteractionLockRegion>
+              </div>
+            ) : (
+              <ResizablePanelGroup
+                direction="vertical"
+                className="flex-1 min-w-0"
+                autoSaveId="editor:timeline-layout"
+              >
+                {/* Top - Preview + Properties (inline mode) */}
+                <ResizablePanel
+                  defaultSize={100 - editorLayout.timelineDefaultSize}
+                  minSize={100 - editorLayout.timelineMaxSize}
+                  maxSize={100 - editorLayout.timelineMinSize}
+                >
+                  <div className="h-full flex overflow-hidden relative">
+                    {/* Left Sidebar - Media Library (inline with preview) */}
+                    {!compact && !mediaFullColumn && (
+                      <InteractionLockRegion locked={isMaskEditingActive}>
+                        <ErrorBoundary level="feature">
+                          <MediaSidebar />
+                        </ErrorBoundary>
+                      </InteractionLockRegion>
+                    )}
+
+                    {/* Center - Preview */}
+                    <ErrorBoundary level="feature">
+                      {isMotionWorkspace ? (
+                        <MotionPreviewArea project={project} />
+                      ) : (
+                        <PreviewArea project={project} compact={compact} />
+                      )}
+                    </ErrorBoundary>
+
+                    {/* Right Sidebar - Properties (inline with preview) */}
+                    {!compact && !propertiesFullColumn && (
+                      <InteractionLockRegion locked={isMaskEditingActive}>
+                        <ErrorBoundary level="feature">
+                          <PropertiesSidebar />
+                        </ErrorBoundary>
+                      </InteractionLockRegion>
+                    )}
+                  </div>
+                </ResizablePanel>
+
+                <ResizableHandle
+                  withHandle
+                  className={isMaskEditingActive ? 'pointer-events-none opacity-60' : undefined}
+                />
+
+                {/* Bottom - Timeline */}
+                <ResizablePanel
+                  ref={timelinePanelRef}
+                  defaultSize={editorLayout.timelineDefaultSize}
+                  minSize={editorLayout.timelineMinSize}
+                  maxSize={editorLayout.timelineMaxSize}
+                >
+                  <InteractionLockRegion locked={isMaskEditingActive} className="h-full">
+                    <ErrorBoundary level="feature">
+                      <div className="h-full flex overflow-hidden">
+                        <div className="min-w-0 flex-1">
+                          {isMotionWorkspace ? (
+                            <MotionTimelineDock project={project} />
+                          ) : (
+                            <Suspense fallback={null}>
+                              <LazyTimeline duration={timelineDuration} compact={compact} />
+                            </Suspense>
+                          )}
+                        </div>
+                        {!compact && <AudioMeterPanel />}
+                      </div>
+                    </ErrorBoundary>
+                  </InteractionLockRegion>
+                </ResizablePanel>
+              </ResizablePanelGroup>
+            )}
+
+            {/* Right Sidebar - Properties (full column mode) */}
+            {!compact && propertiesFullColumn && !hidesDefaultSidebars && (
+              <InteractionLockRegion locked={isMaskEditingActive}>
+                <ErrorBoundary level="feature">
+                  <PropertiesSidebar />
+                </ErrorBoundary>
+              </InteractionLockRegion>
+            )}
+          </div>
+
+          {compact && (
+            <MobileEditorDrawer
+              panel={mobilePanel}
+              container={editorRootRef.current}
+              sourceMediaId={sourcePreviewMediaId}
+              restoreFocusTo={mobilePanelTriggerRef.current}
+              onClose={closeMobilePanel}
+              onCloseSource={() => {
+                useEditorStore.getState().setSourcePreviewMediaId(null)
+                closeMobilePanel()
+              }}
+            />
+          )}
+        </>
       )}
 
       {!hostRuntime && (
