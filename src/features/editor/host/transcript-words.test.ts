@@ -110,5 +110,6 @@ describe('host word occurrence mapping', () => {
     ).toEqual([])
     const words = mapHostTranscriptWords(document([clip]), 'media', [section])
     expect(words.find((word) => 20 >= word.startFrame && 20 < word.endFrame)).toBeUndefined()
+    expect(hostWordSelectionRanges([words[0]!, words[2]!])).toHaveLength(2)
   })
 })

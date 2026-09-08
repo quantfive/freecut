@@ -5,6 +5,7 @@ import type { HostTranscriptRange, HostTranscriptSection } from './contract'
 export interface HostWordOccurrence {
   key: string
   itemId: string
+  wordIndex: number
   sectionId: string
   revision: number
   text: string
@@ -49,6 +50,7 @@ export function mapHostTranscriptWords(
         words.push({
           key: `${clip.id}:${section.id}:${index}`,
           itemId: clip.id,
+          wordIndex: index,
           sectionId: section.id,
           revision: document.revision,
           text: word.text,
@@ -71,9 +73,14 @@ export function hostWordSelectionRanges(
   words: readonly HostWordOccurrence[],
 ): HostTranscriptRange[] {
   const ranges: HostTranscriptRange[] = []
+  let previousWord: HostWordOccurrence | undefined
   for (const word of words) {
     const previous = ranges.at(-1)
-    if (previous?.itemId === word.itemId) {
+    if (
+      previous?.itemId === word.itemId &&
+      previousWord?.sectionId === word.sectionId &&
+      previousWord.wordIndex + 1 === word.wordIndex
+    ) {
       previous.endUs = Math.max(previous.endUs, word.sourceEndUs)
       previous.text += ` ${word.text}`
     } else {
@@ -84,6 +91,7 @@ export function hostWordSelectionRanges(
         text: word.text,
       })
     }
+    previousWord = word
   }
   return ranges
 }
