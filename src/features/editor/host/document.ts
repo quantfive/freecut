@@ -251,7 +251,14 @@ export function hostSnapshotToNativeTimeline(snapshot: EmbeddedEditorSnapshot): 
   const assets = assetById(snapshot.assets)
   const tracks = snapshot.timeline.tracks.map(nativeTrackFromHostTrack)
   const items = snapshot.timeline.tracks.flatMap((track) =>
-    track.items.map((item) => nativeItemFromHostItem(item, assets)),
+    track.items.map((item) =>
+      nativeItemFromHostItem(
+        item.type === 'caption_cue'
+          ? { ...item, style: { ...track.defaultStyle, ...item.style } }
+          : item,
+        assets,
+      ),
+    ),
   )
   return { tracks, items, fps: snapshot.project.fps }
 }
@@ -381,6 +388,26 @@ function authoritativeTrackMetadata(
  * document.  Shapes, compositions, subtitles, Lottie, effects, and animation
  * edits fail closed so a host action can be visibly rejected and restored.
  */
+function restoreCaptionStyleProvenance(
+  converted: Extract<FreeCutFrameItem, { type: 'caption_cue' }>,
+  authoritative: FreeCutFrameDocument,
+) {
+  const track = authoritative.tracks.find((candidate) => candidate.id === converted.trackId)
+  const original = track?.items.find((candidate) => candidate.id === converted.id)
+  if (original?.type !== 'caption_cue') return
+  const effective = frameItemToNativeComparable(
+    nativeItemFromHostItem(
+      { ...original, style: { ...track?.defaultStyle, ...original.style } },
+      new Map(),
+    ),
+  )
+  if ('reason' in effective || effective.type !== 'caption_cue') return
+  if (JSON.stringify(converted.style) !== JSON.stringify(effective.style)) return
+  // Restore original provenance, including explicit overrides equal to defaults.
+  if (original.style === undefined) delete converted.style
+  else converted.style = original.style
+}
+
 export function nativeTimelineToFrameDocument(
   state: Pick<TimelineState, 'tracks' | 'items' | 'fps'>,
   authoritative: FreeCutFrameDocument,
@@ -399,6 +426,7 @@ export function nativeTimelineToFrameDocument(
     }
     const converted = frameItemToNativeComparable(item)
     if ('reason' in converted) return { ok: false, failure: converted }
+    if (converted.type === 'caption_cue') restoreCaptionStyleProvenance(converted, authoritative)
     const list = itemsByTrack.get(item.trackId) ?? []
     list.push(converted)
     itemsByTrack.set(item.trackId, list)

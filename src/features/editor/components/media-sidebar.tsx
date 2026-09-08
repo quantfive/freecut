@@ -62,6 +62,7 @@ import { createLogger } from '@/shared/logging/logger'
 import { useSettingsStore } from '@/features/editor/deps/settings'
 import { resolveGeneratedLayerCanvasSize } from '../utils/generated-layer-canvas-size'
 import { useEditorCapability, useEditorHostContext, useEditorHostMode } from '../host/context'
+import { HostCaptionLibrary } from '../host/caption-library'
 import { HostTranscriptEditor } from '../host/transcript-editor'
 const LazyAiPanel = lazy(() => import('./ai-tab').then((m) => ({ default: m.AiTab })))
 const LazyTranscriptEditorPanel = lazy(() =>
@@ -547,6 +548,10 @@ export const MediaSidebar = memo(function MediaSidebar({
     toggleLeftSidebar,
   })
 
+  const [captionsActivated, setCaptionsActivated] = useState(activeTab === 'captions')
+  useEffect(() => {
+    if (activeTab === 'captions') setCaptionsActivated(true)
+  }, [activeTab])
   const [transcriptActivated, setTranscriptActivated] = useState(activeTab === 'transcript')
   useEffect(() => {
     if (activeTab === 'transcript') setTranscriptActivated(true)
@@ -795,6 +800,7 @@ export const MediaSidebar = memo(function MediaSidebar({
   // Category items for the vertical nav
   const categories = [
     { id: 'media' as const, icon: Film, label: t('editor.mediaSidebar.media') },
+    { id: 'captions' as const, icon: Captions, label: 'Captions' },
     { id: 'text' as const, icon: Type, label: t('editor.mediaSidebar.text') },
     { id: 'shapes' as const, icon: Pentagon, label: t('editor.mediaSidebar.shapes') },
     { id: 'effects' as const, icon: Layers, label: t('editor.mediaSidebar.effects') },
@@ -807,6 +813,7 @@ export const MediaSidebar = memo(function MediaSidebar({
     ? categories.filter(
         ({ id }) =>
           id === 'media' ||
+          id === 'captions' ||
           (id === 'text' && canAddTimeline) ||
           (id === 'transcript' && canTranscribe && !!host?.transcript),
       )
@@ -1406,6 +1413,12 @@ export const MediaSidebar = memo(function MediaSidebar({
               className={`min-h-0 flex-1 overflow-hidden ${activeTab === 'lottie' ? 'block' : 'hidden'}`}
             >
               {lottieTabActivated && <LottieBrowserPanel />}
+            </div>
+
+            <div
+              className={`min-h-0 flex-1 overflow-y-auto ${activeTab === 'captions' ? 'block' : 'hidden'}`}
+            >
+              {captionsActivated && <HostCaptionLibrary />}
             </div>
 
             {/* Transcript Tab */}
