@@ -1,3 +1,4 @@
+import type { HostTrimIntent } from './trim-intent'
 import { createContext, useContext } from 'react'
 import {
   isHostCapabilityEnabled,
@@ -8,6 +9,9 @@ import {
 
 /** UI producer for destructive host timeline edits. */
 export interface HostTimelineEditPort {
+  beginTrim?: (itemId: string) => string | null
+  commitTrim?: (token: string, intent: HostTrimIntent) => Promise<void>
+  cancelTrim?: (token: string) => void
   /** Ask the host authority to ripple-delete the selected timeline anchors. */
   requestRippleDelete(itemIds: readonly string[]): Promise<void> | void
   requestSetItemAttachment?: (

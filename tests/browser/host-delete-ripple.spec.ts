@@ -150,19 +150,39 @@ test.describe('host authoritative delete/ripple', () => {
     const rejectedBatch = await page.evaluate(() =>
       window.__freecutDeleteRippleFixture.getLastBatch(),
     )
-    // Reacquire selection/focus after the rejected authoritative receipt.
-    const retryClip = page.locator('[data-timeline-item][data-item-id="video-1"]')
-    await retryClip.click()
-    await expect(retryClip).toBeFocused()
-    await expect(retryClip).toHaveAttribute('aria-pressed', 'true')
-    await page.keyboard.press('Delete')
-    await page.waitForFunction(
-      (previousId) =>
-        window.__freecutDeleteRippleFixture.getLastBatch()?.idempotency_key !== previousId,
-      rejectedBatch?.idempotency_key,
+    await page.getByRole('button', { name: 'Retry save' }).click()
+    await expect(page.getByTestId('host-edit-status')).toContainText('Saving')
+    expect(await page.evaluate(() => window.__freecutDeleteRippleFixture.getLastBatch())).toEqual(
+      rejectedBatch,
     )
     await page.evaluate(() => window.__freecutDeleteRippleFixture.releaseReceipt())
     await expect(page.locator('[data-timeline-item="true"][data-item-id="video-1"]')).toHaveCount(0)
     await page.screenshot({ path: 'artifacts/host-delete-ripple-retry.png', fullPage: true })
   })
+})
+
+test('host chat text owns Space and Backspace, then timeline click restores Delete', async ({
+  page,
+}) => {
+  await page.goto('/tests/browser/host-delete-ripple.html')
+  const clip = page.locator('[data-timeline-item][data-item-id="video-1"]')
+  await clip.click()
+  await page.evaluate(() => {
+    const input = document.createElement('textarea')
+    input.setAttribute('aria-label', 'Fixture host chat')
+    input.style.cssText = 'position:fixed;top:0;left:0;z-index:99999'
+    document.body.append(input)
+    input.focus()
+  })
+  const chat = page.getByRole('textbox', { name: 'Fixture host chat' })
+  await chat.fill('hello')
+  await page.keyboard.press('Space')
+  await page.keyboard.press('Backspace')
+  await expect(chat).toHaveValue('hello')
+  expect(await page.evaluate(() => window.__freecutDeleteRippleFixture.getLastBatch())).toBeNull()
+  await clip.click()
+  await page.keyboard.press('Backspace')
+  await page.waitForFunction(() => Boolean(window.__freecutDeleteRippleFixture.getLastBatch()))
+  await page.evaluate(() => window.__freecutDeleteRippleFixture.releaseReceipt())
+  await expect(clip).toHaveCount(0)
 })
