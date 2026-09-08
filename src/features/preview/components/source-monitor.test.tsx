@@ -67,6 +67,8 @@ const playerMethodsState = vi.hoisted(() => ({
   toggle: vi.fn(),
   frameBack: vi.fn(),
   frameForward: vi.fn(),
+  isPlaying: vi.fn(() => false),
+  setPlaybackRate: vi.fn(),
 }))
 
 const clockState = vi.hoisted(() => ({
@@ -259,6 +261,18 @@ describe('SourceMonitor current media ownership', () => {
 
   beforeEach(() => {
     vi.clearAllMocks()
+    sourcePlayerStoreState.previewSourceFrame = null
+    sourcePlayerStoreState.inPoint = null
+    sourcePlayerStoreState.outPoint = null
+    sourcePlayerStoreState.setPreviewSourceFrame.mockImplementation((frame: number | null) => {
+      sourcePlayerStoreState.previewSourceFrame = frame
+    })
+    sourcePlayerStoreState.setInPoint.mockImplementation((frame: number | null) => {
+      sourcePlayerStoreState.inPoint = frame
+    })
+    sourcePlayerStoreState.setOutPoint.mockImplementation((frame: number | null) => {
+      sourcePlayerStoreState.outPoint = frame
+    })
     sourceBindingState.globalVersion = 0
     sourceBindingState.epochs.clear()
     sourceBindingState.resolveMediaUrl.mockResolvedValue('blob:media-1')
@@ -423,6 +437,199 @@ describe('SourceMonitor current media ownership', () => {
     expect(playerMethodsState.seek).toHaveBeenCalledTimes(1)
     expect(playerMethodsState.seek).toHaveBeenCalledWith(112)
   })
+
+  it('freezes the last visible source scrub on owner hide before late movement and release', async () => {
+    const rendered = render(
+      <div data-editor-workspace-shell="" data-testid="owner">
+        <SourceMonitor mediaId="media-1" />
+      </div>,
+    )
+    const bar = await rendered.findByTestId('source-monitor-seek-bar')
+    const owner = rendered.getByTestId('owner')
+    const bounds = vi.spyOn(bar, 'getBoundingClientRect').mockReturnValue({
+      x: 0,
+      y: 0,
+      top: 0,
+      left: 0,
+      right: 100,
+      bottom: 10,
+      width: 100,
+      height: 10,
+      toJSON: () => ({}),
+    })
+    fireEvent.mouseDown(bar, { clientX: 25 })
+    expect(sourcePlayerStoreState.setPreviewSourceFrame).toHaveBeenLastCalledWith(37)
+    // Queue a new pointer position without letting its RAF become visible.
+    fireEvent.mouseMove(document, { clientX: 75 })
+    act(() => {
+      owner.dispatchEvent(new CustomEvent('freecut:cancel-timeline-gesture', { bubbles: true }))
+      owner.dispatchEvent(new CustomEvent('freecut:cancel-timeline-gesture', { bubbles: true }))
+    })
+    owner.style.display = 'none'
+    bounds.mockReturnValue({
+      x: 0,
+      y: 0,
+      top: 0,
+      left: 0,
+      right: 0,
+      bottom: 0,
+      width: 0,
+      height: 0,
+      toJSON: () => ({}),
+    })
+    fireEvent.mouseMove(document, { clientX: 90 })
+    fireEvent.mouseUp(document)
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    })
+    expect(sourcePlayerStoreState.setPreviewSourceFrame).toHaveBeenLastCalledWith(37)
+    expect(playerMethodsState.seek).not.toHaveBeenCalled()
+    expect(playerMethodsState.play).not.toHaveBeenCalled()
+    expect(sourceBindingState.compositionUnmounts).toBe(0)
+    owner.style.display = ''
+    fireEvent.click(rendered.getByRole('button', { name: 'Play (Space)' }))
+    expect(playerMethodsState.seek).toHaveBeenLastCalledWith(37)
+    expect(playerMethodsState.play).toHaveBeenCalledTimes(1)
+    expect(sourcePlayerStoreState.previewSourceFrame).toBeNull()
+  })
+
+  it.each(['in-handle', 'out-handle', 'range'])(
+    'cancels owned I/O %s capture and retains applied range/preview',
+    async (kind) => {
+      sourcePlayerStoreState.inPoint = 30
+      sourcePlayerStoreState.outPoint = 120
+      const rendered = render(
+        <div data-editor-workspace-shell="" data-testid="owner">
+          <SourceMonitor mediaId="media-1" />
+        </div>,
+      )
+      const control = await rendered.findByTestId(`source-monitor-io-${kind}`)
+      const owner = rendered.getByTestId('owner')
+      const strip =
+        kind === 'range' ? control.parentElement! : control.parentElement!.parentElement!
+      const hitTarget = kind === 'range' ? control : control.nextElementSibling!
+      const bounds = vi.spyOn(strip, 'getBoundingClientRect').mockReturnValue({
+        x: 0,
+        y: 0,
+        top: 0,
+        left: 0,
+        right: 100,
+        bottom: 10,
+        width: 100,
+        height: 10,
+        toJSON: () => ({}),
+      })
+      fireEvent.pointerDown(hitTarget, { button: 0, pointerId: 1, clientX: 40 })
+      fireEvent.pointerMove(document, { pointerId: 1, clientX: 50 })
+      const held = sourcePlayerStoreState.previewSourceFrame
+      expect(held).toBeGreaterThan(0)
+      const applied = [sourcePlayerStoreState.inPoint, sourcePlayerStoreState.outPoint]
+      const foreign = document.createElement('div')
+      document.body.append(foreign)
+      act(() =>
+        foreign.dispatchEvent(
+          new CustomEvent('freecut:cancel-timeline-gesture', { bubbles: true }),
+        ),
+      )
+      fireEvent.pointerMove(document, { pointerId: 1, clientX: 55 })
+      expect(sourcePlayerStoreState.previewSourceFrame).not.toBe(held)
+      const finalPreview = sourcePlayerStoreState.previewSourceFrame
+      const finalRange = [sourcePlayerStoreState.inPoint, sourcePlayerStoreState.outPoint]
+      expect(finalRange).not.toEqual(applied)
+      act(() => {
+        owner.dispatchEvent(new CustomEvent('freecut:cancel-timeline-gesture', { bubbles: true }))
+        owner.dispatchEvent(new CustomEvent('freecut:cancel-timeline-gesture', { bubbles: true }))
+      })
+      owner.style.display = 'none'
+      bounds.mockReturnValue({
+        x: 0,
+        y: 0,
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        width: 0,
+        height: 0,
+        toJSON: () => ({}),
+      })
+      fireEvent.pointerMove(document, { pointerId: 1, clientX: 0 })
+      fireEvent.pointerUp(document, { pointerId: 1 })
+      expect([sourcePlayerStoreState.inPoint, sourcePlayerStoreState.outPoint]).toEqual(finalRange)
+      expect(sourcePlayerStoreState.previewSourceFrame).toBe(finalPreview)
+      expect(playerMethodsState.seek).not.toHaveBeenCalled()
+      expect(playerMethodsState.play).not.toHaveBeenCalled()
+      owner.style.display = ''
+      fireEvent.click(rendered.getByRole('button', { name: 'Play (Space)' }))
+      expect(playerMethodsState.seek).toHaveBeenLastCalledWith(finalPreview)
+      expect(playerMethodsState.play).toHaveBeenCalledTimes(1)
+      expect(sourcePlayerStoreState.previewSourceFrame).toBeNull()
+      foreign.remove()
+    },
+  )
+
+  it('ignores cancellation from another shell while a normal scrub commits on release', async () => {
+    const rendered = render(
+      <div data-editor-workspace-shell="">
+        <SourceMonitor mediaId="media-1" />
+      </div>,
+    )
+    const bar = await rendered.findByTestId('source-monitor-seek-bar')
+    vi.spyOn(bar, 'getBoundingClientRect').mockReturnValue({
+      x: 0,
+      y: 0,
+      top: 0,
+      left: 0,
+      right: 100,
+      bottom: 10,
+      width: 100,
+      height: 10,
+      toJSON: () => ({}),
+    })
+    const foreign = document.createElement('div')
+    foreign.setAttribute('data-editor-workspace-shell', '')
+    document.body.append(foreign)
+    fireEvent.mouseDown(bar, { clientX: 25 })
+    act(() =>
+      foreign.dispatchEvent(new CustomEvent('freecut:cancel-timeline-gesture', { bubbles: true })),
+    )
+    fireEvent.mouseMove(document, { clientX: 75 })
+    fireEvent.mouseUp(document)
+    expect(playerMethodsState.seek).toHaveBeenCalledExactlyOnceWith(112)
+    expect(sourcePlayerStoreState.previewSourceFrame).toBeNull()
+    foreign.remove()
+  })
+
+  it.each(['in-handle', 'out-handle', 'range'])(
+    'normal I/O %s release retains range and ends preview',
+    async (kind) => {
+      sourcePlayerStoreState.inPoint = 30
+      sourcePlayerStoreState.outPoint = 120
+      const rendered = render(<SourceMonitor mediaId="media-1" />)
+      const control = await rendered.findByTestId(`source-monitor-io-${kind}`)
+      const strip =
+        kind === 'range' ? control.parentElement! : control.parentElement!.parentElement!
+      const target = kind === 'range' ? control : control.nextElementSibling!
+      vi.spyOn(strip, 'getBoundingClientRect').mockReturnValue({
+        x: 0,
+        y: 0,
+        top: 0,
+        left: 0,
+        right: 100,
+        bottom: 10,
+        width: 100,
+        height: 10,
+        toJSON: () => ({}),
+      })
+      fireEvent.pointerDown(target, { button: 0, pointerId: 1, clientX: 40 })
+      fireEvent.pointerMove(document, { pointerId: 1, clientX: 50 })
+      const applied = [sourcePlayerStoreState.inPoint, sourcePlayerStoreState.outPoint]
+      expect(applied).not.toEqual([30, 120])
+      fireEvent.pointerUp(document, { pointerId: 1 })
+      fireEvent.pointerMove(document, { pointerId: 1, clientX: 0 })
+      expect([sourcePlayerStoreState.inPoint, sourcePlayerStoreState.outPoint]).toEqual(applied)
+      expect(sourcePlayerStoreState.previewSourceFrame).toBeNull()
+    },
+  )
 
   it('pauses playback when seek-bar scrubbing starts', async () => {
     clockState.isPlaying = true
