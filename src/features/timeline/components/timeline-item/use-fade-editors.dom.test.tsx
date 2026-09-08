@@ -3,6 +3,7 @@ import { act, cleanup, fireEvent, render } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vite-plus/test'
 import {
   clearMixerLiveGains,
+  clearMixerLiveGainLayer,
   getMixerLiveGain,
   setMixerLiveGainLayer,
   setMixerLiveGains,
@@ -222,4 +223,23 @@ describe('retained fade and volume lifecycle', () => {
     expect(useTimelineCommandStore.getState().undoStack).toHaveLength(0)
     expect(getMixerLiveGain('clip')).toBe(1)
   })
+  it.each([0.5, 0])(
+    'restores the owned default gain with an initial foreign layer of %s',
+    (foreignGain) => {
+      const view = mount('volume')
+      const before = snapshot()
+      setMixerLiveGains([{ itemId: 'clip', gain: 1.7 }])
+      setMixerLiveGainLayer('other', [{ itemId: 'clip', gain: foreignGain }])
+      press(view, 'volume')
+      move('volume')
+      if (foreignGain !== 0) setMixerLiveGainLayer('other', [{ itemId: 'clip', gain: 0.8 }])
+      cancel(view.getByTestId('root'))
+      expect(getMixerLiveGain('clip')).toBeCloseTo(1.7 * (foreignGain === 0 ? 0 : 0.8))
+      clearMixerLiveGainLayer('other')
+      expect(getMixerLiveGain('clip')).toBeCloseTo(1.7)
+      fireEvent.mouseUp(window)
+      expect(snapshot()).toEqual(before)
+      expect(useTimelineCommandStore.getState().undoStack).toHaveLength(0)
+    },
+  )
 })

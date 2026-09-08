@@ -12,6 +12,7 @@ import type { TimelineItem as TimelineItemType } from '@/types/timeline'
 import {
   clearMixerLiveGain,
   getMixerLiveGain,
+  getDefaultMixerLiveGain,
   setMixerLiveGains,
 } from '@/shared/state/mixer-live-gain'
 import {
@@ -752,17 +753,11 @@ export function useFadeEditors({
 
       const originalVolume = item.volume ?? 0
       const dragStartLiveGain = getMixerLiveGain(item.id)
+      const originalDefaultGain = getDefaultMixerLiveGain(item.id)
       rollbackAudioVolumeRef.current = () => {
         applyAudioVolumeVisualPreview(originalVolume)
-        // Restore the captured combined gain without deleting other mixer layers.
-        setMixerLiveGains([{ itemId: item.id, gain: 1 }])
-        const otherLayersGain = getMixerLiveGain(item.id)
-        setMixerLiveGains([
-          {
-            itemId: item.id,
-            gain: otherLayersGain === 0 ? 1 : dragStartLiveGain / otherLayersGain,
-          },
-        ])
+        // Restore only this gesture's layer; other layers may have changed.
+        setMixerLiveGains([{ itemId: item.id, gain: originalDefaultGain }])
       }
       const startClientY = e.clientY
       let latestClientY = startClientY

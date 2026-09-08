@@ -2,6 +2,7 @@ import { act, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it } from 'vite-plus/test'
 import {
   clearMixerLiveGain,
+  getDefaultMixerLiveGain,
   clearMixerLiveGainLayer,
   clearMixerLiveGains,
   setMixerLiveGainLayer,
@@ -136,5 +137,15 @@ describe('mixer-live-gain', () => {
     })
 
     expect(screen.getByTestId('gain-a').textContent).toBe('1')
+  })
+  it('reads the default layer independently of a zero or changing foreign layer', () => {
+    expect(getDefaultMixerLiveGain('item-a')).toBe(1)
+    setMixerLiveGains([{ itemId: 'item-a', gain: 1.7 }])
+    setMixerLiveGainLayer('mute', [{ itemId: 'item-a', gain: 0 }])
+    expect(getDefaultMixerLiveGain('item-a')).toBe(1.7)
+    setMixerLiveGainLayer('mute', [{ itemId: 'item-a', gain: 0.8 }])
+    expect(getDefaultMixerLiveGain('item-a')).toBe(1.7)
+    setMixerLiveGains([{ itemId: 'item-a', gain: 1 }])
+    expect(getDefaultMixerLiveGain('item-a')).toBe(1)
   })
 })
