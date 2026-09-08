@@ -1,3 +1,4 @@
+import type { TimelineItem } from '@/types/timeline'
 import { Scissors, Trash2, Magnet, ZoomIn } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -8,6 +9,17 @@ import { useEditorStore } from '@/shared/state/editor'
 import { useTimelineStore } from '../stores/timeline-store'
 import { useEditorCapability, useEditorHostContext } from '../deps/editor'
 import { expandSelectionWithLinkedItems, getSynchronizedLinkedItems } from '../utils/linked-items'
+
+function isSplitDisabled(
+  item: TimelineItem | undefined,
+  frame: number,
+  allowed: boolean,
+  locked: boolean,
+  malformed: boolean,
+): boolean {
+  if (!allowed || locked || malformed || !item) return true
+  return frame <= item.from || frame >= item.from + item.durationInFrames
+}
 
 /** Common actions use the same commands as clip menus and shortcuts. */
 export function TimelinePrimaryActions({ onZoomToSelection }: { onZoomToSelection?: () => void }) {
@@ -34,13 +46,7 @@ export function TimelinePrimaryActions({ onZoomToSelection }: { onZoomToSelectio
     splitItem &&
     linked &&
     getSynchronizedLinkedItems(items, splitItem.id).length !== cohortIds.length
-  const splitDisabled =
-    !canSplit ||
-    locked ||
-    malformed ||
-    !splitItem ||
-    frame <= splitItem.from ||
-    frame >= splitItem.from + splitItem.durationInFrames
+  const splitDisabled = isSplitDisabled(splitItem, frame, canSplit, locked, !!malformed)
   const deleteDisabled =
     !canRemove ||
     locked ||
