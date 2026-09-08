@@ -10,6 +10,7 @@
  */
 
 import { useRef, useEffect, useState, useCallback } from 'react'
+import { useEditorStore } from '@/shared/state/editor'
 import { usePlaybackStore } from '@/shared/state/playback'
 import { useTimelineSettingsStore } from '@/features/preview/deps/timeline-store'
 import { resolvePreviewTransitionFromPlaybackStates } from '../utils/preview-state-coordinator'
@@ -168,7 +169,7 @@ export function useCustomPlayer(
     [playerRef, seekPlayerToFrame],
   )
 
-  // Pause playback when this hook mounts while already playing. That only
+  // In standalone mode, pause when this hook mounts while already playing. That only
   // happens on a mid-playback remount of the preview — e.g. switching to/from
   // the Color workspace swaps VideoPreview<->ColorVideoPreview, remounting the
   // Player. The fresh player starts paused at the preserved frame (via the
@@ -178,7 +179,8 @@ export function useCustomPlayer(
   // store is never playing, so this is a no-op.)
   useEffect(() => {
     const playback = usePlaybackStore.getState()
-    if (playback.isPlaying) {
+    // Host transport outlives this preview; mounting must not pause it.
+    if (playback.isPlaying && !useEditorStore.getState().hostMode) {
       playback.pause()
     }
     // Mount-only: intentionally no deps.

@@ -897,11 +897,11 @@ const NativePreviewVideo: React.FC<{
         })
       }
     } else {
-      // Pause video when not playing
-      if (!video.paused) {
+      // A delayed paused render must not stop transport that has already resumed.
+      const playbackState = usePlaybackStore.getState()
+      if (!video.paused && !playbackState.isPlaying) {
         video.pause()
       }
-      const playbackState = usePlaybackStore.getState()
       const isPreviewScrubbing =
         !playbackState.isPlaying &&
         playbackState.previewFrame !== null &&

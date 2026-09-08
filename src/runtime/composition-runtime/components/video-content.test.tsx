@@ -15,6 +15,7 @@ const testState = vi.hoisted(() => ({
     acquireForClip: ReturnType<typeof vi.fn>
     releaseClip: ReturnType<typeof vi.fn>
   } | null,
+  renderedIsPlaying: null as boolean | null,
   playbackState: {
     currentFrame: 0,
     isPlaying: true,
@@ -120,7 +121,7 @@ vi.mock('@/runtime/composition-runtime/deps/stores', () => ({
 
 vi.mock('../hooks/use-player-compat', () => ({
   useVideoConfig: () => ({ fps: 30, width: 1280, height: 720, durationInFrames: 120 }),
-  useIsPlaying: () => testState.playbackState.isPlaying,
+  useIsPlaying: () => testState.renderedIsPlaying ?? testState.playbackState.isPlaying,
 }))
 
 vi.mock('../contexts/keyframes-context', () => ({
@@ -152,6 +153,7 @@ describe('VideoContent pooled handoff', () => {
     releaseClipMock.mockClear()
     registerDomVideoElementMock.mockClear()
     unregisterDomVideoElementMock.mockClear()
+    testState.renderedIsPlaying = null
     playbackState.currentFrame = 0
     playbackState.isPlaying = true
     playbackState.previewFrame = null
@@ -161,6 +163,37 @@ describe('VideoContent pooled handoff', () => {
     gizmoState.preview = null
     timelineState.keyframes = []
   })
+
+  it.each([true, false])(
+    'stale paused render respects live transport playing=%s',
+    async (livePlaying) => {
+      testState.renderedIsPlaying = false
+      playbackState.isPlaying = livePlaying
+      const video = createMockVideoElement()
+      await video.play()
+      acquireForClipMock.mockReturnValue(video)
+      render(
+        <VideoContent
+          item={{
+            id: 'stale',
+            type: 'video',
+            trackId: 'track',
+            from: 0,
+            durationInFrames: 90,
+            label: 'Stale',
+            src: 'blob:test',
+          }}
+          muted={false}
+          safeTrimBefore={0}
+          playbackRate={1}
+          sourceFps={30}
+          audioEqStages={[]}
+        />,
+      )
+      await waitFor(() => expect(acquireForClipMock).toHaveBeenCalledTimes(1))
+      expect(video.paused).toBe(!livePlaying)
+    },
+  )
 
   it('keeps the acquired pool element when only itemId changes on the same pool lane', async () => {
     const pooledElement = createMockVideoElement()
