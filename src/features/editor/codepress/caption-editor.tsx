@@ -223,11 +223,11 @@ export function CaptionEditor({
         track_id: trackId,
         name: `Captions ${tracks.length + 1}`,
         language: 'en',
-        index: document?.tracks.length ?? 0,
+        index: 0,
       },
     ])
     if (applied) setActiveTrackId(trackId)
-  }, [document?.tracks.length, runCommands, tracks])
+  }, [runCommands, tracks])
 
   const removeTrack = useCallback(async () => {
     if (!activeTrack) return

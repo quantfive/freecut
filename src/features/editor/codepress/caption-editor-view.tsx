@@ -74,6 +74,7 @@ interface CaptionStyleControlsProps {
 }
 
 interface CaptionPreviewProps {
+  styleDraft: CaptionStyle
   activeCue?: FreeCutFrameCaptionCue
   activeTrack: FreeCutFrameTrack
   currentFrame: number
@@ -111,7 +112,7 @@ function CaptionStyleControls({
         <div>
           <h3 className="text-xs font-semibold">Caption style</h3>
           <p className="text-[11px] text-muted-foreground">
-            Apply a default or cue-specific style through the command contract.
+            Preview a style, then apply it to this track or one cue.
           </p>
         </div>
         <select
@@ -128,7 +129,7 @@ function CaptionStyleControls({
           ))}
         </select>
       </div>
-      <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="mt-3 grid grid-cols-2 gap-2">
         <div>
           <Label htmlFor="caption-font-family" className="text-[11px]">
             Font
@@ -202,8 +203,14 @@ function CaptionStyleControls({
   )
 }
 
-function CaptionPreview({ activeCue, activeTrack, currentFrame, fps }: CaptionPreviewProps) {
-  const previewStyle = captionStyleOrDefault(activeCue?.style ?? activeTrack.defaultStyle)
+function CaptionPreview({
+  activeCue,
+  activeTrack,
+  currentFrame,
+  fps,
+  styleDraft,
+}: CaptionPreviewProps) {
+  const previewStyle = captionStyleOrDefault(styleDraft)
 
   return (
     <div
@@ -211,7 +218,7 @@ function CaptionPreview({ activeCue, activeTrack, currentFrame, fps }: CaptionPr
       data-testid="caption-preview"
     >
       <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-        Preview · {formatFrame(currentFrame, fps)}
+        Style preview · {formatFrame(currentFrame, fps)}
       </p>
       <div className="mt-2 flex min-h-14 items-center justify-center rounded bg-black px-4 py-3">
         {activeTrack.muted ? (
@@ -607,6 +614,7 @@ function CaptionTrackEditor({
       />
 
       <CaptionPreview
+        styleDraft={styleDraft}
         activeCue={activeCue}
         activeTrack={activeTrack}
         currentFrame={currentFrame}
@@ -724,7 +732,7 @@ export function CaptionEditorView({
             <h2 className="text-sm font-semibold">Captions</h2>
           </div>
           <p className="mt-1 text-xs text-muted-foreground">
-            Frame-aligned cues are saved through the controlled command contract.
+            Edit the text displayed in your video. Text corrections never remove footage.
           </p>
         </div>
         <Button
