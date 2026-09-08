@@ -550,6 +550,7 @@ export declare const SUPPORTED_HOST_COMMANDS: readonly [
   'add_text',
   'move_item',
   'set_item_attachment',
+  'set_item_properties',
   'trim_item',
   'split_item',
   'remove_item',

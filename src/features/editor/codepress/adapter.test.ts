@@ -1217,3 +1217,147 @@ describe('controlled command adapter', () => {
 function itemIdForTest(item: TimelineState['tracks'][number]['items'][number]): string {
   return item.item_type === 'caption_cue' ? item.cue_id : item.item_id
 }
+
+describe('adopted move and trim duration extension', () => {
+  it.each(['move', 'attached move', 'trim'] as const)(
+    'expands duration after %s before validating the resulting timeline',
+    (mode) => {
+      const initial = timeline({ duration_us: mode === 'attached move' ? 2_000_000 : 1_000_000 })
+      if (mode === 'attached move')
+        initial.tracks[0]!.items = [
+          ...initial.tracks[0]!.items,
+          clip({ item_id: 'tail', timeline_start_us: 1_000_000, timeline_end_us: 2_000_000 }),
+        ]
+      const adapter = createCodePressCommandAdapter({ document: documentFor(initial) })
+      const commands: EditCommandBatch['commands'] =
+        mode === 'trim'
+          ? [
+              {
+                command_id: 'trim',
+                type: 'trim_item',
+                item_id: 'clip-a',
+                edge: 'end',
+                timeline_us: 3_000_000,
+                source_us: 3_000_000,
+              },
+            ]
+          : [
+              {
+                command_id: 'move',
+                type: 'move_item',
+                item_id: 'clip-a',
+                to_track_id: 'track-video',
+                timeline_start_us: 2_000_000,
+                index: 0,
+                ...(mode === 'attached move' ? { ripple: true } : {}),
+              },
+            ]
+      applyRequest(adapter, {
+        contract_version: 1,
+        timeline_id: initial.timeline_id,
+        operation_id: 'extend',
+        idempotency_key: 'extend',
+        base_revision: 0,
+        preconditions: [],
+        commands,
+      })
+      expect(adapter.getDocument().timeline.duration_us).toBe(
+        mode === 'attached move' ? 4_000_000 : 3_000_000,
+      )
+      if (mode === 'attached move')
+        expect(adapter.getDocument().timeline.tracks[0]!.items[1]).toMatchObject({
+          timeline_start_us: 3_000_000,
+          timeline_end_us: 4_000_000,
+        })
+    },
+  )
+})
+
+describe('known source bounds when extending trim duration', () => {
+  it.each([30, 29.97])('uses source microseconds at %s fps including double-speed clips', (fps) => {
+    const frame = (value: number) => framesToMicroseconds(value, fps)
+    const initial = timeline({
+      duration_us: frame(30),
+      media: [{ ...videoMedia, duration_us: frame(180) }],
+    })
+    initial.tracks[0]!.items = [
+      clip({ timeline_end_us: frame(30), source_end_us: frame(60), speed: 2 }),
+    ]
+    const adapter = createCodePressCommandAdapter({ document: documentFor(initial, fps) })
+    const request = (endFrame: number, revision: number): EditCommandBatch => ({
+      contract_version: 1,
+      timeline_id: initial.timeline_id,
+      operation_id: `trim-${endFrame}`,
+      idempotency_key: `trim-${endFrame}`,
+      base_revision: revision,
+      preconditions: [],
+      commands: [
+        {
+          command_id: 'trim',
+          type: 'trim_item',
+          item_id: 'clip-a',
+          edge: 'end',
+          timeline_us: frame(endFrame),
+          source_us: frame(endFrame * 2),
+        },
+      ],
+    })
+    applyRequest(adapter, request(60, 0))
+    expect(adapter.getDocument().timeline.duration_us).toBe(frame(60))
+    applyRequest(adapter, request(90, 1))
+    expect(adapter.getDocument().timeline.duration_us).toBe(frame(90))
+    const before = structuredClone(adapter.getSnapshot())
+    const invalid = request(91, 2)
+    // A preceding valid property command must also roll back with the trim.
+    invalid.commands = [
+      {
+        command_id: 'opacity',
+        type: 'set_item_properties',
+        item_id: 'clip-a',
+        properties: { opacity: 0.5 },
+      },
+      ...invalid.commands,
+    ]
+    expect(adapter.apply(invalid)).toMatchObject({
+      status: 'rejected',
+      error: {
+        code: 'invalid_request',
+        message: expect.stringContaining('exceeds known media duration'),
+      },
+    })
+    expect(adapter.getSnapshot()).toEqual(before)
+    // Rejection does not advance authority or poison the successful request receipt.
+    expect(adapter.apply(request(90, 1))).toMatchObject({
+      status: 'replayed',
+      resulting_revision: 2,
+    })
+    expect(adapter.getSnapshot()).toEqual(before)
+  })
+
+  it('does not invent a source bound when media duration is unknown', () => {
+    const initial = timeline({
+      duration_us: 1_000_000,
+      media: [{ ...videoMedia, duration_us: null }],
+    })
+    const adapter = createCodePressCommandAdapter({ document: documentFor(initial) })
+    applyRequest(adapter, {
+      contract_version: 1,
+      timeline_id: initial.timeline_id,
+      operation_id: 'unknown',
+      idempotency_key: 'unknown',
+      base_revision: 0,
+      preconditions: [],
+      commands: [
+        {
+          command_id: 'trim',
+          type: 'trim_item',
+          item_id: 'clip-a',
+          edge: 'end',
+          timeline_us: 40_000_000,
+          source_us: 40_000_000,
+        },
+      ],
+    })
+    expect(adapter.getDocument().timeline.duration_us).toBe(40_000_000)
+  })
+})
