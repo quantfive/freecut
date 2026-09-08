@@ -32,6 +32,7 @@ import {
   type HostTranscriptCommandPreview,
   type HostTranscriptCommandPreviewRequest,
   type HostTranscriptSection,
+  type HostTranscriptSectionsPage,
   type HostTranscriptStatusReceipt,
 } from './contract'
 import { EmbeddedEditorHostRuntime } from './runtime'
@@ -326,6 +327,16 @@ function renderHostEditor(harness: ReturnType<typeof createHarness>) {
   )
 }
 
+function deferredPage() {
+  let resolve!: (page: HostTranscriptSectionsPage) => void
+  let reject!: (error: Error) => void
+  const promise = new Promise<HostTranscriptSectionsPage>((resolvePage, rejectPage) => {
+    resolve = resolvePage
+    reject = rejectPage
+  })
+  return { promise, resolve, reject }
+}
+
 function receipt(
   status: HostTranscriptStatusReceipt['status'],
   overrides: Partial<HostTranscriptStatusReceipt> = {},
@@ -516,6 +527,114 @@ describe('host-backed transcript consumer', () => {
     expect(screen.getAllByRole('button', { name: 'X' })).toHaveLength(1)
     expect(screen.getAllByRole('button', { name: 'Y' })).toHaveLength(2)
   })
+
+  it.each(['resolve', 'reject'] as const)(
+    'ignores an old transcript page that %ss after refresh while the new source is loading more',
+    async (outcome) => {
+      const initial = snapshot()
+      initial.timeline.durationInFrames = 600
+      initial.timeline.media = ['asset-1', 'asset-2'].map((id) => ({
+        media_id: id,
+        media_kind: 'video',
+        content_hash: `sha256:${id}`,
+        duration_us: 10_000_000,
+        availability: { mode: 'cloud', cloud: { object_id: id } },
+      }))
+      initial.timeline.tracks = [
+        {
+          id: 'video',
+          name: 'Video',
+          kind: 'video',
+          locked: false,
+          muted: false,
+          items: ['asset-1', 'asset-2'].map((id, index) => ({
+            type: 'video',
+            id: `clip-${id}`,
+            trackId: 'video',
+            mediaId: id,
+            from: index * 300,
+            durationInFrames: 300,
+            sourceStart: 0,
+            sourceEnd: 300,
+          })),
+        },
+      ]
+      const harness = createHarness(initial)
+      harness.host.transcript!.occurrenceSelection = true
+      let fresh = false
+      harness.host.transcript!.getStatus = () =>
+        receipt(
+          'succeeded',
+          fresh
+            ? {
+                transcriptId: 'transcript-2',
+                assetId: 'asset-2',
+                sourceAssetHash: 'sha256:asset-2',
+              }
+            : {},
+        )
+      const oldPage = deferredPage()
+      const newPage = deferredPage()
+      const page = (
+        transcriptId: string,
+        text: string,
+        ordinal: number,
+      ): HostTranscriptSectionsPage => ({
+        transcriptId,
+        hasMore: ordinal === 0,
+        nextCursor: ordinal === 0 ? 'next' : null,
+        sections: [
+          {
+            id: `${transcriptId}-${ordinal}`,
+            transcriptId,
+            ordinal,
+            startUs: ordinal * 2_000_000,
+            endUs: ordinal * 2_000_000 + 1_000_000,
+            text,
+            timingSource: 'provider',
+            words: [{ text, startUs: ordinal * 2_000_000, endUs: ordinal * 2_000_000 + 1_000_000 }],
+          },
+        ],
+      })
+      const getSections = vi.fn(
+        ({ transcriptId, cursor }: { transcriptId: string; cursor?: string | null }) => {
+          if (cursor) return transcriptId === 'transcript-1' ? oldPage.promise : newPage.promise
+          return page(transcriptId, transcriptId === 'transcript-1' ? 'Original' : 'Fresh', 0)
+        },
+      )
+      harness.host.transcript!.getSections = getSections
+      renderHostEditor(harness)
+      await screen.findByRole('button', { name: 'Original' })
+      fireEvent.click(screen.getByRole('button', { name: 'Load more transcript' }))
+      expect(getSections).toHaveBeenCalledWith(
+        expect.objectContaining({ transcriptId: 'transcript-1', cursor: 'next' }),
+      )
+      fresh = true
+      fireEvent.click(screen.getByRole('button', { name: 'Refresh transcript' }))
+      await screen.findByRole('button', { name: 'Fresh' })
+      expect(screen.queryByRole('button', { name: 'Original' })).not.toBeInTheDocument()
+      fireEvent.click(screen.getByRole('button', { name: 'Load more transcript' }))
+      expect(getSections).toHaveBeenCalledWith(
+        expect.objectContaining({ transcriptId: 'transcript-2', cursor: 'next' }),
+      )
+      await act(async () => {
+        if (outcome === 'resolve') oldPage.resolve(page('transcript-1', 'Forbidden', 1))
+        else oldPage.reject(new Error('Obsolete source page failed'))
+        await Promise.resolve()
+      })
+      expect(screen.queryByRole('button', { name: 'Forbidden' })).not.toBeInTheDocument()
+      expect(screen.queryByTestId('host-transcript-error')).not.toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Load more transcript' })).toBeDisabled()
+      await act(async () => {
+        newPage.resolve(page('transcript-2', 'Latest', 1))
+      })
+      await screen.findByRole('button', { name: 'Latest' })
+      expect(screen.queryByRole('button', { name: 'Load more transcript' })).not.toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: 'Forbidden' })).not.toBeInTheDocument()
+      expect(harness.previewCommands).not.toHaveBeenCalled()
+      expect(harness.submitEdit).not.toHaveBeenCalled()
+    },
+  )
 
   it('displays bounded sections, previews without mutation, then applies through submitEdit', async () => {
     const harness = createHarness(snapshot())

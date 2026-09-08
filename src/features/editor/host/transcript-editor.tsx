@@ -589,14 +589,14 @@ export function HostTranscriptEditor({ active = true }: { active?: boolean }) {
       replace: boolean,
     ): Promise<void> => {
       if (!port) return
-      const page = normalizePage(
-        await port.getSections({
-          transcriptId: receipt.transcriptId,
-          cursor,
-          limit: MAX_TRANSCRIPT_SECTION_PAGE_SIZE,
-        }),
-        receipt.transcriptId,
-      )
+      const generation = requestGeneration.current
+      const response = await port.getSections({
+        transcriptId: receipt.transcriptId,
+        cursor,
+        limit: MAX_TRANSCRIPT_SECTION_PAGE_SIZE,
+      })
+      if (requestGeneration.current !== generation) return
+      const page = normalizePage(response, receipt.transcriptId)
       const durationUs = receipt.durationUs
       if (
         (durationUs !== null && page.sections.some((section) => section.endUs > durationUs)) ||
@@ -607,6 +607,7 @@ export function HostTranscriptEditor({ active = true }: { active?: boolean }) {
         throw new Error('The host returned transcript sections outside the bounded transcript.')
       }
       setSections((current) => {
+        if (requestGeneration.current !== generation) return current
         const next = replace ? [] : [...current]
         const ids = new Set(next.map((section) => section.id))
         for (const section of page.sections) {
@@ -628,6 +629,7 @@ export function HostTranscriptEditor({ active = true }: { active?: boolean }) {
     const generation = requestGeneration.current + 1
     requestGeneration.current = generation
     setLoading(true)
+    setLoadingMore(false)
     setError(null)
     setPreview(null)
     setSelectedIds(new Set())
@@ -673,17 +675,22 @@ export function HostTranscriptEditor({ active = true }: { active?: boolean }) {
   useEffect(() => {
     if (!active || !port || !canTranscribe) return
     void refresh()
+    return () => {
+      requestGeneration.current += 1
+    }
   }, [active, canTranscribe, port, refresh])
 
   const loadMore = useCallback(async () => {
     if (!status || status.status !== 'succeeded' || !nextCursor || !port || loadingMore) return
+    const generation = requestGeneration.current
     setLoadingMore(true)
     try {
       await loadSectionsPage(status, nextCursor, false)
     } catch (caught) {
+      if (requestGeneration.current !== generation) return
       setError(errorFromHost(caught, 'More transcript sections could not be loaded.'))
     } finally {
-      setLoadingMore(false)
+      if (requestGeneration.current === generation) setLoadingMore(false)
     }
   }, [loadSectionsPage, loadingMore, nextCursor, port, status])
 
