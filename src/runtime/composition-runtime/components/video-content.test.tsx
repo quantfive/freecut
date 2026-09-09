@@ -1,5 +1,5 @@
 import { act, render, waitFor } from '@testing-library/react'
-import { beforeEach, describe, expect, it, vi } from 'vite-plus/test'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vite-plus/test'
 import { shouldIssueCoalescedReverseVideoSeek } from '../utils/video-sync-plan'
 import { getAudioTargetTimeSeconds } from '../utils/video-timing'
 import { VideoContent } from './video-content'
@@ -15,6 +15,7 @@ const testState = vi.hoisted(() => ({
     acquireForClip: ReturnType<typeof vi.fn>
     releaseClip: ReturnType<typeof vi.fn>
   } | null,
+  clock: { currentFrame: 0, onFrameChange: () => () => {} },
   renderedIsPlaying: null as boolean | null,
   playbackState: {
     currentFrame: 0,
@@ -103,10 +104,7 @@ function createMockVideoElement(): HTMLVideoElement {
 vi.mock('@/runtime/composition-runtime/deps/player', () => ({
   useSequenceContext: () => ({ localFrame: 0, from: 0, durationInFrames: 120, parentFrom: 0 }),
   useVideoSourcePool: () => testState.pool!,
-  useClock: () => ({
-    currentFrame: 0,
-    onFrameChange: () => () => {},
-  }),
+  useClock: () => testState.clock,
   useClockPlaybackRate: () => 1,
   interpolate: () => 0,
   isVideoPoolAbortError: () => false,
@@ -147,7 +145,9 @@ vi.mock('./video-audio-context', () => ({
 }))
 
 describe('VideoContent pooled handoff', () => {
+  afterEach(() => vi.restoreAllMocks())
   beforeEach(() => {
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(null)
     preloadSourceMock.mockClear()
     acquireForClipMock.mockClear()
     releaseClipMock.mockClear()
@@ -194,6 +194,52 @@ describe('VideoContent pooled handoff', () => {
       expect(video.paused).toBe(!livePlaying)
     },
   )
+
+  it('gates recycled pixels on acquisition and same-lane cut until the decoded target frame', async () => {
+    const video = createMockVideoElement()
+    const callbacks: VideoFrameRequestCallback[] = []
+    video.requestVideoFrameCallback = vi.fn((cb) => {
+      callbacks.push(cb)
+      return callbacks.length
+    })
+    video.cancelVideoFrameCallback = vi.fn()
+    acquireForClipMock.mockReturnValue(video)
+    const view = (id: string, trim: number) => (
+      <VideoContent
+        item={{
+          id,
+          type: 'video',
+          trackId: 'track',
+          from: 0,
+          durationInFrames: 90,
+          label: id,
+          src: 'blob:test',
+          _poolClipId: 'shared-lane',
+        }}
+        muted={false}
+        safeTrimBefore={trim}
+        playbackRate={1}
+        sourceFps={30}
+        audioEqStages={[]}
+      />
+    )
+    const { rerender, unmount } = render(view('first', 300))
+    expect(video.currentTime).toBeCloseTo(10)
+    expect(video.style.opacity).toBe('0')
+    act(() => callbacks.at(-1)?.(0, { mediaTime: 0 } as VideoFrameCallbackMetadata))
+    expect(video.style.opacity).toBe('0')
+    act(() => callbacks.at(-1)?.(0, { mediaTime: 10 } as VideoFrameCallbackMetadata))
+    expect(video.style.opacity).toBe('')
+    rerender(view('second', 600))
+    expect(acquireForClipMock).toHaveBeenCalledTimes(1)
+    expect(video.currentTime).toBeCloseTo(20)
+    expect(video.style.opacity).toBe('0')
+    act(() => callbacks.at(-1)?.(0, { mediaTime: 10 } as VideoFrameCallbackMetadata))
+    expect(video.style.opacity).toBe('0')
+    act(() => callbacks.at(-1)?.(0, { mediaTime: 20 } as VideoFrameCallbackMetadata))
+    expect(video.style.opacity).toBe('')
+    unmount()
+  })
 
   it('keeps the acquired pool element when only itemId changes on the same pool lane', async () => {
     const pooledElement = createMockVideoElement()

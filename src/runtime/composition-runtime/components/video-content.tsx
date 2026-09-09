@@ -40,6 +40,8 @@ import {
 } from './video-audio-context'
 import { getBrowserMediaPlaybackRate } from '@/shared/state/playback/shuttle'
 
+import { createVideoFrameHandoff } from '../utils/video-frame-handoff'
+
 const videoLog = createLogger('NativePreviewVideo')
 const contentLog = createLogger('VideoContent')
 
@@ -89,6 +91,7 @@ function isRecoverableVideoLoadError(message: string): boolean {
  */
 const NativePreviewVideo: React.FC<{
   poolClipId: string
+  trackId: string
   itemId: string
   src: string
   safeTrimBefore: number
@@ -106,6 +109,7 @@ const NativePreviewVideo: React.FC<{
   sharedTransitionSync?: boolean
 }> = ({
   poolClipId,
+  trackId,
   itemId,
   src,
   safeTrimBefore,
@@ -133,6 +137,12 @@ const NativePreviewVideo: React.FC<{
   const preWarmInFlightRef = useRef(false)
   const itemIdRef = useRef(itemId)
   itemIdRef.current = itemId
+
+  const handoffRef = useRef<ReturnType<typeof createVideoFrameHandoff> | null>(null)
+  const seekVideo = useCallback((video: HTMLVideoElement, time: number) => {
+    if (Math.abs(video.currentTime - time) > 0.001) handoffRef.current?.prepare(time)
+    video.currentTime = time
+  }, [])
 
   // Brief muted play/pause that fills the decode buffer and re-acquires the
   // browser's media pipeline, so a subsequent play() starts in ~2 frames
@@ -189,7 +199,7 @@ const NativePreviewVideo: React.FC<{
                 Math.abs(v.currentTime - warmStartTime) > 0.001
               ) {
                 try {
-                  v.currentTime = warmStartTime
+                  seekVideo(v, warmStartTime)
                 } catch {
                   // The pooled element may be settling or have been released.
                 }
@@ -200,7 +210,7 @@ const NativePreviewVideo: React.FC<{
           })
       }
     }, 50)
-  }, [])
+  }, [seekVideo])
   const audioVolumeRef = useRef(audioVolume)
   const audioEqStagesRef = useRef(audioEqStages)
   const onErrorRef = useRef(onError)
@@ -389,9 +399,25 @@ const NativePreviewVideo: React.FC<{
     )
     const clampedInitial = Math.min(initialTargetTime, (element.duration || Infinity) - 0.1)
     const currentlyPlaying = usePlaybackStore.getState().isPlaying
-    const isNearTarget = Math.abs(element.currentTime - clampedInitial) < 0.2
+    const isNearTarget = Math.abs(element.currentTime - clampedInitial) < 1 / initialFps
     const isContinuousPlayback =
-      !initialRequiresVisualSeek && currentlyPlaying && isNearTarget && element.readyState >= 2
+      !initialRequiresVisualSeek &&
+      currentlyPlaying &&
+      !element.paused &&
+      !element.seeking &&
+      isNearTarget &&
+      element.readyState >= 2
+
+    if (containerRef.current) {
+      handoffRef.current = createVideoFrameHandoff(
+        element,
+        containerRef.current,
+        clock,
+        trackId,
+        Math.max(0.05, 2 / initialFps),
+      )
+      handoffRef.current.prepare(clampedInitial)
+    }
 
     elementRef.current = element
     syncRegisteredVideoElement(itemIdRef.current, element)
@@ -400,7 +426,7 @@ const NativePreviewVideo: React.FC<{
     if (initialRequiresVisualSeek) {
       element.pause()
       element.playbackRate = 1
-      element.currentTime = clampedInitial
+      seekVideo(element, clampedInitial)
       needsInitialSyncRef.current = false
     } else if (isContinuousPlayback) {
       // Split boundary during playback: element was just paused by cleanup
@@ -415,7 +441,7 @@ const NativePreviewVideo: React.FC<{
       // instead of pausing and waiting for the sync effect next frame.
       // This eliminates ~16-50ms of React scheduling + readyState gate delay.
       element.playbackRate = initialMediaPlaybackRate
-      element.currentTime = clampedInitial
+      seekVideo(element, clampedInitial)
       if (element.readyState >= 2) {
         element.play().catch(() => {})
       }
@@ -443,7 +469,7 @@ const NativePreviewVideo: React.FC<{
       )
       if (Math.abs(element.currentTime - clampedLiveTargetTime) <= 0.016) return
       try {
-        element.currentTime = clampedLiveTargetTime
+        seekVideo(element, clampedLiveTargetTime)
       } catch {
         // Seek failed - element may still be stabilizing.
       }
@@ -479,7 +505,7 @@ const NativePreviewVideo: React.FC<{
         Math.abs(element.currentTime - latestPausedTarget) > 0.001
       ) {
         try {
-          element.currentTime = latestPausedTarget
+          seekVideo(element, latestPausedTarget)
           pausedSeekInFlightRef.current = true
         } catch {
           // The latest skim target remains queued for the next sync pass.
@@ -496,7 +522,7 @@ const NativePreviewVideo: React.FC<{
     const handleEnded = () => {
       videoLog.debug(`[${shortId}] ended, seeking to last frame`)
       if (element.duration && element.duration > 0.1) {
-        element.currentTime = element.duration - 0.05
+        seekVideo(element, element.duration - 0.05)
       }
     }
 
@@ -548,7 +574,7 @@ const NativePreviewVideo: React.FC<{
         'seekPastEnd:',
         initialTargetTime > element.duration,
       )
-      element.currentTime = clampedInitial
+      seekVideo(element, clampedInitial)
     } else {
       videoLog.debug(
         `[${shortId}] continuous playback, skipping seek (drift: ${(element.currentTime - clampedInitial).toFixed(3)}s)`,
@@ -589,6 +615,9 @@ const NativePreviewVideo: React.FC<{
       element.removeEventListener('error', handleError)
       element.removeEventListener('ended', handleEnded)
 
+      handoffRef.current?.dispose()
+      handoffRef.current = null
+
       // Pause and remove from DOM
       element.pause()
       if (preWarmTimerRef.current !== null) {
@@ -621,8 +650,11 @@ const NativePreviewVideo: React.FC<{
     // the element across split-boundary transitions.
   }, [
     poolClipId,
+    trackId,
+    clock,
     src,
     pool,
+    seekVideo,
     containerRef,
     shortId,
     syncRegisteredVideoElement,
@@ -699,11 +731,11 @@ const NativePreviewVideo: React.FC<{
               targetTime: seekTo,
             })
           ) {
-            video.currentTime = seekTo
+            seekVideo(video, seekTo)
             pausedSeekInFlightRef.current = true
           }
         } else {
-          video.currentTime = seekTo
+          seekVideo(video, seekTo)
         }
         if (video.currentTime === seekTo || isPlaying) {
           lastSyncTimeRef.current = Date.now()
@@ -718,6 +750,7 @@ const NativePreviewVideo: React.FC<{
     if (layoutPlan.seekTo !== null) applyLayoutSeek(layoutPlan.seekTo)
   }, [
     frame,
+    seekVideo,
     isPlaying,
     isReversed,
     mediaPlaybackRate,
@@ -798,7 +831,7 @@ const NativePreviewVideo: React.FC<{
         })
       ) {
         try {
-          video.currentTime = latestReverseSeekTargetRef.current
+          seekVideo(video, latestReverseSeekTargetRef.current)
           reverseSeekInFlightRef.current = true
           lastSyncTimeRef.current = Date.now()
           needsInitialSyncRef.current = false
@@ -831,7 +864,7 @@ const NativePreviewVideo: React.FC<{
         video.pause()
       }
       if (premountPlan.seekTo !== null) {
-        video.currentTime = premountPlan.seekTo
+        seekVideo(video, premountPlan.seekTo)
       }
       return
     }
@@ -853,7 +886,7 @@ const NativePreviewVideo: React.FC<{
       })
       if (initialSyncPlan.seekTo !== null) {
         try {
-          video.currentTime = initialSyncPlan.seekTo
+          seekVideo(video, initialSyncPlan.seekTo)
         } catch {
           // Seek failed - video may not be ready yet
         }
@@ -879,7 +912,7 @@ const NativePreviewVideo: React.FC<{
         })
         if (driftCorrectionPlan.seekTo !== null) {
           try {
-            video.currentTime = driftCorrectionPlan.seekTo
+            seekVideo(video, driftCorrectionPlan.seekTo)
             lastSyncTimeRef.current = Date.now()
           } catch {
             // Seek failed - video may not be ready yet
@@ -927,7 +960,7 @@ const NativePreviewVideo: React.FC<{
                 targetTime: pausedSyncPlan.seekTo,
               })
             ) {
-              video.currentTime = pausedSyncPlan.seekTo
+              seekVideo(video, pausedSyncPlan.seekTo)
               pausedSeekInFlightRef.current = true
             }
           } catch {
@@ -945,6 +978,7 @@ const NativePreviewVideo: React.FC<{
   }, [
     frame,
     fps,
+    seekVideo,
     isPlaying,
     isReversed,
     isReverseShuttle,
@@ -1049,7 +1083,7 @@ const NativePreviewVideo: React.FC<{
 
       if (correctionPlan.kind === 'seek') {
         try {
-          v.currentTime = correctionPlan.seekTo
+          seekVideo(v, correctionPlan.seekTo)
           if (correctionPlan.shouldUpdateLastSyncTime) {
             lastSyncTimeRef.current = Date.now()
           }
@@ -1072,7 +1106,7 @@ const NativePreviewVideo: React.FC<{
         elementRef.current.playbackRate = mediaPlaybackRateRef.current
       }
     }
-  }, [clock, isPlaying, isReversed, isReverseShuttle, poolClipId, sharedTransitionSync])
+  }, [clock, isPlaying, isReversed, isReverseShuttle, poolClipId, sharedTransitionSync, seekVideo])
 
   // Keep volume/gain in sync for pooled element.
   useEffect(() => {
@@ -1279,6 +1313,7 @@ export const VideoContent: React.FC<{
   return (
     <NativePreviewVideo
       poolClipId={item._poolClipId ?? item.id}
+      trackId={item.trackId}
       itemId={item.id}
       src={item.src!}
       safeTrimBefore={safeTrimBefore}
