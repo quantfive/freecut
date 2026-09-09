@@ -125,6 +125,10 @@ describe('published FreeCut browser entry', () => {
       { timeout: 10_000 },
     )
 
+    const library = view.container.querySelector<HTMLElement>('[data-editor-column="library"]')!
+    expect(library).not.toBeVisible()
+    fireEvent.click(within(view.container).getByRole('button', { name: 'Show Library' }))
+    expect(library).toBeVisible()
     expect(screen.queryByTestId('properties-clip-panel-host')).not.toBeInTheDocument()
     fireEvent.click(within(view.container).getByRole('button', { name: 'Canvas settings' }))
     expect(await screen.findByTestId('properties-clip-panel-host')).toBeInTheDocument()
