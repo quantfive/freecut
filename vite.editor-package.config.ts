@@ -1,4 +1,5 @@
-import { defineConfig, lazyPlugins } from 'vite-plus'
+import { defineConfig, lazyPlugins, type Plugin } from 'vite-plus'
+import { normalizeEditorWorkerUrls } from './scripts/editor-package-worker-urls.mjs'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import {
@@ -50,9 +51,16 @@ function removeHostDisabledWorkers() {
   }
 }
 
-function normalizeEditorPackageAssets() {
+function normalizeEditorPackageAssets(): Plugin {
   return {
     name: 'freecut-editor-package-assets',
+    renderChunk: {
+      order: 'post',
+      handler(code, chunk) {
+        const normalized = normalizeEditorWorkerUrls(code, chunk.fileName)
+        return normalized === code ? null : { code: normalized, map: null }
+      },
+    },
     buildStart() {
       rmSync(outDir, { recursive: true, force: true })
     },

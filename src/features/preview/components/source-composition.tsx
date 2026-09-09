@@ -917,7 +917,13 @@ function VideoSource({
           display: showDecodedCanvas ? 'block' : 'none',
         }}
       />
-      <audio ref={audioRef} src={src} preload="auto" style={{ display: 'none' }} />
+      <audio
+        crossOrigin="anonymous"
+        ref={audioRef}
+        src={src}
+        preload="auto"
+        style={{ display: 'none' }}
+      />
     </AbsoluteFill>
   )
 }
@@ -926,6 +932,7 @@ function ImageSource({ src }: { src: string }) {
   return (
     <AbsoluteFill>
       <img
+        crossOrigin="anonymous"
         key={src}
         src={src}
         style={{ width: '100%', height: '100%', objectFit: 'contain' }}
@@ -1045,7 +1052,7 @@ function AudioSource({ mediaId, src }: { mediaId?: string; src: string }) {
           onSeekSeconds={handleSeekSeconds}
         />
       </div>
-      <audio ref={audioRef} src={src} preload="auto" />
+      <audio crossOrigin="anonymous" ref={audioRef} src={src} preload="auto" />
     </AbsoluteFill>
   )
 }

@@ -531,6 +531,11 @@ function deriveSetItemAttachment(
   const ids = [...new Set(itemIds)]
   const items = itemMap(previous)
   if (ids.length === 0) return { batch: null, reason: 'No timeline item is selected' }
+  if (ids.length > 128)
+    return {
+      batch: null,
+      reason: 'Cannot change attachment for more than 128 timeline items at once',
+    }
   const selected = ids.map((id) => items.get(id))
   if (selected.some((item) => item === undefined)) {
     return { batch: null, reason: 'The selected timeline item is no longer authoritative' }
@@ -624,6 +629,11 @@ export function deriveSupportedHostEdit(
     })
 
   if (attachmentOnlyChange) {
+    if (changed.length > 128)
+      return {
+        batch: null,
+        reason: 'Cannot change attachment for more than 128 timeline items at once',
+      }
     commands.push({
       command_id: `attachment-${operationId}`,
       type: 'set_item_attachment',
@@ -931,6 +941,35 @@ export function deriveSupportedHostEdit(
         edge,
         timeline_us: framesToMicroseconds(timelineFrame, fps),
         source_us: framesToMicroseconds(sourceFrame, fps),
+      })
+      preconditions.push(preconditionForItem(before, fps))
+    } else if (
+      metadataUnchanged &&
+      sourceUnchanged &&
+      durationUnchanged &&
+      timelineUnchanged &&
+      sameTrack &&
+      !transformUnchanged
+    ) {
+      const previousTransform = normalizedTransform(before)
+      const nextTransform = normalizedTransform(after)
+      const properties: Extract<EditCommand, { type: 'set_item_properties' }>['properties'] = {}
+      const placementChanged = ['x', 'y', 'width', 'height', 'anchorX', 'anchorY', 'rotation'].some(
+        (key) => previousTransform[key] !== nextTransform[key],
+      )
+      if (previousTransform.opacity !== nextTransform.opacity)
+        properties.opacity = nextTransform.opacity
+      // Preserve the surface's native placement payload. The host owns its
+      // canvas/media-dependent conversion to the wire transform coordinates.
+      if (placementChanged)
+        properties.transform = after.transform
+          ? ({ ...after.transform } as unknown as NonNullable<typeof properties.transform>)
+          : null
+      commands.push({
+        command_id: `properties-${id}`,
+        type: 'set_item_properties',
+        item_id: id,
+        properties,
       })
       preconditions.push(preconditionForItem(before, fps))
     } else {

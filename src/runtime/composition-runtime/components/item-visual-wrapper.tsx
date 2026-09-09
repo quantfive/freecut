@@ -18,6 +18,7 @@ import {
 } from '../utils/corner-pin'
 import { getShapePath } from '../utils/shape-path'
 import {
+  useEditorStore,
   useCornerPinStore,
   useGizmoStore,
   usePlaybackStore,
@@ -571,6 +572,18 @@ export const ItemVisualWrapper: React.FC<ItemVisualWrapperProps> = ({
     state.transform.height,
     state.transform.width,
   ])
+  // Host geometry is explicit: preserve the shipped nonproportional sizing
+  // rather than introducing letterboxing inside an authored rectangle.
+  const hostMediaFitMode =
+    useEditorStore.getState().hostMode &&
+    mediaFitMode === 'contain' &&
+    (mediaSourceWidth ?? 0) > 0 &&
+    (mediaSourceHeight ?? 0) > 0 &&
+    Math.abs(
+      state.transform.width * mediaSourceHeight! - state.transform.height * mediaSourceWidth!,
+    ) > 0.01
+      ? 'fill'
+      : mediaFitMode
   const containedMediaStyle = useMemo((): React.CSSProperties => {
     const width = state.transform.width
     const height = state.transform.height
@@ -709,7 +722,7 @@ export const ItemVisualWrapper: React.FC<ItemVisualWrapperProps> = ({
       containerWidth={state.transform.width}
       containerHeight={state.transform.height}
       crop={effectiveCrop}
-      fitMode={mediaContent.fitMode}
+      fitMode={hostMediaFitMode}
     >
       {children}
     </ContainedMediaLayout>
@@ -735,7 +748,7 @@ export const ItemVisualWrapper: React.FC<ItemVisualWrapperProps> = ({
       containerWidth={cornerPinTargetRect.width}
       containerHeight={cornerPinTargetRect.height}
       crop={effectiveCrop}
-      fitMode={mediaContent.fitMode}
+      fitMode={hostMediaFitMode}
     >
       {children}
     </ContainedMediaLayout>

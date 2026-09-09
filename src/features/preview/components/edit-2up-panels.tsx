@@ -820,6 +820,7 @@ function ImageFrameImpl({ item }: ImageFrameProps) {
     if (!canvas) return
 
     const img = new Image()
+    img.crossOrigin = 'anonymous'
     img.onload = () => {
       canvas.width = img.naturalWidth || 280
       canvas.height = img.naturalHeight || 158

@@ -757,6 +757,7 @@ describe('embedded FreeCut host controller', () => {
       'add_text',
       'move_item',
       'set_item_attachment',
+      'set_item_properties',
       'trim_item',
       'split_item',
       'remove_item',
@@ -1707,7 +1708,7 @@ describe('embedded FreeCut host controller', () => {
       }
     })
 
-    it('still names a real resize once identity transforms compare equal', () => {
+    it('serializes a real resize once identity transforms compare equal', () => {
       const base = minimalTwoClipSnapshot()
       const sized = withClipTwo(base.timeline, {
         transform: {
@@ -1736,13 +1737,14 @@ describe('embedded FreeCut host controller', () => {
 
       const derived = deriveSupportedHostEdit(sized, resized)
 
-      // The normalized transform has to carry the size, or a gizmo resize is
-      // indistinguishable from an untouched clip and is silently swallowed.
-      expect(derived.batch).toBeNull()
-      // `timelinePosition` rides along on every rejection of a clip that did
-      // not also move; `transform` is the predicate this pins.
-      expect(derived.detail?.failedPredicates).toEqual(['transform', 'timelinePosition'])
-      expect(derived.detail?.changedFields).toEqual(['transform.height', 'transform.width'])
+      expect(derived.batch?.commands).toEqual([
+        {
+          command_id: 'properties-clip-2',
+          type: 'set_item_properties',
+          item_id: 'clip-2',
+          properties: { transform: expect.objectContaining({ width: 1280, height: 720 }) },
+        },
+      ])
     })
   })
 })
@@ -1997,7 +1999,15 @@ it('rejects exhausted source handles before any host mutation', async () => {
     mode: 'normal',
     itemIds: ['clip-1'],
   })
-  await expect(controller.submitEdit(batch)).resolves.toMatchObject({ status: 'rejected' })
+  await expect(controller.submitEdit(batch)).resolves.toMatchObject({
+    status: 'rejected',
+    result: {
+      error: {
+        code: 'invalid_request',
+        message: expect.stringContaining('exceeds known media duration'),
+      },
+    },
+  })
   expect(harness.submitEdit).not.toHaveBeenCalled()
   expect(controller.getSnapshot()).toEqual(initial)
 })
@@ -2027,4 +2037,185 @@ it('does not restore a superseded timeline identity from a late receipt', async 
   })
   await pending
   expect(controller.getSnapshot().timeline.timelineId).toBe('replacement')
+})
+
+describe('adopted host property compatibility', () => {
+  it('submits native placement and opacity, applies authority, and restores an authoritative undo snapshot', async () => {
+    const initial = snapshot()
+    const native = hostSnapshotToNativeTimeline(initial)
+    native.items[0]!.transform = {
+      x: 24,
+      y: 12,
+      width: 640,
+      height: 360,
+      anchorX: 320,
+      anchorY: 180,
+      rotation: 15,
+      opacity: 0.4,
+    }
+    const converted = nativeTimelineToFrameDocument(native, initial.timeline)
+    if (!converted.ok) throw new Error(converted.failure.reason)
+    const derived = deriveSupportedHostEdit(initial.timeline, converted.document)
+    expect(capabilityForCommand('set_item_properties')).toBe('workspace.edit')
+    expect(derived.batch?.commands).toMatchObject([
+      {
+        type: 'set_item_properties',
+        properties: { opacity: 0.4, transform: native.items[0]!.transform },
+      },
+    ])
+    expect(derived.batch?.preconditions).toHaveLength(1)
+    const applied = { ...initial, timeline: { ...converted.document, revision: 1 } }
+    const submitEdit = vi.fn(
+      async (): Promise<HostEditResult> => ({
+        status: 'applied',
+        snapshot: applied,
+        result: { status: 'applied' } as HostAppliedEditResult['result'],
+      }),
+    )
+    const host: EditorHost = { ...createFakeHost(initial).host, submitEdit }
+    const controller = new HostEditorController(host, initial)
+    host.history = {
+      undo: () =>
+        controller.replaceAuthoritativeSnapshot({
+          ...initial,
+          timeline: { ...initial.timeline, revision: 2 },
+        }),
+      redo: () => undefined,
+    }
+    await expect(controller.submitEdit(derived.batch!)).resolves.toMatchObject({
+      status: 'applied',
+    })
+    expect(submitEdit).toHaveBeenCalledWith(derived.batch)
+    expect(controller.getSnapshot()).toEqual(applied)
+    await host.history.undo()
+    expect(controller.getSnapshot().timeline.tracks).toEqual(initial.timeline.tracks)
+    expect(controller.getSnapshot().timeline.revision).toBe(2)
+    expect(submitEdit).toHaveBeenCalledTimes(1)
+  })
+
+  it('gates property edits and does not broaden volume or combined move/property support', async () => {
+    const initial = snapshot()
+    const edited = structuredClone(initial)
+    Object.assign(edited.timeline.tracks[0]!.items[0]!, { opacity: 0.5 })
+    const batch = deriveSupportedHostEdit(initial.timeline, edited.timeline).batch!
+    expect(batch.commands).toMatchObject([
+      { type: 'set_item_properties', properties: { opacity: 0.5 } },
+    ])
+    const harness = createFakeHost(initial, {
+      ...DEFAULT_HOST_CAPABILITIES,
+      'workspace.edit': false,
+    })
+    await expect(
+      new HostEditorController(harness.host, initial).submitEdit(batch),
+    ).resolves.toMatchObject({ status: 'unsupported' })
+    expect(harness.submitEdit).not.toHaveBeenCalled()
+    Object.assign(edited.timeline.tracks[0]!.items[0]!, { from: 10 })
+    expect(deriveSupportedHostEdit(initial.timeline, edited.timeline).batch).toBeNull()
+    Object.assign(edited.timeline.tracks[0]!.items[0]!, { from: 0, volume: 0.5 })
+    expect(deriveSupportedHostEdit(initial.timeline, edited.timeline).batch).toBeNull()
+  })
+
+  it.each(['video', 'text'] as const)(
+    'preserves top-level opacity alongside a %s transform without deriving a phantom edit',
+    (type) => {
+      const initial = snapshot()
+      const base = initial.timeline.tracks[0]!.items[0]!
+      initial.timeline.tracks[0]!.items = [
+        {
+          ...base,
+          type,
+          ...(type === 'text' ? { text: 'Title' } : {}),
+          opacity: 0.35,
+          transform: {
+            x: 20,
+            y: 10,
+            width: 640,
+            height: 360,
+            anchorX: 320,
+            anchorY: 180,
+            rotation: 5,
+            opacity: 1,
+          },
+        } as typeof base,
+      ]
+      const native = hostSnapshotToNativeTimeline(initial)
+      expect(native.items[0]!.transform).toMatchObject({ x: 20, width: 640, opacity: 0.35 })
+      // Top-level opacity is authoritative when both carriers exist.
+      const expected = structuredClone(initial.timeline)
+      const expectedItem = expected.tracks[0]!.items[0]!
+      if (expectedItem.type === 'caption_cue') throw new Error('Expected media or text')
+      expectedItem.transform!.opacity = 0.35
+      const converted = nativeTimelineToFrameDocument(native, expected)
+      if (!converted.ok) throw new Error(converted.failure.reason)
+      expect(deriveSupportedHostEdit(expected, converted.document).batch).toBeNull()
+    },
+  )
+
+  it('does not turn inherited caption style into incidental cue edits while changing media opacity', () => {
+    const initial = snapshot()
+    initial.timeline.tracks = [
+      ...initial.timeline.tracks,
+      {
+        id: 'captions',
+        kind: 'caption',
+        name: 'Captions',
+        locked: false,
+        muted: false,
+        defaultStyle: { font_size: 52, color: '#ffaa00' },
+        items: [
+          {
+            id: 'cue',
+            type: 'caption_cue',
+            trackId: 'captions',
+            from: 0,
+            durationInFrames: 30,
+            text: 'Hello',
+          },
+        ],
+      },
+    ]
+    const native = hostSnapshotToNativeTimeline(initial)
+    native.items.find((item) => item.id === 'clip-1')!.transform = { opacity: 0.5 }
+    const converted = nativeTimelineToFrameDocument(native, initial.timeline)
+    if (!converted.ok) throw new Error(converted.failure.reason)
+    expect(converted.document.tracks[1]!.items[0]).not.toHaveProperty('style')
+    const batch = deriveSupportedHostEdit(initial.timeline, converted.document).batch!
+    expect(batch.commands).toMatchObject([
+      { type: 'set_item_properties', item_id: 'clip-1', properties: { opacity: 0.5 } },
+    ])
+    expect(batch.commands).toHaveLength(1)
+  })
+
+  it('enforces 128-item attachment bounds before direct or diff-based submission', async () => {
+    const initial = snapshot({ durationInFrames: 129 * 60 })
+    const anchor = initial.timeline.tracks[0]!.items[0]!
+    initial.timeline.tracks[0]!.items = Array.from({ length: 129 }, (_, index) => ({
+      ...anchor,
+      id: `clip-${index}`,
+      from: index * 60,
+    }))
+    const ids = initial.timeline.tracks[0]!.items.map((item) => item.id)
+    const harness = createFakeHost(initial)
+    const controller = new HostEditorController(harness.host, initial)
+    await expect(controller.requestSetItemAttachment(ids, false)).resolves.toMatchObject({
+      status: 'unsupported',
+      reason: expect.stringContaining('128'),
+    })
+    expect(harness.submitEdit).not.toHaveBeenCalled()
+    const changed = structuredClone(initial.timeline)
+    changed.tracks[0]!.items.forEach((item) => {
+      item.rippleLinked = false
+    })
+    expect(deriveSupportedHostEdit(initial.timeline, changed)).toMatchObject({
+      batch: null,
+      reason: expect.stringContaining('128'),
+    })
+    changed.tracks[0]!.items[128]!.rippleLinked = undefined
+    expect(deriveSupportedHostEdit(initial.timeline, changed).batch?.preconditions).toHaveLength(
+      128,
+    )
+    await expect(
+      controller.requestSetItemAttachment(ids.slice(0, 128), false),
+    ).resolves.toMatchObject({ status: 'applied' })
+  })
 })

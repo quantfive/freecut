@@ -177,7 +177,14 @@ function nativeItemFromHostItem(
         ? { textAlign: item.style.alignment }
         : {}),
       ...(item.opacity !== undefined ? { transform: { opacity: item.opacity } } : {}),
-      ...(item.transform ? { transform: frameTransformToNative(item.transform) } : {}),
+      ...(item.transform
+        ? {
+            transform: {
+              ...frameTransformToNative(item.transform),
+              ...(item.opacity !== undefined ? { opacity: item.opacity } : {}),
+            },
+          }
+        : {}),
     }
   }
 
@@ -239,7 +246,14 @@ function nativeItemFromHostItem(
     ...(item.volume !== undefined ? { volume: item.volume } : {}),
     ...(item.speed !== undefined ? { speed: item.speed } : {}),
     ...(item.opacity !== undefined ? { transform: { opacity: item.opacity } } : {}),
-    ...(item.transform ? { transform: frameTransformToNative(item.transform) } : {}),
+    ...(item.transform
+      ? {
+          transform: {
+            ...frameTransformToNative(item.transform),
+            ...(item.opacity !== undefined ? { opacity: item.opacity } : {}),
+          },
+        }
+      : {}),
   }
 
   if (item.type === 'audio') return { ...common, type: 'audio' }

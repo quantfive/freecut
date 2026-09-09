@@ -411,6 +411,7 @@ export const SUPPORTED_HOST_COMMANDS = [
   'add_text',
   'move_item',
   'set_item_attachment',
+  'set_item_properties',
   'trim_item',
   'split_item',
   'remove_item',
@@ -432,6 +433,8 @@ export function capabilityForCommand(command: EditCommand['type']): EditorCapabi
       return 'timeline.add'
     case 'move_item':
       return 'timeline.move'
+    case 'set_item_properties':
+      return 'workspace.edit'
     case 'set_item_attachment':
       return 'timeline.attachment'
     case 'trim_item':

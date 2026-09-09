@@ -445,6 +445,7 @@ class SourceController {
 
   private createElementSync(): HTMLVideoElement {
     const element = document.createElement('video')
+    element.crossOrigin = 'anonymous'
     element.src = this.sourceUrl
     element.preload = 'auto'
     element.playsInline = true

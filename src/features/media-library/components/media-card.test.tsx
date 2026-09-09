@@ -3,6 +3,13 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import type { MouseEvent, ReactNode } from 'react'
 import type { MediaMetadata } from '@/types/storage'
 
+const hostContextState = vi.hoisted(() => ({ hostMode: false }))
+
+vi.mock('../deps/editor', () => ({
+  useEditorHostMode: () => hostContextState.hostMode,
+  useEditorCapability: () => true,
+}))
+
 const mediaLibraryServiceMocks = vi.hoisted(() => ({
   getThumbnailBlobUrl: vi.fn(),
   getMediaFile: vi.fn(),
@@ -365,6 +372,7 @@ describe('MediaCard', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     vi.useRealTimers()
+    hostContextState.hostMode = false
     mediaStoreState.selectedMediaIds = []
     mediaStoreState.mediaItems = [makeMedia()]
     mediaStoreState.importingIds = []
@@ -465,6 +473,18 @@ describe('MediaCard', () => {
         language: undefined,
       }),
     )
+  })
+
+  it('hides local transcription actions in host mode even when transcription capability is enabled', () => {
+    hostContextState.hostMode = true
+    const { rerender } = render(<ListMediaCard media={makeMedia()} />)
+    expect(screen.queryByText('Generate Transcript')).not.toBeInTheDocument()
+    mediaStoreState.transcriptStatus = new Map([['media-1', 'ready']])
+    rerender(<ListMediaCard media={makeMedia()} />)
+    expect(screen.queryByText('Refresh Transcript')).not.toBeInTheDocument()
+    expect(screen.queryByText('Delete Transcript')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('transcribe-dialog')).not.toBeInTheDocument()
+    expect(mediaTranscriptionRunnerMocks.runMediaTranscriptionJob).not.toHaveBeenCalled()
   })
 
   it('uses transcript wording in the media action menu', () => {

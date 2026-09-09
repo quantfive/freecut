@@ -1,7 +1,7 @@
 {
   "schema": "freecut-pr2-provenance-baseline/v1",
   "issue": "https://github.com/quantfive/codepress/issues/5319",
-  "scope": "PR 2 — FreeCut fork provenance and reproducible package baseline",
+  "scope": "PR 2 \u2014 FreeCut fork provenance and reproducible package baseline",
   "upstream": {
     "repository": "https://github.com/walterlow/freecut",
     "fork": "https://github.com/quantfive/freecut",
@@ -79,7 +79,14 @@
     "packageCommand": "npm run package:reproducible",
     "artifactPattern": "artifacts/freecut-<source-revision>.tar.gz",
     "archiveFormat": "deterministic tar.gz with sorted paths, zeroed mtimes, and uid/gid 0",
-    "contents": ["dist/", "LICENSE", "notices/", "package.json", "package-lock.json", "provenance/"]
+    "contents": [
+      "dist/",
+      "LICENSE",
+      "notices/",
+      "package.json",
+      "package-lock.json",
+      "provenance/"
+    ]
   },
   "ciVerification": {
     "workflow": ".github/workflows/reproducible-package.yml",

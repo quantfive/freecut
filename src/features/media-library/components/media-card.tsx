@@ -710,7 +710,7 @@ const MediaCardInternal = memo(function MediaCardInternal({
 
   const mediaType = getMediaType(media.mimeType)
   const isTranscribable =
-    canTranscribeCapability && (mediaType === 'video' || mediaType === 'audio')
+    !hostMode && canTranscribeCapability && (mediaType === 'video' || mediaType === 'audio')
   const canGenerateProxy =
     canGenerateProxyCapability &&
     !hostMode &&

@@ -79,7 +79,7 @@ export default defineConfig({
     globals: true,
     environment: 'jsdom',
     setupFiles: ['./src/test/setup.ts'],
-    include: ['src/**/*.test.{ts,tsx}'],
+    include: ['src/**/*.test.{ts,tsx}', 'scripts/editor-package-worker-urls.test.ts'],
     coverage: {
       provider: 'v8',
       reporter: ['text', 'json', 'html'],

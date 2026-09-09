@@ -440,6 +440,7 @@ function applyMoveItem(
         setItemFramePosition(member.item, range.start + deltaFrames, range.end + deltaFrames, fps),
       )
     }
+    recomputeDuration(timeline)
     return {
       ...moved,
       moved_item_ids: chainIds,
@@ -457,6 +458,7 @@ function applyMoveItem(
   replaceTrackItems(timeline, located.trackIndex, sourceItems)
   const targetItems = targetIndex === located.trackIndex ? sourceItems : target.items
   replaceTrackItems(timeline, targetIndex, insertAt(targetItems, moved, command.index))
+  recomputeDuration(timeline)
   return {
     ...emptyEffect(),
     moved_item_ids: [command.item_id],
@@ -513,7 +515,20 @@ function applyTrim(
       `Trim would make item "${command.item_id}" empty`,
       command.command_id,
     )
+  if (next.item_type === 'clip') {
+    const mediaDuration = timeline.media.find(
+      (media) => media.media_id === next.media_id,
+    )?.duration_us
+    if (mediaDuration != null && next.source_end_us > mediaDuration) {
+      throw new EditEngineError(
+        'invalid_request',
+        `Trim source end exceeds known media duration for item "${command.item_id}"`,
+        command.command_id,
+      )
+    }
+  }
   setItemAt(timeline, located, next)
+  recomputeDuration(timeline)
   return { ...emptyEffect(), updated_item_ids: [command.item_id] }
 }
 
