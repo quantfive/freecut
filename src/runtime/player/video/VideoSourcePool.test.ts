@@ -8,6 +8,7 @@ type MutableVideoElement = HTMLVideoElement & {
 }
 
 function installVideoElementMocks() {
+  let autoLoad = true
   const createdVideos: MutableVideoElement[] = []
   const originalCreateElement = document.createElement.bind(document)
 
@@ -63,6 +64,7 @@ function installVideoElementMocks() {
     }
 
     video.load = vi.fn(() => {
+      if (!autoLoad) return
       queueMicrotask(() => {
         readyStateValue = 2
         video.dispatchEvent(new Event('loadedmetadata'))
@@ -82,6 +84,9 @@ function installVideoElementMocks() {
 
   return {
     createdVideos,
+    stallLoads: () => {
+      autoLoad = false
+    },
     restore: () => createElementSpy.mockRestore(),
   }
 }
@@ -96,6 +101,105 @@ describe('VideoSourcePool', () => {
   afterEach(() => {
     videoMocks.restore()
     vi.useRealTimers()
+  })
+
+  it('keeps an assigned pending video intact after preload timeout so late data can play', async () => {
+    vi.useFakeTimers()
+    videoMocks.stallLoads()
+    const pool = new VideoSourcePool()
+    const loading = pool.preloadSource('blob:slow').catch((error: Error) => error)
+    const video = pool.acquireForClip('clip', 'blob:slow') as MutableVideoElement
+    video.__setPaused(false)
+    await vi.advanceTimersByTimeAsync(15_000)
+    expect(await loading).toMatchObject({ message: expect.stringContaining('timed out') })
+    expect(video.getAttribute('src')).toBe('blob:slow')
+    expect(video.pause).not.toHaveBeenCalled()
+    expect(video.load).toHaveBeenCalledTimes(1)
+    expect(pool.getClipElement('clip')).toBe(video)
+    video.__setReadyState(4)
+    video.dispatchEvent(new Event('canplay'))
+    await pool.preloadSource('blob:slow')
+    pool.releaseClip('clip')
+    expect(pool.acquireForClip('next', 'blob:slow')).toBe(video)
+    expect(video.getAttribute('src')).toBe('blob:slow')
+    pool.dispose()
+  })
+
+  it('discards an unassigned timed-out video and permits a fresh preload', async () => {
+    vi.useFakeTimers()
+    videoMocks.stallLoads()
+    const pool = new VideoSourcePool()
+    const loading = pool.preloadSource('blob:slow').catch((error: Error) => error)
+    const first = videoMocks.createdVideos[0]!
+    await vi.advanceTimersByTimeAsync(15_000)
+    await loading
+    expect(first.getAttribute('src')).toBe('')
+    expect(pool.getStats().totalElements).toBe(0)
+    const retry = pool.preloadSource('blob:slow')
+    const next = videoMocks.createdVideos[1]!
+    next.dispatchEvent(new Event('canplay'))
+    await retry
+    expect(pool.acquireForClip('clip', 'blob:slow')).toBe(next)
+    pool.dispose()
+  })
+
+  it('defers failed assigned video disposal until its owner releases it', async () => {
+    videoMocks.stallLoads()
+    const pool = new VideoSourcePool()
+    const loading = pool.preloadSource('blob:broken').catch((error: Error) => error)
+    const video = pool.acquireForClip('clip', 'blob:broken')!
+    video.dispatchEvent(new Event('error'))
+    expect(await loading).toBeInstanceOf(Error)
+    expect(video.getAttribute('src')).toBe('blob:broken')
+    expect(pool.getClipElement('clip')).toBe(video)
+    pool.releaseClip('clip')
+    expect(video.getAttribute('src')).toBe('')
+    expect(pool.getStats().totalElements).toBe(0)
+    const retry = pool.preloadSource('blob:broken')
+    videoMocks.createdVideos[1]!.dispatchEvent(new Event('canplay'))
+    await retry
+    pool.dispose()
+  })
+
+  it('cleans up an unassigned media error before retrying', async () => {
+    videoMocks.stallLoads()
+    const pool = new VideoSourcePool()
+    const loading = pool.preloadSource('blob:broken').catch((error: Error) => error)
+    const video = videoMocks.createdVideos[0]!
+    video.dispatchEvent(new Event('error'))
+    expect(await loading).toBeInstanceOf(Error)
+    expect(video.getAttribute('src')).toBe('')
+    expect(pool.getStats().totalElements).toBe(0)
+    const retry = pool.preloadSource('blob:broken')
+    videoMocks.createdVideos[1]!.dispatchEvent(new Event('canplay'))
+    await retry
+    pool.dispose()
+  })
+
+  it('does not promote a ready video when disposal wins the completion microtask race', async () => {
+    videoMocks.stallLoads()
+    const pool = new VideoSourcePool()
+    const controller = pool.getSource('blob:pending')
+    const loading = pool.preloadSource('blob:pending').catch((error: Error) => error)
+    const video = videoMocks.createdVideos[0]!
+    video.dispatchEvent(new Event('canplay'))
+    pool.dispose()
+    expect(await loading).toMatchObject({ name: 'AbortError' })
+    expect(controller.getElementCount()).toBe(0)
+    expect(video.getAttribute('src')).toBe('')
+    expect(video.pause).toHaveBeenCalledTimes(1)
+  })
+
+  it('settles a pending preload on disposal without reviving or disposing its video twice', async () => {
+    videoMocks.stallLoads()
+    const pool = new VideoSourcePool()
+    const loading = pool.preloadSource('blob:pending').catch((error: Error) => error)
+    const video = pool.acquireForClip('clip', 'blob:pending')!
+    pool.dispose()
+    expect(await loading).toMatchObject({ name: 'AbortError' })
+    expect(video.pause).toHaveBeenCalledTimes(1)
+    expect(video.load).toHaveBeenCalledTimes(2)
+    expect(pool.getStats()).toEqual({ sourceCount: 0, totalElements: 0, activeClips: 0 })
   })
 
   it('ensures ready lanes and warms idle elements near transition boundaries', async () => {

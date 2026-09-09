@@ -44,6 +44,9 @@ class SourceController {
   private overflow: HTMLVideoElement[] = []
   private assignments: Map<string, HTMLVideoElement> = new Map()
   private loadPromise: Promise<void> | null = null
+  private cancelPendingLoad: (() => void) | null = null
+  private disposed = false
+  private failedAssignedElements = new Set<HTMLVideoElement>()
   // Element being loaded by ensureLoaded() but not yet promoted to primary.
   // Allows acquire() to reuse it instead of creating a redundant overflow element.
   private _pendingPrimary: HTMLVideoElement | null = null
@@ -81,6 +84,7 @@ class SourceController {
    * redundant overflow element (the common race on first mount).
    */
   async ensureLoaded(): Promise<HTMLVideoElement> {
+    if (this.disposed) throw createVideoPoolAbortError('source-disposed')
     if (this.primary) {
       return this.primary
     }
@@ -120,6 +124,12 @@ class SourceController {
         }
         element.removeEventListener('canplay', onCanPlay)
         element.removeEventListener('error', onError)
+        this.cancelPendingLoad = null
+      }
+
+      this.cancelPendingLoad = () => {
+        cleanup()
+        reject(createVideoPoolAbortError('source-disposed-during-load'))
       }
 
       element.addEventListener('canplay', onCanPlay)
@@ -147,17 +157,25 @@ class SourceController {
       element.load()
     })
       .then(() => {
+        if (this.disposed) throw createVideoPoolAbortError('source-disposed-before-ready')
         // acquire() may have already promoted _pendingPrimary to primary;
         // this is a harmless no-op in that case.
         this.primary = element
         this._pendingPrimary = null
       })
       .catch((err) => {
-        // Tear down the failed element so it doesn't linger in memory
-        if (this._pendingPrimary === element) {
-          this._pendingPrimary = null
+        // acquire() can promote the loading element and mount it before
+        // preload settles. A timeout must not clear src or pause that owner's
+        // live element: late network/decode data may still make it playable.
+        if (!this.disposed && this.isElementInUse(element)) {
+          if (element.readyState < 3 || element.error) {
+            this.failedAssignedElements.add(element)
+          }
+        } else if (!this.disposed) {
+          if (this._pendingPrimary === element) this._pendingPrimary = null
+          if (this.primary === element) this.primary = null
+          this.disposeElement(element)
         }
-        this.disposeElement(element)
         // Allow retries by clearing the rejected promise
         this.loadPromise = null
         throw err
@@ -254,7 +272,16 @@ class SourceController {
    * Release a clip's element back to the pool
    */
   release(clipId: string): void {
+    const element = this.assignments.get(clipId)
     this.assignments.delete(clipId)
+    // Failed live lanes remain owned until unmounted. Remove them only after
+    // release; a late canplay clears this marker and preserves their buffers.
+    if (element && this.failedAssignedElements.has(element) && !this.isElementInUse(element)) {
+      if (this.primary === element) this.primary = null
+      if (this._pendingPrimary === element) this._pendingPrimary = null
+      this.overflow = this.overflow.filter((candidate) => candidate !== element)
+      this.disposeElement(element)
+    }
     this.pruneIdleOverflowElements()
   }
 
@@ -316,6 +343,8 @@ class SourceController {
    * Dispose all elements
    */
   dispose(): void {
+    this.disposed = true
+    this.cancelPendingLoad?.()
     // Cancel any in-flight load timeout so it can't reject after disposal
     if (this._loadTimeoutId !== null) {
       clearTimeout(this._loadTimeoutId)
@@ -345,6 +374,7 @@ class SourceController {
   // --- Private methods ---
 
   private disposeElement(element: HTMLVideoElement): void {
+    this.failedAssignedElements.delete(element)
     element.pause()
     element.src = ''
     element.load()
@@ -450,6 +480,10 @@ class SourceController {
     element.preload = 'auto'
     element.playsInline = true
     element.muted = true // Start muted, unmute when needed
+
+    element.addEventListener('canplay', () => {
+      this.failedAssignedElements.delete(element)
+    })
 
     element.addEventListener('loadedmetadata', () => {
       this.onElementReady?.(element)

@@ -189,22 +189,20 @@ export function useCustomPlayer(
 
   // Detect when Player becomes ready
   useEffect(() => {
-    if (playerRef.current && !playerReady) {
+    if (playerReady) return
+    if (playerRef.current) {
       setPlayerReady(true)
+      return
     }
+    // Lazy preview mounts can take longer than a second. Keep checking until
+    // the actual Player exists, and stop on readiness or unmount.
     const checkReady = setInterval(() => {
-      if (playerRef.current && !playerReady) {
+      if (playerRef.current) {
         setPlayerReady(true)
         clearInterval(checkReady)
       }
     }, 50)
-
-    const timeout = setTimeout(() => clearInterval(checkReady), 1000)
-
-    return () => {
-      clearInterval(checkReady)
-      clearTimeout(timeout)
-    }
+    return () => clearInterval(checkReady)
   }, [playerRef, playerReady])
 
   // Timeline → Player: Sync play/pause state
@@ -219,17 +217,19 @@ export function useCustomPlayer(
     if (!playerRef.current) return
 
     const wasPlaying = wasPlayingRef.current
-    wasPlayingRef.current = isPlaying
-    const { currentFrame, setPreviewFrame } = usePlaybackStore.getState()
+    // Read live transport: the standalone mount effect may already have paused
+    // it, while this render still captured the previous playing value.
+    const { currentFrame, setPreviewFrame, isPlaying: shouldPlay } = usePlaybackStore.getState()
+    wasPlayingRef.current = shouldPlay
     const playbackPlan = planPlaybackStateCommand({
-      wasPlaying,
-      isPlaying,
+      wasPlaying: playerRef.current.isPlaying(),
+      isPlaying: shouldPlay,
       currentFrame,
       playerFrame: getPlayerFrame(),
     })
 
     try {
-      if (isPlaying && !wasPlaying) {
+      if (shouldPlay && !wasPlaying) {
         flushPreviewWarmSeek()
       }
       if (playbackPlan.clearPreviewFrame) {
@@ -239,7 +239,14 @@ export function useCustomPlayer(
     } catch (error) {
       logger.error('Failed to control playback:', error)
     }
-  }, [isPlaying, playerRef, executePlayerCommand, flushPreviewWarmSeek, getPlayerFrame])
+  }, [
+    isPlaying,
+    playerReady,
+    playerRef,
+    executePlayerCommand,
+    flushPreviewWarmSeek,
+    getPlayerFrame,
+  ])
 
   // Wait for timeline to finish loading before syncing frame position.
   // Without this, the Player would seek to frame 0 (the default) before
