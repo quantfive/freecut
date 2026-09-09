@@ -31,7 +31,7 @@ export function EditorWorkspaceShell({
   const [availableWidth, setAvailableWidth] = useState(280)
   const [settingsNotice, setSettingsNotice] = useState(false)
   const settingsSelection = useRef<string[]>([])
-  const [libraryVisible, setLibraryVisible] = useState(true)
+  const [libraryVisible, setLibraryVisible] = useState(false)
   const [editorVisible, setEditorVisible] = useState(true)
   const [libraryWidth, setLibraryWidth] = useState(280)
   const [metersOpen, setMetersOpen] = useState(false)

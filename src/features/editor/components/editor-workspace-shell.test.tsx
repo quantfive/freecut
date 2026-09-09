@@ -60,6 +60,16 @@ describe('editor workspace columns', () => {
         <input aria-label="Timeline state" />
       </EditorWorkspaceShell>,
     )
+    expect(
+      container.querySelector<HTMLElement>('[data-editor-column="library"]')!.style.display,
+    ).toBe('none')
+    expect(screen.queryByRole('region', { name: 'editor.refresh.settings' })).toBeNull()
+    expect(onLayoutChange).toHaveBeenLastCalledWith({
+      minimumWidth: 480,
+      libraryVisible: false,
+      editorVisible: true,
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'editor.refresh.showLibrary' }))
     const search = screen.getByLabelText('Transcript search') as HTMLInputElement
     fireEvent.change(search, { target: { value: 'keep my search' } })
     const editor = container.querySelector<HTMLElement>('[data-editor-column="editor"]')!
@@ -157,6 +167,7 @@ describe('editor workspace columns', () => {
         <div />
       </EditorWorkspaceShell>,
     )
+    fireEvent.click(screen.getByRole('button', { name: 'editor.refresh.showLibrary' }))
     const separator = screen.getByRole('separator')
     fireEvent.keyDown(separator, { key: 'ArrowRight' })
     expect(separator.getAttribute('aria-valuenow')).toBe('296')
