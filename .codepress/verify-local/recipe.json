@@ -1,0 +1,133 @@
+{
+  "schema_version": 1,
+  "setup_commands": [["npm", "ci", "--no-audit", "--no-fund"]],
+  "services": [
+    {
+      "id": "frontend",
+      "executor": "native",
+      "command": ["npm", "run", "dev", "--", "--host", "127.0.0.1"],
+      "working_dir": ".",
+      "required": true,
+      "port": 5173,
+      "browser": true,
+      "env_defaults": {
+        "VITE_SHOW_DEBUG_PANEL": "false"
+      },
+      "required_bindings": [],
+      "fixtures": [],
+      "health": {
+        "path": "/",
+        "status_codes": [200],
+        "timeout_seconds": 60
+      }
+    }
+  ],
+  "checks": [
+    {
+      "id": "editor-surface-build",
+      "executor": "native",
+      "command": ["npm", "run", "build:editor-surface"],
+      "working_dir": ".",
+      "timeout_seconds": 600,
+      "expected_exit_codes": [0],
+      "env_defaults": {},
+      "required_bindings": []
+    },
+    {
+      "id": "focused-test",
+      "executor": "native",
+      "command": [
+        "npm",
+        "run",
+        "test:run",
+        "--",
+        "src/infrastructure/browser/blob-url-manager.test.ts"
+      ],
+      "working_dir": ".",
+      "timeout_seconds": 180,
+      "expected_exit_codes": [0],
+      "env_defaults": {},
+      "required_bindings": []
+    },
+    {
+      "id": "lint",
+      "executor": "native",
+      "command": ["npm", "run", "lint"],
+      "working_dir": ".",
+      "timeout_seconds": 300,
+      "expected_exit_codes": [0],
+      "env_defaults": {},
+      "required_bindings": []
+    },
+    {
+      "id": "typecheck",
+      "executor": "native",
+      "command": ["npm", "run", "check"],
+      "working_dir": ".",
+      "timeout_seconds": 300,
+      "expected_exit_codes": [0],
+      "env_defaults": {},
+      "required_bindings": []
+    },
+    {
+      "id": "build",
+      "executor": "native",
+      "command": ["npm", "run", "build"],
+      "working_dir": ".",
+      "timeout_seconds": 600,
+      "expected_exit_codes": [0],
+      "env_defaults": {},
+      "required_bindings": []
+    },
+    {
+      "id": "preview-sync",
+      "executor": "native",
+      "command": ["npm", "run", "test:preview-sync"],
+      "working_dir": ".",
+      "timeout_seconds": 180,
+      "expected_exit_codes": [0],
+      "env_defaults": {},
+      "required_bindings": []
+    },
+    {
+      "id": "editor-hardening",
+      "executor": "native",
+      "command": ["npm", "run", "test:editor-hardening"],
+      "working_dir": ".",
+      "timeout_seconds": 300,
+      "expected_exit_codes": [0],
+      "env_defaults": {},
+      "required_bindings": []
+    },
+    {
+      "id": "editor-surface-consumer",
+      "executor": "native",
+      "command": ["npm", "run", "test:editor-surface:consumer"],
+      "working_dir": ".",
+      "timeout_seconds": 300,
+      "expected_exit_codes": [0],
+      "env_defaults": {},
+      "required_bindings": []
+    },
+    {
+      "id": "publish-guards",
+      "executor": "native",
+      "command": ["npm", "run", "test:publish-editor-surface-guards"],
+      "working_dir": ".",
+      "timeout_seconds": 180,
+      "expected_exit_codes": [0],
+      "env_defaults": {},
+      "required_bindings": []
+    },
+    {
+      "id": "headless-node",
+      "executor": "native",
+      "command": ["npm", "run", "headless:test:node"],
+      "working_dir": ".",
+      "timeout_seconds": 180,
+      "expected_exit_codes": [0],
+      "env_defaults": {},
+      "required_bindings": []
+    }
+  ]
+}

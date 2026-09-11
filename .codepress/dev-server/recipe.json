@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "bootstrapped_at": "2026-09-11T20:23:18.516168Z",
+  "frontends": [
+    {
+      "label": "web",
+      "description": "FreeCut browser video editor with local workspace files, timeline editing and export.",
+      "working_dir": "",
+      "dockerfile_path": ".codepress/dev-server/Dockerfile.web",
+      "dev_command": "npm run dev -- --config .codepress/dev-server/vite.config.ts --host \"${CODEPRESS_BIND_HOST:-0.0.0.0}\" --port \"${PORT:-5173}\" --strictPort",
+      "prebuild_command": "",
+      "prebuild_inputs": [],
+      "framework": "vite",
+      "package_manager": "npm",
+      "install_command": "npm install --no-audit --no-fund",
+      "dependency_manifests": ["package-lock.json"],
+      "dev_port": 5173,
+      "system_packages": ["procps"],
+      "size": "medium"
+    }
+  ]
+}

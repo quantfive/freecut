@@ -1,0 +1,9 @@
+{
+  "capabilities": {
+    "delivery": {
+      "mode": "advisory"
+    }
+  },
+  "managed_by": "codepress-factory-cli",
+  "schema_version": 3
+}
