@@ -1,0 +1,25 @@
+---
+name: verify-local
+description: Verify FreeCut browser editor changes using its repository-owned local contract.
+codepress_generated: true
+---
+
+# FreeCut local verification
+
+Read `codepress factory skill` and `codepress factory bootstrap --local --json` for the current workflow. Consume `.codepress/verify-local/recipe.json`; every declared setup step, service and check is required. This file contains project-specific guidance; release-owned prompts and helpers stay in the CLI. For delivery (not onboarding smoke), the owner follows `codepress factory skill falsify-diff` and `codepress factory skill falsifier`, including CLI snapshot create, validate and cleanup, and independent pre-QA falsification before independent committed-head QA. Never treat setup smoke as exact-head delivery evidence.
+
+Before selecting probes, capture HEAD and complete dirty status, inventory changed paths, define observable claims and named failure cases, and resolve verification graph edges (explicitly [] when absent). Write a Diff Trigger Inventory and Verification Contract with one evidence class and probe per claim. Tests and static checks supplement live UI/HTTP evidence and cannot replace it.
+
+## Execution context
+
+On a developer device use Node 22+ and npm (packageManager pins npm 11.8.0). Run recipe setup commands from this root, then fixtures (none), required frontend, bounded health probe, all required checks in order, and cleanup in a finally path. Do not use watch mode for checks. Recipe checks cover focused blob URL ownership tests (`npm run test:run -- src/infrastructure/browser/blob-url-manager.test.ts`), `npm run lint`, `npm run check` (type-aware lint/typecheck), `npm run build`, `npm run test:preview-sync`, `npm run test:editor-hardening`, `npm run build:editor-surface`, `npm run test:editor-surface:consumer`, `npm run test:publish-editor-surface-guards`, and `npm run headless:test:node`. Broader behavior may require `npm run test:run`, `npm run verify`, browser suites (`test:responsive`, `test:layout-refresh`), or portable headless/media checks; inspect package.json and the relevant config first. Stress/coverage/perf modes are supplementary targeted probes, not substitutes for required checks. Do not publish packages.
+
+The frontend is Vite on strict port 5173: `npm run dev -- --host 127.0.0.1`; require HTTP 200 at `/` within 60 seconds and inspect logs. Preserve the COOP same-origin and COEP require-corp headers needed by browser workers. Reuse only a healthy handle whose checkout ownership is known; never kill a preexisting user's server to free the port. Track owned process groups, terminate descendants, reap them, and prove no owned process or listener survives on every exit. A port conflict is a concrete blocker.
+
+FreeCut has no application backend, database, login or server-side fixture service. Workspace files, OPFS, WebGPU and WebCodecs are browser-local. Use a disposable workspace and repository-supported browser/headless fixtures, never customer media. Modern Chromium is required; GPU-dependent claims require a real supported adapter. Do not call software-only checks GPU proof. For an added backend in a future diff, discover and declare its native local command, test database, supported fixtures, and bounded readiness probe first; backend verification is a first-class local path.
+
+On a CodePress cloud runner, every customer frontend/backend process must run inside the CodePress verification-environment MicroVM lifecycle; the runner is only the control plane. Pass only a backend-issued environment/run reference and bounded probe inputs; request only backend-returned immutable manifest check IDs. Never submit repositories, SHAs, commands, argv, ports, manifests or checkout credentials. Native execution is the default; Docker/Compose fails closed unless the selected VM image reports that executor implemented. An unavailable execution plane is BLOCKED; do not hand-start customer servers in the runner. The hosted Live Dev Server uses `.codepress/dev-server/recipe.json` and `start_dev_server` only after connected hosted provisioning; local Vite health is not hosted readiness.
+
+Route only effects needing deployed infrastructure, unavailable private services, production-like cross-service wiring or external integrations to `.claude/skills/verify-staging/SKILL.md`. If absent or staging was declined, report each unsupported claim with its recovery action; keep locally provable claims local. Never substitute a production target.
+
+Record commands, exit codes, health observations, UI actions and relevant logs per claim. Stop at concrete missing prerequisites and report BLOCKED honestly; never infer readiness from existing dist files or skills. For onboarding hash the skill, recipe and safe Codex mirror before smoke and confirm identical hashes after smoke. No commits, pushes, PR activity, asset publication, delivery or QA stamps during onboarding. For later authorized UI reports follow the repository pr-screenshot skill and its supported publication route. Use serial probes; no custom batch harness is needed.
